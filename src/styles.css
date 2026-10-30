@@ -31,11 +31,11 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .long-text { color: #5bd5a5; font-size: .72em; }
 .short-text { color: #ff8a8a; font-size: .72em; }
 
-.account-actions { display: flex; align-items: center; gap: 8px; color: #aab6c8; font-size: 12px; max-width: 45%; }
-.account-actions span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; max-width: calc(100% - 50px); padding-right: 48px; color: #aab6c8; font-size: 12px; }
+.account-email { min-width: 0; max-width: 145px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.logout-button { flex: 0 0 auto; min-height: 32px; padding: 0 9px; border: 1px solid #34435b; border-radius: 9px; background: #151f30; color: #f4f7fb; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .icon-button, .close-button { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid #34435b; border-radius: 999px; background: #151f30; color: #f4f7fb; font-size: 22px; }
 .close-button { flex: 0 0 auto; font-size: 32px; line-height: 1; }
-.back-button { width: 44px; height: 44px; margin-top: 2px; border: 1px solid #34435b; border-radius: 999px; background: #151f30; color: #f4f7fb; font-size: 28px; }
 .strategy-header { justify-content: flex-start; }
 
 .outline-button, .primary-button, .danger-button { width: 100%; min-height: 48px; border-radius: 12px; font-weight: 800; transition: opacity .15s, transform .15s; }
@@ -136,6 +136,9 @@ button:disabled { cursor: not-allowed; opacity: .52; }
   .form-card, .result-card, .condition-card { padding: 18px; }
   .field-grid.three { grid-template-columns: 1fr; }
   .strategy-header h1 { font-size: 30px; }
+  .account-actions { gap: 6px; padding-right: 44px; font-size: 11px; }
+  .account-email { max-width: 132px; }
+  .logout-button { padding: 0 7px; font-size: 10px; }
   .auth-card { padding: 24px; }
   .chart-modal { padding: 14px; border-radius: 16px; }
   .action-row { grid-template-columns: 1fr; }

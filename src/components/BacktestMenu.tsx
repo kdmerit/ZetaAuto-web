@@ -32,10 +32,8 @@ export function BacktestMenu({ onOpen, onSignOut, email }: BacktestMenuProps) {
             <h1>백테스트</h1>
           </div>
           <div className="account-actions">
-            <span title={email ?? undefined}>{email ?? '허용 계정'}</span>
-            <button className="icon-button" type="button" onClick={onSignOut} aria-label="로그아웃">
-              ↪
-            </button>
+            <span className="account-email" title={email ?? undefined}>{email ?? ''}</span>
+            <button className="logout-button" type="button" onClick={onSignOut}>로그아웃</button>
           </div>
         </header>
 

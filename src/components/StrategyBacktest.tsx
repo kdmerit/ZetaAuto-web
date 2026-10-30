@@ -30,7 +30,6 @@ import { ProgressBar } from './ProgressBar';
 interface StrategyBacktestProps {
   strategy: Strategy;
   context: ApiContext;
-  onBack: () => void;
 }
 
 function dateText(date: Date): string {
@@ -127,7 +126,7 @@ function defaultRequest(settings: BacktestSettings, strategy: Strategy): Backtes
   return body;
 }
 
-export function StrategyBacktest({ strategy, context, onBack }: StrategyBacktestProps) {
+export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   const defaults = useMemo(defaultSettings, []);
   const [settings, setSettings] = useState<BacktestSettings>(() => loadSettings(strategy, defaults));
   const [expanded, setExpanded] = useState(false);
@@ -327,7 +326,6 @@ export function StrategyBacktest({ strategy, context, onBack }: StrategyBacktest
     <main className="screen">
       <div className="content strategy-content">
         <header className="page-header strategy-header">
-          <button className="back-button" type="button" onClick={onBack} aria-label="백테스트 메뉴로 돌아가기">←</button>
           <div>
             <p className="eyebrow">{strategy} · BACKTEST</p>
             <h1>{title} 백테스트</h1>

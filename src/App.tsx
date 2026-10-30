@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { AUTH_CONFIG_ERROR } from './config';
 import { ALLOWED_WEB_EMAIL, useAuth } from './auth';
@@ -16,11 +16,6 @@ function LoginScreen() {
       <div className="auth-card surface-card">
         <p className="eyebrow">ZETAAUTO · BACKTEST</p>
         <h1>ZetaAuto 로그인</h1>
-        <h2>본인만 접근하는 안전한 백테스트</h2>
-        <p className="muted">
-          Google 로그인을 Cognito에서 처리하며, 웹앱에는 Client Secret이나 AWS 자격증명을 넣지 않습니다.
-        </p>
-        <p className="notice">허용 계정: {ALLOWED_WEB_EMAIL}</p>
         {auth.error ? <p className="error" role="alert">{auth.error}</p> : null}
         {missing ? <p className="notice">{AUTH_CONFIG_ERROR}</p> : null}
         <button className="primary-button full-width" type="button" disabled={missing} onClick={() => void auth.signIn()}>
@@ -69,6 +64,36 @@ function FullscreenButton() {
 function SignedInApp() {
   const auth = useAuth();
   const [screen, setScreen] = useState<Screen>({ kind: 'MENU' });
+  const screenRef = useRef<Screen>({ kind: 'MENU' });
+
+  useEffect(() => {
+    screenRef.current = screen;
+  }, [screen]);
+
+  useEffect(() => {
+    const currentState = window.history.state;
+    const baseState = currentState && typeof currentState === 'object' ? currentState : {};
+    window.history.replaceState({ ...baseState, zetaautoApp: true, screen: 'MENU' }, '');
+
+    const handlePopState = () => {
+      // ChartModal owns its own history entry. Let it consume this back action.
+      if (document.querySelector('.chart-modal')) return;
+      if (screenRef.current.kind !== 'MENU') {
+        setScreen({ kind: 'MENU' });
+        const nextState = window.history.state;
+        const nextBase = nextState && typeof nextState === 'object' ? nextState : {};
+        window.history.replaceState({ ...nextBase, zetaautoApp: true, screen: 'MENU' }, '');
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const openStrategy = (strategy: Strategy): void => {
+    window.history.pushState({ zetaautoApp: true, screen: 'STRATEGY', strategy }, '');
+    setScreen({ kind: 'STRATEGY', strategy });
+  };
+
   if (!auth.config || !auth.accessToken || auth.email !== ALLOWED_WEB_EMAIL) return <LoginScreen />;
   return (
     <div className="app-shell">
@@ -77,13 +102,12 @@ function SignedInApp() {
         <BacktestMenu
           email={auth.email}
           onSignOut={() => void auth.signOut()}
-          onOpen={(strategy) => setScreen({ kind: 'STRATEGY', strategy })}
+          onOpen={openStrategy}
         />
       ) : (
         <StrategyBacktest
           strategy={screen.strategy}
           context={{ apiBaseUrl: auth.config.apiBaseUrl, accessToken: auth.accessToken }}
-          onBack={() => setScreen({ kind: 'MENU' })}
         />
       )}
     </div>
