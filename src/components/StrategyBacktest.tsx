@@ -193,7 +193,10 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   }, [context]);
 
   useEffect(() => {
-    const handlePopState = () => {
+    const handlePopState = (event: PopStateEvent) => {
+      // WebViews may repeat a history notification for the current chart entry.
+      // Only leaving that entry is a request to close the chart.
+      if (event.state?.zetaautoChart) return;
       if (!chartHistoryPushed.current) return;
       chartHistoryPushed.current = false;
       chartRequestRef.current += 1;
@@ -278,8 +281,27 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   }, [historyOpen, settings.mode, settings.symbol, strategy]);
 
   const update = <K extends keyof BacktestSettings>(key: K, value: BacktestSettings[K]) => {
-    setSettings((current) => ({ ...current, [key]: value }));
+    const next = { ...settings, [key]: value };
+    setSettings(next);
+    saveSettings(strategy, next);
   };
+
+  useEffect(() => {
+    const refreshSharedStorage = (): void => {
+      if (document.visibilityState === 'hidden' || running || (serverJob && ['QUEUED', 'RUNNING'].includes(serverJob.status))) return;
+      const shared = loadSettings(strategy, defaults);
+      setSettings(current => JSON.stringify(current) === JSON.stringify(shared) ? current : shared);
+      if (historyOpen) setHistoryEntries(loadBacktestHistory(strategy, shared.mode, historyScopeSymbol(shared)));
+    };
+    window.addEventListener('storage', refreshSharedStorage);
+    window.addEventListener('focus', refreshSharedStorage);
+    document.addEventListener('visibilitychange', refreshSharedStorage);
+    return () => {
+      window.removeEventListener('storage', refreshSharedStorage);
+      window.removeEventListener('focus', refreshSharedStorage);
+      document.removeEventListener('visibilitychange', refreshSharedStorage);
+    };
+  }, [defaults, historyOpen, running, serverJob, strategy]);
 
   const validate = (): void => {
     if (settings.mode === 'SINGLE' && !baseSymbol(settings.symbol)) throw new Error('종목명을 입력해 주세요.');
@@ -419,7 +441,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
         const next = await fetchServerEntryChart(context, trade.symbol, trade.side, new Date(trade.exitAt * 1000).toISOString(), serverJob.jobId, trade.tradeId);
         if (requestId === chartRequestRef.current) setChart(next);
       } else if (result) {
-        setChart(chartForLocalTrade(result, trade, settings));
+        setChart(chartForLocalTrade(result, trade, analysisSettingsRef.current));
       }
     } catch (failure) {
       if (requestId === chartRequestRef.current) setError(failure instanceof Error ? failure.message : '차트 조회에 실패했습니다.');

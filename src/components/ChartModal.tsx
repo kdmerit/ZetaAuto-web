@@ -360,6 +360,7 @@ function ChartSvg({
 }
 
 export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyError }: ChartModalProps) {
+  const backdropPointer = useRef<number | null>(null);
   const [visibleMas, setVisibleMas] = useState<Record<string, boolean>>({ ma5: true, ma10: false, ma20: true, ma60: false, ma120: false });
   const [selection, setSelection] = useState<CrosshairSelection | null>(null);
   const [focusRequest, setFocusRequest] = useState(0);
@@ -373,7 +374,15 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyE
         return { ...definition, value, deviation, angle: selectedAngle(chart.candles, selectedIndex, definition.key) };
       });
   return (
-    <div className="modal-backdrop" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <div className="modal-backdrop" role="presentation"
+      onPointerDown={(event) => { backdropPointer.current = event.target === event.currentTarget ? event.pointerId : null; }}
+      onPointerUp={(event) => {
+        const close = backdropPointer.current === event.pointerId && event.target === event.currentTarget;
+        backdropPointer.current = null;
+        if (close) onClose();
+      }}
+      onPointerCancel={() => { backdropPointer.current = null; }}
+    >
       <section className="chart-modal" role="dialog" aria-modal="true" aria-label="백테스트 차트">
         <div className="chart-header">
           <div>

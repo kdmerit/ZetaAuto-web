@@ -12,6 +12,7 @@ import {
 import { AUTH_CONFIG_ERROR, tryGetAuthConfig } from './config';
 import type { AuthConfig } from './types';
 import { isEmbeddedWebView, requestNativeSession, sendNativeMessage } from './nativeBridge';
+import { takeBrowserHandoff } from './browserHandoff';
 
 interface TokenSet {
   accessToken: string;
@@ -355,6 +356,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const refreshAccessToken = useCallback(async (): Promise<string | null> => {
     if (refreshPromise.current) return refreshPromise.current;
     if (!config || !tokens) return null;
+    if (!embedded && !tokens.refreshToken) {
+      // The app never forwards its refresh token. Reuse Google's browser login
+      // only when an authenticated server call needs a new browser session.
+      await signIn();
+      return null;
+    }
     const generation = sessionGeneration.current;
     const nextPromise = (async () => {
       try {
@@ -387,7 +394,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     } finally {
       if (refreshPromise.current === nextPromise) refreshPromise.current = null;
     }
-  }, [config, embedded, loadNativeSession, tokens]);
+  }, [config, embedded, loadNativeSession, signIn, tokens]);
 
   useEffect(() => {
     if (!config) return undefined;
@@ -402,6 +409,20 @@ export function AuthProvider({ children }: PropsWithChildren) {
             setStatus('SIGNED_IN');
             setError(null);
           }
+          return;
+        }
+        const browserSession = await takeBrowserHandoff(config.apiBaseUrl);
+        if (browserSession) {
+          let next = requireAllowedAccount({ ...browserSession, refreshToken: null, idToken: null });
+          const existingRefresh = readRefreshToken();
+          if (existingRefresh && readSessionEmail() === browserSession.email) {
+            try { next = requireAllowedAccount(await refreshTokens(config, existingRefresh, browserSession.email)); }
+            catch { clearAuthStorage(); }
+          } else clearAuthStorage();
+          if (!active) return;
+          setTokens(next);
+          setStatus('SIGNED_IN');
+          setError(null);
           return;
         }
         const callback = readOAuthCallback();
@@ -450,6 +471,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!tokens || !config) return undefined;
+    // A one-use app handoff has no browser refresh token. Keep local research
+    // running; authenticated requests can acquire a browser OAuth session later.
+    if (!embedded && !tokens.refreshToken) return undefined;
     const delay = Math.max(tokens.expiresAt - Date.now() - 60_000, 5_000);
     const timer = window.setTimeout(() => {
       if (embedded) { void refreshAccessToken(); return; }
