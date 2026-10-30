@@ -244,6 +244,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       redirect_uri: config.redirectUri,
       scope: 'openid email profile',
       identity_provider: 'Google',
+      prompt: 'select_account',
       state,
       code_challenge: challenge,
       code_challenge_method: 'S256',
