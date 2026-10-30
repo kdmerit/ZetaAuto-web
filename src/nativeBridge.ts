@@ -28,7 +28,7 @@ export function isEmbeddedWebView(): boolean {
     typeof host()?.postMessage === 'function';
 }
 
-export function sendNativeMessage(type: 'SIGN_OUT' | 'EXIT_BACKTEST' | 'FULLSCREEN', payload: Record<string, unknown> = {}): void {
+export function sendNativeMessage(type: 'SIGN_OUT' | 'EXIT_BACKTEST', payload: Record<string, unknown> = {}): void {
   if (isEmbeddedWebView()) host()?.postMessage(JSON.stringify({ ...payload, channel: 'zetaauto.backtest', version: 1, type }));
 }
 

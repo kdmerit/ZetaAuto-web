@@ -52,65 +52,6 @@ function AccessDeniedScreen() {
   );
 }
 
-function FullscreenButton() {
-  const auth = useAuth();
-  const [fullscreen, setFullscreen] = useState(false);
-  const [fallbackFullscreen, setFallbackFullscreen] = useState(false);
-  useEffect(() => {
-    const update = () => setFullscreen(Boolean(document.fullscreenElement));
-    document.addEventListener('fullscreenchange', update);
-    return () => document.removeEventListener('fullscreenchange', update);
-  }, []);
-  useEffect(() => {
-    const exit = (): void => {
-      document.querySelector('.app-shell')?.classList.remove('pseudo-fullscreen', 'native-fullscreen');
-      setFallbackFullscreen(false);
-    };
-    window.addEventListener('zetaauto:exit-fullscreen', exit);
-    return () => {
-      window.removeEventListener('zetaauto:exit-fullscreen', exit);
-      if (auth.embedded) sendNativeMessage('FULLSCREEN', { enabled: false });
-    };
-  }, [auth.embedded]);
-  const toggle = async (): Promise<void> => {
-    const shell = document.querySelector<HTMLElement>('.app-shell');
-    if (auth.embedded) {
-      const enabled = !fallbackFullscreen;
-      shell?.classList.toggle('native-fullscreen', enabled);
-      setFallbackFullscreen(enabled);
-      sendNativeMessage('FULLSCREEN', { enabled });
-      return;
-    }
-    try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else if (fallbackFullscreen) {
-        shell?.classList.remove('pseudo-fullscreen');
-        setFallbackFullscreen(false);
-      }
-      else {
-        const target = shell ?? document.documentElement;
-        // Android Chrome consumes hardware Back to leave Fullscreen API mode
-        // before it sends popstate. Use a viewport-sized, independently scrolling
-        // page frame on touch devices so Back can close a chart without exiting it.
-        const pageFullscreen = window.matchMedia('(pointer: coarse)').matches
-          || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-        if (pageFullscreen || typeof target.requestFullscreen !== 'function') {
-          shell?.classList.add('pseudo-fullscreen');
-          setFallbackFullscreen(true);
-        } else await target.requestFullscreen();
-      }
-    } catch {
-      shell?.classList.add('pseudo-fullscreen');
-      setFallbackFullscreen(true);
-    }
-  };
-  return (
-    <button className="fullscreen-button" type="button" onClick={() => void toggle()} aria-pressed={fullscreen || fallbackFullscreen} aria-label={fullscreen || fallbackFullscreen ? '전체화면 닫기' : '전체화면으로 보기'}>
-      {fullscreen || fallbackFullscreen ? '⤢' : '⛶'}
-    </button>
-  );
-}
-
 function SignedInApp() {
   const auth = useAuth();
   const [screen, setScreen] = useState<Screen>({ kind: 'MENU' });
@@ -165,7 +106,6 @@ function SignedInApp() {
   if (!auth.config || !auth.accessToken || auth.email !== ALLOWED_WEB_EMAIL) return <LoginScreen />;
   return (
     <div className="app-shell">
-      <FullscreenButton />
       {screen.kind === 'MENU' ? (
         <BacktestMenu
           email={auth.email}
