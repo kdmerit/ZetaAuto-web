@@ -72,6 +72,18 @@ async function request<T>(
   }
   if (!response.ok) {
     if (response.status === 401) throw new Error('로그인이 만료되었습니다.');
+    let serverMessage: string | null = null;
+    try {
+      const payload = (await response.clone().json()) as {
+        error?: { message?: unknown };
+      };
+      if (typeof payload.error?.message === 'string' && payload.error.message.trim()) {
+        serverMessage = payload.error.message;
+      }
+    } catch {
+      // Some gateway failures have an empty or non-JSON body.
+    }
+    if (serverMessage) throw new Error(serverMessage);
     throw new Error(`분석 서버 응답 오류 (${response.status})`);
   }
   return (await response.json()) as T;
