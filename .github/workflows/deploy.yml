@@ -1,2 +1,68 @@
-m«ëˆ"¶›ÿ
-+‘ùhÂÏÝz™hË)¥6‹.râ•ê+v*ÞrÚ+
+name: Deploy ZetaAuto web backtest to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Validate configuration
+        env:
+          # These are public runtime values, not credentials. Repository
+          # variables can override them later without changing the workflow.
+          WEB_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'https://qsytnyfa5c.execute-api.ap-northeast-2.amazonaws.com/dev' }}
+          WEB_COGNITO_DOMAIN: ${{ vars.VITE_COGNITO_DOMAIN || 'https://zetaauto-dev-590017966318.auth.ap-northeast-2.amazoncognito.com' }}
+          WEB_COGNITO_CLIENT_ID: ${{ vars.VITE_COGNITO_CLIENT_ID || '5k9qjik0er66etul1uefnls4no' }}
+        run: |
+          test -n "$WEB_API_BASE_URL"
+          test -n "$WEB_COGNITO_DOMAIN"
+          test -n "$WEB_COGNITO_CLIENT_ID"
+      - name: Build
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'https://qsytnyfa5c.execute-api.ap-northeast-2.amazonaws.com/dev' }}
+          VITE_COGNITO_DOMAIN: ${{ vars.VITE_COGNITO_DOMAIN || 'https://zetaauto-dev-590017966318.auth.ap-northeast-2.amazoncognito.com' }}
+          VITE_COGNITO_CLIENT_ID: ${{ vars.VITE_COGNITO_CLIENT_ID || '5k9qjik0er66etul1uefnls4no' }}
+          VITE_COGNITO_REDIRECT_URI: ${{ vars.VITE_COGNITO_REDIRECT_URI || 'https://kdmerit.github.io/ZetaAuto-web/' }}
+          VITE_COGNITO_LOGOUT_URI: ${{ vars.VITE_COGNITO_LOGOUT_URI || 'https://kdmerit.github.io/ZetaAuto-web/' }}
+        run: npm run validate
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

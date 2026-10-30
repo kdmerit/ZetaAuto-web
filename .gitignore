@@ -1,57 +1,5 @@
-# ZetaAuto keeps generated artifacts out of source control so mobile bundles,
-# Lambda packages, credentials, and local environment values cannot be committed.
-
-# Operating system and editor state
-.DS_Store
-.idea/
-.vscode/
-*.swp
-
-# Local environment and secrets
+node_modules/
+dist/
 .env
 .env.*
 !.env.example
-*.pem
-*.key
-
-# Expo / React Native / Node
-mobile/node_modules/
-mobile/.expo/
-mobile/.eas/
-mobile/dist/
-mobile/web-build/
-mobile/android/
-mobile/ios/
-mobile/coverage/
-*.jks
-*.keystore
-
-# GitHub Pages web app
-web/node_modules/
-web/dist/
-web/.env
-web/.env.*
-!web/.env.example
-
-# Python / tests / static analysis
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-*.egg-info/
-.venv/
-venv/
-
-# AWS SAM and deployment output
-.aws-sam/
-packaged.yaml
-samconfig.local.toml
-infrastructure/samconfig.toml
-
-# Logs and temporary files
-*.log
-tmp/
-temp/
