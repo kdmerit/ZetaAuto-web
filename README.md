@@ -10,7 +10,7 @@
 
 ## GitHub Pages 설정
 
-저장소 Settings → Secrets and variables → Actions → Variables에 아래 공개 변수 3개를 등록해야 배포가 활성화됩니다.
+배포 워크플로에는 현재 배포된 공개값이 기본값으로 들어 있습니다. 필요하면 저장소 Settings → Secrets and variables → Actions → Variables에서 아래 공개 변수로 덮어쓸 수 있습니다.
 
 ```text
 VITE_API_BASE_URL=https://qsytnyfa5c.execute-api.ap-northeast-2.amazonaws.com/dev
