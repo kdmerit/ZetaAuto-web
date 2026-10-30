@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   cancelServerBacktest,
   fetchServerChart,
+  fetchServerEntryChart,
   getServerBacktest,
   startServerBacktest,
   type ApiContext,
@@ -28,6 +29,7 @@ import type {
   Strategy,
 } from '../types';
 import { ChartModal } from './ChartModal';
+import { mergeChartPages } from '../chartData';
 import { ProgressBar } from './ProgressBar';
 
 interface StrategyBacktestProps {
@@ -174,10 +176,14 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   const [chartLoading, setChartLoading] = useState(false);
   const [selectedTrade, setSelectedTrade] = useState<BacktestTrade | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasOlder, setHasOlder] = useState(true);
+  const [chartError, setChartError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyEntries, setHistoryEntries] = useState<BacktestHistoryEntry[]>([]);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const chartHistoryPushed = useRef(false);
+  const chartRequestRef = useRef(0);
+  const olderRequestRef = useRef(false);
   const contextRef = useRef(context);
   const analysisSettingsRef = useRef(settings);
   const restoringHistoryRef = useRef(false);
@@ -190,6 +196,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     const handlePopState = () => {
       if (!chartHistoryPushed.current) return;
       chartHistoryPushed.current = false;
+      chartRequestRef.current += 1;
       setChart(null);
       setSelectedTrade(null);
     };
@@ -401,38 +408,58 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   };
 
   const openTrade = async (trade: BacktestTrade): Promise<void> => {
+    const requestId = ++chartRequestRef.current;
     setSelectedTrade(trade);
     setChartLoading(true);
+    setChartError(null);
+    setHasOlder(true);
     setError(null);
     try {
       if (serverJob?.result && serverJob.jobId && trade.tradeId && trade.symbol !== 'LOCAL') {
-        setChart(await fetchServerChart(context, trade.symbol, trade.side, new Date(trade.exitAt * 1000).toISOString(), serverJob.jobId, trade.tradeId));
+        const next = await fetchServerEntryChart(context, trade.symbol, trade.side, new Date(trade.exitAt * 1000).toISOString(), serverJob.jobId, trade.tradeId);
+        if (requestId === chartRequestRef.current) setChart(next);
       } else if (result) {
         setChart(chartForLocalTrade(result, trade, settings));
       }
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : '차트 조회에 실패했습니다.');
+      if (requestId === chartRequestRef.current) setError(failure instanceof Error ? failure.message : '차트 조회에 실패했습니다.');
     } finally {
-      setChartLoading(false);
+      if (requestId === chartRequestRef.current) setChartLoading(false);
     }
   };
 
-  const loadOlder = async (): Promise<void> => {
-    if (!chart || !selectedTrade || !serverJob || selectedTrade.symbol === 'LOCAL') return;
+  const loadOlder = async (): Promise<boolean> => {
+    if (!chart || !selectedTrade || !serverJob || selectedTrade.symbol === 'LOCAL' || olderRequestRef.current || !hasOlder) return false;
     const oldest = chart.candles[0]?.openTime;
-    if (!oldest) return;
+    if (!oldest || !Number.isFinite(oldest)) return false;
+    const requestId = chartRequestRef.current;
+    olderRequestRef.current = true;
     setLoadingOlder(true);
+    setChartError(null);
     try {
       const older = await fetchServerChart(context, selectedTrade.symbol, selectedTrade.side, new Date(selectedTrade.exitAt * 1000).toISOString(), serverJob.jobId, selectedTrade.tradeId, new Date(oldest * 1000).toISOString());
-      const seen = new Set(chart.candles.map((candle) => candle.openTime));
-      setChart({ ...chart, candles: [...older.candles.filter((candle) => !seen.has(candle.openTime)), ...chart.candles] });
+      if (requestId !== chartRequestRef.current) return false;
+      const merged = mergeChartPages(older, chart);
+      if (merged.candles.length <= chart.candles.length) {
+        setHasOlder(false);
+        return false;
+      }
+      setChart(merged);
+      return true;
+    } catch (failure) {
+      if (requestId === chartRequestRef.current) {
+        setChartError(failure instanceof Error ? failure.message : '과거 캔들을 불러오지 못했습니다.');
+      }
+      return false;
     } finally {
+      olderRequestRef.current = false;
       setLoadingOlder(false);
     }
   };
 
   const closeChart = (): void => {
     const hadHistoryEntry = chartHistoryPushed.current;
+    chartRequestRef.current += 1;
     chartHistoryPushed.current = false;
     setChart(null);
     setSelectedTrade(null);
@@ -575,7 +602,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
         {result ? <ResultCard result={result} onOpenTrade={(trade) => void openTrade(trade)} /> : null}
       </div>
       {chartLoading ? <div className="modal-backdrop"><div className="loading-card">체결 차트를 불러오는 중입니다…</div></div> : null}
-      {chart ? <ChartModal chart={chart} onClose={closeChart} onLoadOlder={selectedTrade?.symbol !== 'LOCAL' ? loadOlder : undefined} loadingOlder={loadingOlder} /> : null}
+      {chart ? <ChartModal chart={chart} onClose={closeChart} onLoadOlder={serverJob && selectedTrade?.symbol !== 'LOCAL' && hasOlder ? loadOlder : undefined} loadingOlder={loadingOlder} historyError={chartError} /> : null}
     </main>
   );
 }

@@ -1,3 +1,4 @@
+import { chartTimestamp, firstEntryTime } from './chartData';
 import type {
   ApiEnvelope,
   BacktestInterval,
@@ -237,6 +238,7 @@ export async function fetchServerChart(
   jobId: string,
   tradeId: string,
   beforeAt?: string,
+  focusAt?: string,
 ): Promise<ChartData> {
   const query = new URLSearchParams({
     side,
@@ -244,6 +246,7 @@ export async function fetchServerChart(
     backtestJobId: jobId,
     backtestTradeId: tradeId,
     ...(beforeAt ? { beforeAt } : {}),
+    ...(focusAt ? { focusAt } : {}),
   });
   const response = await request<{ chart: ChartData }>(
     context,
@@ -252,13 +255,33 @@ export async function fetchServerChart(
   return normalizeChart(response.chart);
 }
 
+export async function fetchServerEntryChart(
+  context: ApiContext,
+  symbol: string,
+  side: 'LONG' | 'SHORT',
+  referenceAt: string,
+  jobId: string,
+  tradeId: string,
+): Promise<ChartData> {
+  const chart = await fetchServerChart(context, symbol, side, referenceAt, jobId, tradeId);
+  const opened = firstEntryTime(chart);
+  if (opened === null || chart.candles.some((candle) => candle.openTime === opened)) return chart;
+  return fetchServerChart(context, symbol, side, referenceAt, jobId, tradeId, undefined, new Date(opened * 1000).toISOString());
+}
+
+function requiredChartTime(value: unknown): number {
+  const seconds = chartTimestamp(value);
+  if (seconds === null) throw new Error('차트의 캔들 시각을 확인하지 못했습니다. 다시 열어 주세요.');
+  return seconds;
+}
+
 function normalizeChart(value: ChartData): ChartData {
   return {
     ...value,
     candles: value.candles.map((candle) => ({
       ...candle,
-      openTime: Number(candle.openTime),
-      closeTime: Number(candle.closeTime),
+      openTime: requiredChartTime(candle.openTime),
+      closeTime: requiredChartTime(candle.closeTime),
       open: Number(candle.open),
       high: Number(candle.high),
       low: Number(candle.low),
@@ -272,21 +295,21 @@ function normalizeChart(value: ChartData): ChartData {
     })),
     markers: value.markers.map((marker) => ({
       ...marker,
-      openTime: Number(marker.openTime),
+      openTime: requiredChartTime(marker.openTime),
       price: Number(marker.price),
       quantity: Number(marker.quantity),
     })),
     executions: value.executions?.map((marker) => ({
       ...marker,
-      openTime: Number(marker.openTime),
+      openTime: requiredChartTime(marker.openTime),
       price: Number(marker.price),
       quantity: Number(marker.quantity),
       candleIndex: marker.candleIndex ?? -1,
     })),
     waves: value.waves.map((wave) => ({
       ...wave,
-      startTime: Number(wave.startTime),
-      endTime: Number(wave.endTime),
+      startTime: requiredChartTime(wave.startTime),
+      endTime: requiredChartTime(wave.endTime),
       low: Number(wave.low),
       high: Number(wave.high),
     })),

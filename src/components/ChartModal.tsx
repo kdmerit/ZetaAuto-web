@@ -1,12 +1,19 @@
-import { useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 
+import { chartTimestamp, entryCandleIndex, firstEntryTime } from '../chartData';
 import type { ChartData, ChartMarker, EnrichedCandle, PriceLine } from '../types';
 
 interface ChartModalProps {
   chart: ChartData;
   onClose: () => void;
-  onLoadOlder?: () => Promise<void>;
+  onLoadOlder?: () => Promise<boolean>;
   loadingOlder?: boolean;
+  historyError?: string | null;
+}
+
+interface CrosshairSelection {
+  openTime: number;
+  price: number;
 }
 
 const maDefinitions = [
@@ -30,15 +37,17 @@ const lineStyles: Record<PriceLine['kind'], { label: string; color: string }> = 
 };
 
 function formatPrice(value: number): string {
-  return value.toLocaleString('ko-KR', { maximumSignificantDigits: 10 });
+  return Number.isFinite(value) ? value.toLocaleString('ko-KR', { maximumSignificantDigits: 10 }) : '—';
 }
 
 function formatDate(value: number | string): string {
+  const seconds = chartTimestamp(value);
+  if (seconds === null) return '—';
   return new Intl.DateTimeFormat('ko-KR', {
     timeZone: 'Asia/Seoul',
     year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: false,
-  }).format(new Date(typeof value === 'number' ? value * 1000 : value));
+  }).format(new Date(seconds * 1000));
 }
 
 function signedPercent(value: number | null): string {
@@ -58,7 +67,7 @@ function selectedAngle(candles: EnrichedCandle[], index: number, key: keyof Enri
   if (index < 2) return null;
   const current = candles[index]?.[key];
   const start = candles[index - 2]?.[key];
-  if (typeof current !== 'number' || typeof start !== 'number') return null;
+  if (typeof current !== 'number' || typeof start !== 'number' || !Number.isFinite(current) || !Number.isFinite(start)) return null;
   return Math.atan2(start - current, 2) * 180 / Math.PI;
 }
 
@@ -70,18 +79,27 @@ function lineY(price: number, min: number, max: number, height: number): number 
 function ChartSvg({
   chart,
   visibleMas,
-  selectedIndex,
+  selection,
   onSelect,
   onClear,
+  focusRequest,
+  onLoadOlder,
+  loadingOlder,
 }: {
   chart: ChartData;
   visibleMas: Record<string, boolean>;
-  selectedIndex: number | null;
-  onSelect: (index: number) => void;
+  selection: CrosshairSelection | null;
+  onSelect: (selection: CrosshairSelection) => void;
   onClear: () => void;
+  focusRequest: number;
+  onLoadOlder?: () => Promise<boolean>;
+  loadingOlder?: boolean;
 }) {
-  const [dragging, setDragging] = useState(false);
-  const movedRef = useRef(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const gestureRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean; inspecting: boolean } | null>(null);
+  const previousViewRef = useRef<{ firstAt: number | undefined; step: number; focusRequest: number } | null>(null);
+  const requestedBeforeRef = useRef<number | null>(null);
+  const selectedIndex = selection === null ? -1 : chart.candles.findIndex((candle) => candle.openTime === selection.openTime);
   const width = Math.max(760, Math.min(12_000, chart.candles.length * 14));
   const height = 360;
   const volumeHeight = 58;
@@ -96,6 +114,19 @@ function ChartSvg({
   const min = Math.min(...safeValues) * 0.998;
   const max = Math.max(...safeValues) * 1.002;
   const step = width / Math.max(chart.candles.length, 1);
+  useLayoutEffect(() => {
+    const host = scrollRef.current;
+    if (!host) return;
+    const previous = previousViewRef.current;
+    if (!previous || previous.focusRequest !== focusRequest) {
+      const entryIndex = entryCandleIndex(chart);
+      host.scrollLeft = entryIndex === null ? 0 : Math.max(0, (entryIndex + 0.5) * step - host.clientWidth / 2);
+    } else if (previous.firstAt !== chart.candles[0]?.openTime) {
+      const prepended = chart.candles.findIndex((candle) => candle.openTime === previous.firstAt);
+      if (prepended >= 0) host.scrollLeft = (host.scrollLeft / previous.step + prepended) * step;
+    }
+    previousViewRef.current = { firstAt: chart.candles[0]?.openTime, step, focusRequest };
+  }, [chart, step, focusRequest]);
   const candleWidth = Math.max(3, step * 0.48);
   const maxVolume = chart.candles.reduce(
     (highest, candle) => Number.isFinite(candle.volume) ? Math.max(highest, candle.volume) : highest,
@@ -117,54 +148,62 @@ function ChartSvg({
     .filter(Boolean)
     .join(' ');
 
-  const indexForPointer = (event: PointerEvent<SVGSVGElement> | ReactMouseEvent<SVGSVGElement>): number | null => {
-    if (chart.candles.length === 0) return null;
+  const selectPointer = (event: PointerEvent<SVGSVGElement>): void => {
+    if (chart.candles.length === 0) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    if (rect.width <= 0) return null;
+    if (rect.width <= 0 || rect.height <= 0) return;
     const x = (event.clientX - rect.left) / rect.width * width;
-    return Math.max(0, Math.min(chart.candles.length - 1, Math.floor(x / step)));
+    const index = Math.max(0, Math.min(chart.candles.length - 1, Math.floor(x / step)));
+    const candle = chart.candles[index];
+    if (!candle) return;
+    const y = Math.max(4, Math.min(plotHeight - 4, (event.clientY - rect.top) / rect.height * height));
+    const price = max - (y - 4) / (plotHeight - 8) * (max - min);
+    onSelect({ openTime: candle.openTime, price });
+  };
+
+  const requestOlderAtEdge = (): void => {
+    const firstAt = chart.candles[0]?.openTime;
+    if (!onLoadOlder || loadingOlder || selection || !scrollRef.current || scrollRef.current.scrollLeft > 16 || firstAt === undefined || requestedBeforeRef.current === firstAt) return;
+    requestedBeforeRef.current = firstAt;
+    void onLoadOlder().finally(() => { requestedBeforeRef.current = null; });
   };
 
   return (
-    <div className={selectedIndex === null ? 'chart-scroll' : 'chart-scroll crosshair-active'}>
+    <div className="chart-frame">
+    <div ref={scrollRef} className={selection === null ? 'chart-scroll' : 'chart-scroll crosshair-active'} onScroll={requestOlderAtEdge}>
       <svg
-        className={dragging ? 'chart-svg dragging' : 'chart-svg'}
+        className="chart-svg"
         role="img"
         aria-label="백테스트 캔들 차트"
         viewBox={`0 0 ${width} ${height}`}
         width={width}
         height={height}
         onPointerDown={(event) => {
-          if (selectedIndex === null) return;
-          movedRef.current = false;
-          setDragging(true);
-          event.currentTarget.setPointerCapture?.(event.pointerId);
+          if (!event.isPrimary || event.button !== 0) return;
+          gestureRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false, inspecting: selection !== null };
+          if (selection !== null) {
+            event.preventDefault();
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }
         }}
         onPointerUp={(event) => {
-          setDragging(false);
-          if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
-            event.currentTarget.releasePointerCapture?.(event.pointerId);
-          }
+          const gesture = gestureRef.current;
+          gestureRef.current = null;
+          if (!gesture || gesture.pointerId !== event.pointerId) return;
+          const moved = gesture.moved || Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > 6;
+          if (!moved) {
+            if (gesture.inspecting) onClear();
+            else selectPointer(event);
+          } else if (!gesture.inspecting) requestOlderAtEdge();
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
         }}
-        onPointerCancel={() => setDragging(false)}
+        onPointerCancel={() => { gestureRef.current = null; }}
+        onLostPointerCapture={() => { gestureRef.current = null; }}
         onPointerMove={(event) => {
-          if (!dragging || selectedIndex === null) return;
-          const nextIndex = indexForPointer(event);
-          if (nextIndex === null) return;
-          movedRef.current = true;
-          onSelect(nextIndex);
-        }}
-        onClick={(event) => {
-          if (selectedIndex !== null) {
-            if (movedRef.current) {
-              movedRef.current = false;
-              return;
-            }
-            onClear();
-            return;
-          }
-          const nextIndex = indexForPointer(event);
-          if (nextIndex !== null) onSelect(nextIndex);
+          const gesture = gestureRef.current;
+          if (!gesture || gesture.pointerId !== event.pointerId) return;
+          if (Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > 6) gesture.moved = true;
+          if (gesture.inspecting && gesture.moved) selectPointer(event);
         }}
       >
         <rect width={width} height={height} fill="#202D42" rx="10" />
@@ -210,22 +249,26 @@ function ChartSvg({
             </g>
           );
         })}
-        {selectedIndex !== null ? (
+        {selectedIndex >= 0 && selection ? (
           <>
-            <line x1={xFor(selectedIndex)} x2={xFor(selectedIndex)} y1="0" y2={plotHeight} stroke="#FFFFFF" strokeWidth="1" strokeDasharray="3 5" />
-            <line x1="0" x2={width} y1={yFor(chart.candles[selectedIndex]?.close ?? min)} y2={yFor(chart.candles[selectedIndex]?.close ?? min)} stroke="#FFFFFF" strokeWidth="1" strokeDasharray="3 5" />
+            <line className="crosshair-vertical" x1={xFor(selectedIndex)} x2={xFor(selectedIndex)} y1="0" y2={height} stroke="#FFFFFF" strokeWidth="1" strokeDasharray="3 5" />
+            <line className="crosshair-horizontal" x1="0" x2={width} y1={yFor(selection.price)} y2={yFor(selection.price)} stroke="#FFFFFF" strokeWidth="1" strokeDasharray="3 5" />
           </>
         ) : null}
       </svg>
     </div>
+    {selection ? <span className="crosshair-price" style={{ top: Math.max(12, Math.min(plotHeight - 12, yFor(selection.price))) }}>{formatPrice(selection.price)}</span> : null}
+    </div>
   );
 }
 
-export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder }: ChartModalProps) {
+export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyError }: ChartModalProps) {
   const [visibleMas, setVisibleMas] = useState<Record<string, boolean>>({ ma5: true, ma10: false, ma20: true, ma60: false, ma120: false });
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const selected = selectedIndex === null ? null : chart.candles[selectedIndex] ?? null;
-  const selectedReadings = selectedIndex === null || !selected
+  const [selection, setSelection] = useState<CrosshairSelection | null>(null);
+  const [focusRequest, setFocusRequest] = useState(0);
+  const selectedIndex = selection === null ? -1 : chart.candles.findIndex((candle) => candle.openTime === selection.openTime);
+  const selected = chart.candles[selectedIndex] ?? null;
+  const selectedReadings = !selected
     ? []
     : maDefinitions.filter((definition) => visibleMas[definition.key]).map((definition) => {
         const value = selected[definition.key];
@@ -239,7 +282,7 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder }: ChartM
           <div>
             <p className="eyebrow">{chart.interval.toUpperCase()} · BACKTEST</p>
             <h2>{chart.symbol} <span className={chart.side === 'LONG' ? 'long-text' : 'short-text'}>{chart.side === 'LONG' ? '롱' : '숏'}</span></h2>
-            <p className="muted">{formatDate(chart.referenceAt)}</p>
+            <p className="muted chart-reference">{formatDate(firstEntryTime(chart) ?? chart.referenceAt)}</p>
           </div>
           <button className="close-button" type="button" onClick={onClose} aria-label="차트 닫기">×</button>
         </div>
@@ -254,7 +297,7 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder }: ChartM
             ))}
           </div>
         </div>
-        <ChartSvg chart={chart} visibleMas={visibleMas} selectedIndex={selectedIndex} onSelect={setSelectedIndex} onClear={() => setSelectedIndex(null)} />
+        <ChartSvg chart={chart} visibleMas={visibleMas} selection={selection} onSelect={setSelection} onClear={() => setSelection(null)} focusRequest={focusRequest} onLoadOlder={onLoadOlder} loadingOlder={loadingOlder} />
         {selected ? (
           <div className="candle-info">
             <strong>{formatDate(selected.openTime)}</strong>
@@ -262,7 +305,7 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder }: ChartM
             <span>저가 {formatPrice(selected.low)} · 종가 {formatPrice(selected.close)}</span>
             <span>몸통 등락률 <em className={selected.close >= selected.open ? 'positive' : 'negative'}>{signedPercent(bodyPercent(selected))}</em></span>
             <span>최대 등락률 {signedPercent(rangePercent(selected))}</span>
-            <span>거래량 {selected.volume.toLocaleString('ko-KR', { maximumSignificantDigits: 8 })}</span>
+            <span>거래량 {formatPrice(selected.volume)}</span>
             {selectedReadings.map((reading) => (
               <span key={reading.key} style={{ color: reading.color }}>{reading.label} 이격 {signedPercent(reading.deviation)} <em>({reading.angle === null ? '—' : `${reading.angle >= 0 ? '+' : ''}${reading.angle.toFixed(1)}°`})</em></span>
             ))}
@@ -271,14 +314,14 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder }: ChartM
         <div className="price-legend">
           {chart.priceLines.map((priceLine) => {
             const style = lineStyles[priceLine.kind];
+            if (priceLine.kind === 'ENTRY' || priceLine.kind === 'FIRST_ENTRY') {
+              return <button className="entry-focus" key={`${priceLine.kind}-${priceLine.price}`} type="button" style={{ color: style.color }} aria-label={`${style.label} ${formatPrice(priceLine.price)} · 최초 매수 지점으로 이동`} onClick={() => { setSelection(null); setFocusRequest((value) => value + 1); }}>{style.label} {formatPrice(priceLine.price)}</button>;
+            }
             return <span key={`${priceLine.kind}-${priceLine.price}`} style={{ color: style.color }}>{style.label} {formatPrice(priceLine.price)}</span>;
           })}
         </div>
-        {onLoadOlder ? (
-          <button className="outline-button" type="button" onClick={() => void onLoadOlder()} disabled={loadingOlder}>
-            {loadingOlder ? '과거 캔들 불러오는 중…' : '이전 캔들 더 보기'}
-          </button>
-        ) : null}
+        {loadingOlder ? <p className="muted small" role="status">과거 캔들 불러오는 중…</p> : null}
+        {historyError ? <p className="error" role="alert">{historyError}</p> : null}
       </section>
     </div>
   );
