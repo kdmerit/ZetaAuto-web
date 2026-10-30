@@ -62,7 +62,10 @@ function FullscreenButton() {
     return () => document.removeEventListener('fullscreenchange', update);
   }, []);
   useEffect(() => {
-    const exit = (): void => setFallbackFullscreen(false);
+    const exit = (): void => {
+      document.querySelector('.app-shell')?.classList.remove('pseudo-fullscreen', 'native-fullscreen');
+      setFallbackFullscreen(false);
+    };
     window.addEventListener('zetaauto:exit-fullscreen', exit);
     return () => {
       window.removeEventListener('zetaauto:exit-fullscreen', exit);
@@ -86,7 +89,12 @@ function FullscreenButton() {
       }
       else {
         const target = shell ?? document.documentElement;
-        if (typeof target.requestFullscreen !== 'function') {
+        // Android Chrome consumes hardware Back to leave Fullscreen API mode
+        // before it sends popstate. Use a viewport-sized, independently scrolling
+        // page frame on touch devices so Back can close a chart without exiting it.
+        const pageFullscreen = window.matchMedia('(pointer: coarse)').matches
+          || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+        if (pageFullscreen || typeof target.requestFullscreen !== 'function') {
           shell?.classList.add('pseudo-fullscreen');
           setFallbackFullscreen(true);
         } else await target.requestFullscreen();
@@ -97,7 +105,7 @@ function FullscreenButton() {
     }
   };
   return (
-    <button className="fullscreen-button" type="button" onClick={() => void toggle()} aria-label={fullscreen || fallbackFullscreen ? '전체화면 닫기' : '전체화면으로 보기'}>
+    <button className="fullscreen-button" type="button" onClick={() => void toggle()} aria-pressed={fullscreen || fallbackFullscreen} aria-label={fullscreen || fallbackFullscreen ? '전체화면 닫기' : '전체화면으로 보기'}>
       {fullscreen || fallbackFullscreen ? '⤢' : '⛶'}
     </button>
   );
@@ -117,7 +125,17 @@ function SignedInApp() {
     const baseState = currentState && typeof currentState === 'object' ? currentState : {};
     window.history.replaceState({ ...baseState, zetaautoApp: true, screen: 'MENU' }, '');
 
-    const handlePopState = () => {
+    const handlePopState = (event: PopStateEvent) => {
+      // Closing a chart with its X button removes the dialog before popstate.
+      // The destination is still the same strategy, not the menu; use history
+      // state instead of relying only on the dialog remaining in the DOM.
+      if (event.state?.screen === 'STRATEGY'
+        && (event.state.strategy === 'PULLBACK' || event.state.strategy === 'DISPARITY')) {
+        if (screenRef.current.kind !== 'STRATEGY' || screenRef.current.strategy !== event.state.strategy) {
+          setScreen({ kind: 'STRATEGY', strategy: event.state.strategy });
+        }
+        return;
+      }
       // ChartModal owns its own history entry. Let it consume this back action.
       if (document.querySelector('.chart-modal')) return;
       if (screenRef.current.kind !== 'MENU') {
@@ -134,12 +152,6 @@ function SignedInApp() {
   useEffect(() => subscribeNativeBack(() => {
     if (document.querySelector('.chart-modal') || window.history.state?.zetaautoChart || screenRef.current.kind === 'STRATEGY') {
       window.history.back();
-    } else if (document.fullscreenElement) {
-      void document.exitFullscreen();
-    } else if (document.querySelector('.native-fullscreen')) {
-      document.querySelector('.native-fullscreen')?.classList.remove('native-fullscreen');
-      window.dispatchEvent(new Event('zetaauto:exit-fullscreen'));
-      sendNativeMessage('FULLSCREEN', { enabled: false });
     } else {
       sendNativeMessage('EXIT_BACKTEST');
     }

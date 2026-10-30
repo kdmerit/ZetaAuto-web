@@ -30,6 +30,7 @@ import type {
 } from '../types';
 import { ChartModal } from './ChartModal';
 import { mergeChartPages } from '../chartData';
+import { serverSettingsSnapshot } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
 
 interface StrategyBacktestProps {
@@ -180,7 +181,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   const [chartError, setChartError] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyEntries, setHistoryEntries] = useState<BacktestHistoryEntry[]>([]);
-  const fileInput = useRef<HTMLInputElement | null>(null);
+  const resultRequestRef = useRef(0);
   const chartHistoryPushed = useRef(false);
   const chartRequestRef = useRef(0);
   const olderRequestRef = useRef(false);
@@ -222,6 +223,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   }, []);
 
   useEffect(() => {
+    const requestId = ++resultRequestRef.current;
     const fallback = loadSettings(strategy, defaults);
     analysisSettingsRef.current = fallback;
     setSettings(fallback);
@@ -233,21 +235,26 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     restoringHistoryRef.current = false;
     void getServerBacktest(contextRef.current, strategy)
       .then((job) => {
-        if (job) setServerJob(job);
+        if (job && requestId === resultRequestRef.current) setServerJob(job);
       })
       .catch(() => undefined);
+    return () => { resultRequestRef.current += 1; };
   }, [defaults, strategy]);
 
   useEffect(() => {
     if (!serverJob || !['QUEUED', 'RUNNING'].includes(serverJob.status)) return undefined;
+    const requestId = resultRequestRef.current;
+    let active = true;
     const timer = window.setInterval(() => {
       void getServerBacktest(context, strategy, serverJob.jobId)
         .then((job) => {
-          if (job) setServerJob(job);
+          if (job && active && requestId === resultRequestRef.current) setServerJob(job);
         })
-        .catch((failure: unknown) => setError(failure instanceof Error ? failure.message : '분석 상태를 확인하지 못했습니다.'));
+        .catch((failure: unknown) => {
+          if (active && requestId === resultRequestRef.current) setError(failure instanceof Error ? failure.message : '분석 상태를 확인하지 못했습니다.');
+        });
     }, 5000);
-    return () => window.clearInterval(timer);
+    return () => { active = false; window.clearInterval(timer); };
   }, [context, serverJob, strategy]);
 
   useEffect(() => {
@@ -258,7 +265,8 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
       return;
     }
     if (serverJob.status === 'COMPLETED' || serverJob.status === 'PARTIAL') {
-      const snapshot = { ...analysisSettingsRef.current };
+      const snapshot = serverSettingsSnapshot(serverJob.request, analysisSettingsRef.current);
+      analysisSettingsRef.current = snapshot;
       saveBacktestHistory({
         id: `${strategy}:${serverJob.jobId}`,
         strategy,
@@ -320,6 +328,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
 
   const runServer = async (reason?: string): Promise<void> => {
     validate();
+    resultRequestRef.current += 1;
     const snapshot = { ...settings };
     analysisSettingsRef.current = snapshot;
     saveSettings(strategy, snapshot);
@@ -342,8 +351,9 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     }
   };
 
-  const runLocal = async (sourceFile?: File): Promise<void> => {
+  const runLocal = async (): Promise<void> => {
     validate();
+    resultRequestRef.current += 1;
     if (settings.mode !== 'SINGLE') {
       await runServer('전체 종목 분석은 AWS 분석 서버를 사용합니다.');
       return;
@@ -353,12 +363,12 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     saveSettings(strategy, snapshot);
     setRunning(true);
     setError(null);
-    setNotice(sourceFile ? 'CSV 캔들로 브라우저 분석 중입니다.' : 'Bybit 공개 캔들을 받아 브라우저에서 분석 중입니다.');
+    setNotice('Bybit 공개 캔들을 받아 브라우저에서 분석 중입니다.');
     restoringHistoryRef.current = false;
     try {
       const next = await runLocalBacktest(snapshot, strategy, (nextProgress) => {
         setProgress({ phase: nextProgress.phase === 'DATA' ? '캔들 조회 중' : '전략 계산 중', completed: nextProgress.completed, total: nextProgress.total });
-      }, sourceFile);
+      });
       saveCachedResult(strategy, next);
       const savedAt = Date.now();
       saveBacktestHistory({
@@ -376,7 +386,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
       setNotice('브라우저 분석이 완료되었습니다.');
     } catch (failure) {
       const message = failure instanceof Error ? failure.message : '브라우저 분석에 실패했습니다.';
-      if (!sourceFile && /Bybit|CORS|너무 깁니다/.test(message)) {
+      if (/Bybit|CORS|너무 깁니다/.test(message)) {
         await runServer('브라우저 캔들 조회가 불가능해 AWS 분석 서버로 전환합니다.');
       } else setError(message);
     } finally {
@@ -415,10 +425,13 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   };
 
   const openHistory = (entry: BacktestHistoryEntry): void => {
-    analysisSettingsRef.current = { ...entry.settings };
+    resultRequestRef.current += 1;
+    const snapshot = { ...defaults, ...entry.settings };
+    analysisSettingsRef.current = snapshot;
     restoringHistoryRef.current = true;
-    setSettings(entry.settings);
-    saveSettings(strategy, entry.settings);
+    setSettings(snapshot);
+    saveSettings(strategy, snapshot);
+    saveCachedResult(strategy, entry.result);
     setResult(entry.result);
     setServerJob(entry.serverJobId ? restoredServerJob(entry) : null);
     setHistoryOpen(false);
@@ -608,12 +621,6 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
                 : `${currentHistorySymbol || '해당 종목'} 분석 이력이 없습니다.`}
               onOpen={openHistory}
             />
-          ) : null}
-          {settings.mode === 'SINGLE' ? (
-            <>
-              <input ref={fileInput} type="file" accept=".csv,text/csv" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void runLocal(file); event.currentTarget.value = ''; }} />
-              <button className="outline-button" type="button" disabled={running || Boolean(activeServer)} onClick={() => fileInput.current?.click()}>CSV 캔들로 분석</button>
-            </>
           ) : null}
           {notice ? <p className="notice">{notice}</p> : null}
           {error ? <p className="error" role="alert">{error}</p> : null}

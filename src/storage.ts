@@ -3,6 +3,9 @@ import type { BacktestResult, BacktestSettings, Candle, Strategy } from './types
 const settingsPrefix = 'zetaauto.web.backtest.settings.';
 const resultsPrefix = 'zetaauto.web.backtest.result.';
 const historyPrefix = 'zetaauto.web.backtest.history.';
+export const chartMaStorageKey = 'zetaauto.web.chart.visibleMas';
+const defaultChartMas = { ma5: true, ma10: false, ma20: true, ma60: false, ma120: false };
+export type ChartMaVisibility = typeof defaultChartMas;
 const historyRetentionMs = 30 * 24 * 60 * 60 * 1000;
 const maxHistoryEntries = 100;
 const candleCacheRetentionMs = 30 * 24 * 60 * 60 * 1000;
@@ -21,6 +24,31 @@ export interface BacktestHistoryEntry {
   settings: BacktestSettings;
   result: BacktestResult;
   serverJobId: string | null;
+}
+
+export function loadChartMas(): ChartMaVisibility {
+  const visibility = { ...defaultChartMas };
+  try {
+    const raw = localStorage.getItem(chartMaStorageKey);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      for (const key of Object.keys(visibility) as (keyof ChartMaVisibility)[]) {
+        const value = (parsed as Record<string, unknown>)[key];
+        if (typeof value === 'boolean') visibility[key] = value;
+      }
+    }
+  } catch {
+    // A damaged value or unavailable storage must not prevent opening charts.
+  }
+  return visibility;
+}
+
+export function saveChartMas(visibility: ChartMaVisibility): void {
+  try {
+    localStorage.setItem(chartMaStorageKey, JSON.stringify(visibility));
+  } catch {
+    // Chart toggles still work when storage is unavailable or full.
+  }
 }
 
 export function loadSettings(

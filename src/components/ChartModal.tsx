@@ -1,6 +1,7 @@
-import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 
 import { chartTimestamp, entryCandleIndex, firstEntryTime, visibleCandleRange } from '../chartData';
+import { chartMaStorageKey, loadChartMas, saveChartMas } from '../storage';
 import type { ChartData, ChartMarker, EnrichedCandle, PriceLine } from '../types';
 
 interface ChartModalProps {
@@ -361,9 +362,21 @@ function ChartSvg({
 
 export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyError }: ChartModalProps) {
   const backdropPointer = useRef<number | null>(null);
-  const [visibleMas, setVisibleMas] = useState<Record<string, boolean>>({ ma5: true, ma10: false, ma20: true, ma60: false, ma120: false });
+  const [visibleMas, setVisibleMas] = useState(loadChartMas);
   const [selection, setSelection] = useState<CrosshairSelection | null>(null);
   const [focusRequest, setFocusRequest] = useState(0);
+  useEffect(() => {
+    const refresh = () => setVisibleMas(loadChartMas());
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === chartMaStorageKey) refresh();
+    };
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('focus', refresh);
+    };
+  }, []);
   const selectedIndex = selection === null ? -1 : chart.candles.findIndex((candle) => candle.openTime === selection.openTime);
   const selected = chart.candles[selectedIndex] ?? null;
   const selectedReadings = !selected
@@ -397,7 +410,11 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyE
           <div className="ma-toggles">
             {maDefinitions.map((definition) => (
               <label className="ma-toggle" key={definition.key} style={{ '--ma-color': definition.color } as CSSProperties}>
-                <input type="checkbox" checked={visibleMas[definition.key]} onChange={() => setVisibleMas((current) => ({ ...current, [definition.key]: !current[definition.key] }))} />
+                <input type="checkbox" checked={visibleMas[definition.key]} onChange={(event) => {
+                  const next = { ...visibleMas, [definition.key]: event.target.checked };
+                  saveChartMas(next);
+                  setVisibleMas(next);
+                }} />
                 <span>{definition.label}</span>
               </label>
             ))}
