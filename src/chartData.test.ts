@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { fetchServerChart, fetchServerEntryChart } from './api';
-import { chartTimestamp, entryCandleIndex, mergeChartPages } from './chartData';
+import { chartTimestamp, entryCandleIndex, mergeChartPages, visibleCandleRange } from './chartData';
 import type { ChartData, ChartMarker } from './types';
 
 const opened = Date.parse('2026-10-28T14:00:00Z') / 1000;
@@ -40,6 +40,33 @@ function wireChart(chart: ChartData): unknown {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('visible chart scaling', () => {
+  it('scales to visible candles while ignoring distant price and volume spikes', () => {
+    const chart = chartAt([opened - 3600, opened, opened + 3600]);
+    chart.candles[0] = { ...chart.candles[0]!, high: 1000, low: 1, volume: 1_000_000 };
+    const visible = visibleCandleRange(chart.candles, 1, 2);
+    expect(visible.min).toBeLessThan(99);
+    expect(visible.max).toBeGreaterThan(102);
+    expect(visible.max - visible.min).toBeLessThan(4);
+    expect(visible.maxVolume).toBe(15);
+    const scrolled = visibleCandleRange(chart.candles, 0, 1);
+    expect(scrolled.max).toBeGreaterThan(1000);
+    expect(scrolled.min).toBeLessThan(1);
+    expect(scrolled.maxVolume).toBe(1_000_000);
+  });
+
+  it('keeps a usable scale for flat candles and very small coin prices', () => {
+    const chart = chartAt([opened]);
+    chart.candles[0] = { ...chart.candles[0]!, open: 0.00000001, high: 0.00000001, low: 0.00000001, close: 0.00000001, volume: 0 };
+    const range = visibleCandleRange(chart.candles, 0, 0);
+    expect(range.min).toBeLessThan(0.00000001);
+    expect(range.max).toBeGreaterThan(0.00000001);
+    expect(range.max - range.min).toBeLessThan(0.00000000001);
+    expect(range.maxVolume).toBe(1);
+    expect(visibleCandleRange([], 0, 0)).toEqual({ min: 0, max: 1, maxVolume: 1 });
+  });
+});
 
 describe('server chart dates and entry focus', () => {
   it('normalizes seconds, milliseconds and ISO timestamps without creating invalid dates', () => {

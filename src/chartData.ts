@@ -1,4 +1,24 @@
-import type { ChartData, ChartMarker } from './types';
+import type { Candle, ChartData, ChartMarker } from './types';
+
+export function visibleCandleRange(
+  candles: Candle[],
+  startIndex: number,
+  endIndex: number,
+): { min: number; max: number; maxVolume: number } {
+  let low = Number.POSITIVE_INFINITY;
+  let high = Number.NEGATIVE_INFINITY;
+  let maxVolume = 0;
+  for (let index = Math.max(0, startIndex); index <= Math.min(candles.length - 1, endIndex); index += 1) {
+    const candle = candles[index];
+    if (!candle) continue;
+    if (Number.isFinite(candle.low)) low = Math.min(low, candle.low);
+    if (Number.isFinite(candle.high)) high = Math.max(high, candle.high);
+    if (Number.isFinite(candle.volume)) maxVolume = Math.max(maxVolume, candle.volume);
+  }
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return { min: 0, max: 1, maxVolume: 1 };
+  const margin = Math.max((high - low) * 0.06, Math.max(Math.abs(high), Math.abs(low)) * 0.00001, Number.EPSILON);
+  return { min: low - margin, max: high + margin, maxVolume: maxVolume || 1 };
+}
 
 export function chartTimestamp(value: unknown): number | null {
   if (typeof value !== 'number' && typeof value !== 'string') return null;

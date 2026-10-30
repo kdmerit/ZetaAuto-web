@@ -1,6 +1,6 @@
-import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
+import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 
-import { chartTimestamp, entryCandleIndex, firstEntryTime } from '../chartData';
+import { chartTimestamp, entryCandleIndex, firstEntryTime, visibleCandleRange } from '../chartData';
 import type { ChartData, ChartMarker, EnrichedCandle, PriceLine } from '../types';
 
 interface ChartModalProps {
@@ -72,8 +72,8 @@ function selectedAngle(candles: EnrichedCandle[], index: number, key: keyof Enri
 }
 
 function lineY(price: number, min: number, max: number, height: number): number {
-  if (!Number.isFinite(price) || !Number.isFinite(min) || !Number.isFinite(max)) return height / 2;
-  return ((max - price) / Math.max(max - min, 0.0000001)) * height;
+  if (!Number.isFinite(price) || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) return height / 2;
+  return ((max - price) / (max - min)) * height;
 }
 
 function ChartSvg({
@@ -99,26 +99,52 @@ function ChartSvg({
   const gestureRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean; inspecting: boolean } | null>(null);
   const previousViewRef = useRef<{ firstAt: number | undefined; step: number; focusRequest: number } | null>(null);
   const requestedBeforeRef = useRef<number | null>(null);
+  const scrollFrameRef = useRef<number | null>(null);
+  const pointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{ distance: number; factor: number; anchorIndex: number } | null>(null);
+  const pendingZoomLeftRef = useRef<number | null>(null);
+  const [zoom, setZoom] = useState({ factor: 1 });
+  const [pinching, setPinching] = useState(false);
+  const [viewport, setViewport] = useState({ left: 0, width: 0 });
+  const plotClipId = useId();
+  const syncViewport = useCallback(() => {
+    const host = scrollRef.current;
+    if (!host) return;
+    setViewport((current) => current.left === host.scrollLeft && current.width === host.clientWidth
+      ? current
+      : { left: host.scrollLeft, width: host.clientWidth });
+  }, []);
   const selectedIndex = selection === null ? -1 : chart.candles.findIndex((candle) => candle.openTime === selection.openTime);
-  const width = Math.max(760, Math.min(12_000, chart.candles.length * 14));
+  const baseWidth = Math.max(760, Math.min(12_000, chart.candles.length * 14));
+  const widthForZoom = (factor: number): number => Math.max(viewport.width || 320, Math.min(24_000, baseWidth * factor));
+  const width = widthForZoom(zoom.factor);
   const height = 360;
   const volumeHeight = 58;
   const plotHeight = height - volumeHeight;
-  const values = chart.candles
-    .flatMap((candle) => [candle.high, candle.low])
-    .filter(Number.isFinite);
-  chart.priceLines.forEach((line) => {
-    if (Number.isFinite(line.price)) values.push(line.price);
-  });
-  const safeValues = values.length > 0 ? values : [0, 1];
-  const min = Math.min(...safeValues) * 0.998;
-  const max = Math.max(...safeValues) * 1.002;
+  const plotPadding = 24;
+  const priceHeight = plotHeight - 2 * plotPadding;
   const step = width / Math.max(chart.candles.length, 1);
+  const rangeStart = viewport.width > 0
+    ? Math.max(0, Math.floor(viewport.left / step))
+    : Math.max(0, (entryCandleIndex(chart) ?? 0) - 20);
+  const rangeEnd = viewport.width > 0
+    ? Math.min(chart.candles.length - 1, Math.ceil((viewport.left + viewport.width) / step) - 1)
+    : Math.min(chart.candles.length - 1, rangeStart + 40);
+  const { min, max, maxVolume } = useMemo(
+    () => visibleCandleRange(chart.candles, rangeStart, rangeEnd),
+    [chart.candles, rangeStart, rangeEnd],
+  );
+  const drawStart = Math.max(0, rangeStart - 1);
+  const drawEnd = Math.min(chart.candles.length - 1, rangeEnd + 1);
+  const drawnCandles = chart.candles.slice(drawStart, drawEnd + 1);
   useLayoutEffect(() => {
     const host = scrollRef.current;
     if (!host) return;
     const previous = previousViewRef.current;
-    if (!previous || previous.focusRequest !== focusRequest) {
+    if (pendingZoomLeftRef.current !== null) {
+      host.scrollLeft = Math.max(0, pendingZoomLeftRef.current);
+      pendingZoomLeftRef.current = null;
+    } else if (!previous || previous.focusRequest !== focusRequest) {
       const entryIndex = entryCandleIndex(chart);
       host.scrollLeft = entryIndex === null ? 0 : Math.max(0, (entryIndex + 0.5) * step - host.clientWidth / 2);
     } else if (previous.firstAt !== chart.candles[0]?.openTime) {
@@ -126,12 +152,26 @@ function ChartSvg({
       if (prepended >= 0) host.scrollLeft = (host.scrollLeft / previous.step + prepended) * step;
     }
     previousViewRef.current = { firstAt: chart.candles[0]?.openTime, step, focusRequest };
-  }, [chart, step, focusRequest]);
+    syncViewport();
+  }, [chart, step, focusRequest, syncViewport, zoom]);
+  useLayoutEffect(() => {
+    const host = scrollRef.current;
+    if (!host) return undefined;
+    const observer = new ResizeObserver(syncViewport);
+    observer.observe(host);
+    const preventBrowserPinch = (event: TouchEvent): void => {
+      if (event.touches.length >= 2) event.preventDefault();
+    };
+    host.addEventListener('touchstart', preventBrowserPinch, { passive: false });
+    host.addEventListener('touchmove', preventBrowserPinch, { passive: false });
+    return () => {
+      observer.disconnect();
+      host.removeEventListener('touchstart', preventBrowserPinch);
+      host.removeEventListener('touchmove', preventBrowserPinch);
+      if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
+    };
+  }, [syncViewport]);
   const candleWidth = Math.max(3, step * 0.48);
-  const maxVolume = chart.candles.reduce(
-    (highest, candle) => Number.isFinite(candle.volume) ? Math.max(highest, candle.volume) : highest,
-    1,
-  );
   const markerByIndex = useMemo(() => {
     const map = new Map<number, ChartMarker[]>();
     for (const marker of chart.markers) {
@@ -142,9 +182,9 @@ function ChartSvg({
     return map;
   }, [chart.markers]);
   const xFor = (index: number): number => (index + 0.5) * step;
-  const yFor = (price: number): number => lineY(price, min, max, plotHeight - 8) + 4;
-  const pointString = (key: keyof EnrichedCandle): string => chart.candles
-    .map((candle, index) => typeof candle[key] === 'number' && Number.isFinite(candle[key] as number) ? `${xFor(index)},${yFor(candle[key] as number)}` : '')
+  const yFor = (price: number): number => lineY(price, min, max, priceHeight) + plotPadding;
+  const pointString = (key: keyof EnrichedCandle): string => drawnCandles
+    .map((candle, index) => typeof candle[key] === 'number' && Number.isFinite(candle[key] as number) ? `${xFor(drawStart + index)},${yFor(candle[key] as number)}` : '')
     .filter(Boolean)
     .join(' ');
 
@@ -156,21 +196,36 @@ function ChartSvg({
     const index = Math.max(0, Math.min(chart.candles.length - 1, Math.floor(x / step)));
     const candle = chart.candles[index];
     if (!candle) return;
-    const y = Math.max(4, Math.min(plotHeight - 4, (event.clientY - rect.top) / rect.height * height));
-    const price = max - (y - 4) / (plotHeight - 8) * (max - min);
+    const y = Math.max(plotPadding, Math.min(plotHeight - plotPadding, (event.clientY - rect.top) / rect.height * height));
+    const price = max - (y - plotPadding) / priceHeight * (max - min);
     onSelect({ openTime: candle.openTime, price });
   };
 
   const requestOlderAtEdge = (): void => {
     const firstAt = chart.candles[0]?.openTime;
-    if (!onLoadOlder || loadingOlder || selection || !scrollRef.current || scrollRef.current.scrollLeft > 16 || firstAt === undefined || requestedBeforeRef.current === firstAt) return;
+    if (!onLoadOlder || loadingOlder || selection || pinchRef.current || !scrollRef.current || scrollRef.current.scrollLeft > 16 || firstAt === undefined || requestedBeforeRef.current === firstAt) return;
     requestedBeforeRef.current = firstAt;
     void onLoadOlder().finally(() => { requestedBeforeRef.current = null; });
   };
 
+  const forgetPointer = (pointerId: number): void => {
+    pointersRef.current.delete(pointerId);
+    gestureRef.current = null;
+    if (pointersRef.current.size < 2) {
+      pinchRef.current = null;
+      setPinching(false);
+    }
+  };
+
   return (
     <div className="chart-frame">
-    <div ref={scrollRef} className={selection === null ? 'chart-scroll' : 'chart-scroll crosshair-active'} onScroll={requestOlderAtEdge}>
+    <div ref={scrollRef} className={`chart-scroll${selection === null ? '' : ' crosshair-active'}${pinching ? ' pinching' : ''}`} onScroll={() => {
+      if (scrollFrameRef.current === null) scrollFrameRef.current = requestAnimationFrame(() => {
+        scrollFrameRef.current = null;
+        syncViewport();
+      });
+      requestOlderAtEdge();
+    }}>
       <svg
         className="chart-svg"
         role="img"
@@ -178,8 +233,27 @@ function ChartSvg({
         viewBox={`0 0 ${width} ${height}`}
         width={width}
         height={height}
+        data-candle-count={chart.candles.length}
         onPointerDown={(event) => {
-          if (!event.isPrimary || event.button !== 0) return;
+          if (event.button !== 0) return;
+          pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          if (pointersRef.current.size === 2 && scrollRef.current) {
+            const [first, second] = [...pointersRef.current.values()];
+            if (!first || !second) return;
+            const host = scrollRef.current;
+            const centerX = (first.x + second.x) / 2 - host.getBoundingClientRect().left;
+            pinchRef.current = {
+              distance: Math.max(1, Math.hypot(first.x - second.x, first.y - second.y)),
+              factor: zoom.factor,
+              anchorIndex: (host.scrollLeft + centerX) / step,
+            };
+            gestureRef.current = null;
+            setPinching(true);
+            for (const pointerId of pointersRef.current.keys()) event.currentTarget.setPointerCapture(pointerId);
+            event.preventDefault();
+            return;
+          }
+          if (!event.isPrimary || pointersRef.current.size !== 1) return;
           gestureRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false, inspecting: selection !== null };
           if (selection !== null) {
             event.preventDefault();
@@ -188,7 +262,7 @@ function ChartSvg({
         }}
         onPointerUp={(event) => {
           const gesture = gestureRef.current;
-          gestureRef.current = null;
+          forgetPointer(event.pointerId);
           if (!gesture || gesture.pointerId !== event.pointerId) return;
           const moved = gesture.moved || Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > 6;
           if (!moved) {
@@ -197,20 +271,37 @@ function ChartSvg({
           } else if (!gesture.inspecting) requestOlderAtEdge();
           if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
         }}
-        onPointerCancel={() => { gestureRef.current = null; }}
-        onLostPointerCapture={() => { gestureRef.current = null; }}
+        onPointerCancel={(event) => forgetPointer(event.pointerId)}
+        onLostPointerCapture={(event) => {
+          if (event.target === event.currentTarget) forgetPointer(event.pointerId);
+        }}
         onPointerMove={(event) => {
+          if (pointersRef.current.has(event.pointerId)) pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+          const pinch = pinchRef.current;
+          if (pinch && scrollRef.current && pointersRef.current.size >= 2) {
+            const [first, second] = [...pointersRef.current.values()];
+            if (!first || !second) return;
+            const distance = Math.hypot(first.x - second.x, first.y - second.y);
+            const factor = Math.max(0.25, Math.min(4, pinch.factor * distance / pinch.distance));
+            const centerX = (first.x + second.x) / 2 - scrollRef.current.getBoundingClientRect().left;
+            pendingZoomLeftRef.current = pinch.anchorIndex * widthForZoom(factor) / Math.max(chart.candles.length, 1) - centerX;
+            setZoom({ factor });
+            event.preventDefault();
+            return;
+          }
           const gesture = gestureRef.current;
           if (!gesture || gesture.pointerId !== event.pointerId) return;
           if (Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > 6) gesture.moved = true;
           if (gesture.inspecting && gesture.moved) selectPointer(event);
         }}
       >
+        <defs><clipPath id={plotClipId}><rect x="0" y="0" width={width} height={plotHeight} /></clipPath></defs>
         <rect width={width} height={height} fill="#202D42" rx="10" />
         {[0, 1, 2, 3, 4].map((index) => (
           <line key={`grid-${index}`} x1="0" x2={width} y1={(plotHeight / 4) * index} y2={(plotHeight / 4) * index} stroke="#34435B" strokeWidth="1" />
         ))}
-        {chart.waves.map((wave) => {
+        <g clipPath={`url(#${plotClipId})`}>
+        {chart.waves.filter((wave) => wave.startIndex <= drawEnd && wave.endIndex >= drawStart).map((wave) => {
           const x = Math.max(0, wave.startIndex) * step;
           const w = Math.max(step, (wave.endIndex - wave.startIndex + 1) * step);
           const top = yFor(wave.high);
@@ -223,10 +314,12 @@ function ChartSvg({
         ))}
         {chart.priceLines.map((priceLine) => {
           const y = yFor(priceLine.price);
+          if (!Number.isFinite(y) || y < 0 || y > plotHeight) return null;
           const style = lineStyles[priceLine.kind];
           return <line key={`${priceLine.kind}-${priceLine.price}`} x1="0" x2={width} y1={y} y2={y} stroke={style.color} strokeWidth="1.4" strokeDasharray="4 5" />;
         })}
-        {chart.candles.map((candle, index) => {
+        {drawnCandles.map((candle, offset) => {
+          const index = drawStart + offset;
           const x = xFor(index);
           const openY = yFor(candle.open);
           const closeY = yFor(candle.close);
@@ -236,10 +329,9 @@ function ChartSvg({
           const color = positive ? '#5BD5A5' : '#FF8A8A';
           const markers = markerByIndex.get(index) ?? [];
           return (
-            <g key={`candle-${candle.openTime}`}>
+            <g key={`candle-${candle.openTime}`} data-candle-index={index}>
               <line x1={x} x2={x} y1={highY} y2={lowY} stroke={color} strokeWidth="1.2" />
               <rect x={x - candleWidth / 2} y={Math.min(openY, closeY)} width={candleWidth} height={Math.max(2, Math.abs(closeY - openY))} fill={color} rx="1" />
-              <rect x={x - candleWidth / 2} y={height - 2 - (candle.volume / maxVolume) * (volumeHeight - 8)} width={candleWidth} height={(candle.volume / maxVolume) * (volumeHeight - 8)} fill={color} opacity=".7" />
               {markers.map((marker, markerIndex) => (
                 <g key={marker.id} transform={`translate(${x - 10 + markerIndex * 20},${marker.kind === 'CLOSE' || marker.kind === 'PARTIAL_TP' ? highY - 24 : lowY + 8})`}>
                   <rect width="20" height="20" rx="5" fill={marker.label === 'C' ? '#FF5C78' : marker.label === 'S' ? '#FF5C78' : '#7EA2FF'} />
@@ -248,6 +340,11 @@ function ChartSvg({
               ))}
             </g>
           );
+        })}
+        </g>
+        {drawnCandles.map((candle, offset) => {
+          const volume = Math.max(0, Math.min(1, candle.volume / maxVolume)) * (volumeHeight - 8);
+          return <rect key={`volume-${candle.openTime}`} x={xFor(drawStart + offset) - candleWidth / 2} y={height - 2 - volume} width={candleWidth} height={volume} fill={candle.close >= candle.open ? '#5BD5A5' : '#FF8A8A'} opacity=".7" />;
         })}
         {selectedIndex >= 0 && selection ? (
           <>
@@ -310,7 +407,7 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyE
               <span key={reading.key} style={{ color: reading.color }}>{reading.label} 이격 {signedPercent(reading.deviation)} <em>({reading.angle === null ? '—' : `${reading.angle >= 0 ? '+' : ''}${reading.angle.toFixed(1)}°`})</em></span>
             ))}
           </div>
-        ) : <p className="muted chart-hint">차트를 터치하면 십자선과 캔들 정보가 표시됩니다. 십자선 상태에서 드래그하면 위치가 이동합니다.</p>}
+        ) : <p className="muted chart-hint">차트를 터치하면 십자선과 캔들 정보가 표시됩니다. 십자선 상태에서 드래그하면 위치가 이동합니다. 두 손가락을 벌리면 확대되고 오므리면 더 많은 캔들이 보입니다.</p>}
         <div className="price-legend">
           {chart.priceLines.map((priceLine) => {
             const style = lineStyles[priceLine.kind];

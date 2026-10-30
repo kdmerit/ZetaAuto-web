@@ -137,6 +137,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .chart-frame { position: relative; min-width: 0; }
 .chart-scroll { overflow-x: auto; overflow-y: hidden; border-radius: 12px; background: #202d42; touch-action: pan-x; overscroll-behavior-x: contain; }
 .chart-scroll.crosshair-active { touch-action: none; overflow-x: hidden; }
+.chart-scroll.pinching { touch-action: none; }
 .crosshair-price { position: absolute; right: 0; transform: translateY(-50%); padding: 3px 5px; border-radius: 3px; background: #eef2f7; color: #151f30; font-size: 11px; font-variant-numeric: tabular-nums; pointer-events: none; }
 .chart-svg { display: block; min-width: 760px; cursor: crosshair; user-select: none; }
 .chart-svg.dragging { cursor: grabbing; }
