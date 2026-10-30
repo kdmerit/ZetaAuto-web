@@ -20,7 +20,7 @@ interface TokenSet {
 }
 
 export interface AuthContextValue {
-  status: 'CONFIGURATION_MISSING' | 'RESTORING' | 'SIGNED_OUT' | 'SIGNED_IN';
+  status: 'CONFIGURATION_MISSING' | 'RESTORING' | 'SIGNED_OUT' | 'ACCESS_DENIED' | 'SIGNED_IN';
   accessToken: string | null;
   email: string | null;
   error: string | null;
@@ -202,6 +202,10 @@ function readOAuthCallback(): { code: string; state: string } | null {
   return { code, state };
 }
 
+function readOAuthError(): string | null {
+  return new URLSearchParams(window.location.search).get('error');
+}
+
 function readStoredOAuthState(): { state: string; verifier: string } | null {
   try {
     const raw = sessionStorage.getItem(oauthStateKey);
@@ -249,7 +253,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
       code_challenge_method: 'S256',
     });
     if (selectAccount) params.set('prompt', 'select_account');
-    else params.set('login_hint', ALLOWED_WEB_EMAIL);
+    else {
+      params.set('prompt', 'none');
+      params.set('login_hint', ALLOWED_WEB_EMAIL);
+    }
     url.search = params.toString();
     window.location.assign(url.toString());
   }, [config]);
@@ -290,6 +297,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const restore = async () => {
       try {
         const callback = readOAuthCallback();
+        const oauthError = readOAuthError();
+        if (oauthError) {
+          removeOAuthQuery();
+          throw new Error(oauthError === 'login_required' ? '기존 Google 세션으로 로그인할 수 없습니다.' : 'Google 로그인이 취소되었거나 실패했습니다.');
+        }
         let next: TokenSet | null = null;
         if (callback) {
           const saved = readStoredOAuthState();
@@ -315,8 +327,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
         if (!active) return;
         clearAuthStorage();
         setTokens(null);
-        setStatus('SIGNED_OUT');
-        setError(failure instanceof Error ? failure.message : '로그인 상태를 확인하지 못했습니다.');
+        const message = failure instanceof Error ? failure.message : '로그인 상태를 확인하지 못했습니다.';
+        const accessDenied = message.startsWith('허용된 Google 계정');
+        setStatus(accessDenied ? 'ACCESS_DENIED' : 'SIGNED_OUT');
+        setError(accessDenied ? '허용되지 않은 Google 계정입니다.' : message);
         removeOAuthQuery();
       }
     };

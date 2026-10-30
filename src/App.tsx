@@ -31,6 +31,22 @@ function LoginScreen() {
   );
 }
 
+function AccessDeniedScreen() {
+  const auth = useAuth();
+  return (
+    <main className="screen auth-screen">
+      <div className="auth-card surface-card access-denied-card">
+        <p className="eyebrow">ZETAAUTO · ACCESS DENIED</p>
+        <h1>허용되지 않은 계정</h1>
+        <p className="muted">이 Google 계정으로는 백테스트에 접근할 수 없습니다.</p>
+        <button className="primary-button full-width" type="button" onClick={() => void auth.signIn(true)}>
+          다른 계정으로 로그인
+        </button>
+      </div>
+    </main>
+  );
+}
+
 function FullscreenButton() {
   const [fullscreen, setFullscreen] = useState(false);
   const [fallbackFullscreen, setFallbackFullscreen] = useState(false);
@@ -124,5 +140,6 @@ export function App() {
   if (auth.status === 'RESTORING') {
     return <main className="screen centered"><div className="loading-card">로그인 세션을 확인하는 중입니다…</div></main>;
   }
+  if (auth.status === 'ACCESS_DENIED') return <AccessDeniedScreen />;
   return auth.status === 'SIGNED_IN' ? <SignedInApp /> : <LoginScreen />;
 }
