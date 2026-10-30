@@ -5,6 +5,7 @@ import { ALLOWED_WEB_EMAIL, useAuth } from './auth';
 import { BacktestMenu } from './components/BacktestMenu';
 import { StrategyBacktest } from './components/StrategyBacktest';
 import type { Strategy } from './types';
+import { sendNativeMessage, subscribeNativeBack } from './nativeBridge';
 
 type Screen = { kind: 'MENU' } | { kind: 'STRATEGY'; strategy: Strategy };
 
@@ -19,12 +20,16 @@ function LoginScreen() {
         {auth.error ? <p className="error" role="alert">{auth.error}</p> : null}
         {missing ? <p className="notice">{AUTH_CONFIG_ERROR}</p> : null}
         <div className="auth-actions">
+          {auth.embedded ? (
+            <button className="primary-button full-width" type="button" disabled={missing} onClick={() => void auth.signIn()}>앱 로그인 다시 연결</button>
+          ) : <>
           <button className="primary-button full-width" type="button" disabled={missing} onClick={() => void auth.signIn()}>
             구글 로그인
           </button>
           <button className="outline-button full-width" type="button" disabled={missing} onClick={() => void auth.signIn(true)}>
             다른 계정으로 로그인
           </button>
+          </>}
         </div>
       </div>
     </main>
@@ -40,7 +45,7 @@ function AccessDeniedScreen() {
         <h1>허용되지 않은 계정</h1>
         <p className="muted">이 Google 계정으로는 백테스트에 접근할 수 없습니다.</p>
         <button className="primary-button full-width" type="button" onClick={() => void auth.signIn(true)}>
-          다른 계정으로 로그인
+          {auth.embedded ? '앱 로그인 다시 연결' : '다른 계정으로 로그인'}
         </button>
       </div>
     </main>
@@ -48,6 +53,7 @@ function AccessDeniedScreen() {
 }
 
 function FullscreenButton() {
+  const auth = useAuth();
   const [fullscreen, setFullscreen] = useState(false);
   const [fallbackFullscreen, setFallbackFullscreen] = useState(false);
   useEffect(() => {
@@ -55,8 +61,23 @@ function FullscreenButton() {
     document.addEventListener('fullscreenchange', update);
     return () => document.removeEventListener('fullscreenchange', update);
   }, []);
+  useEffect(() => {
+    const exit = (): void => setFallbackFullscreen(false);
+    window.addEventListener('zetaauto:exit-fullscreen', exit);
+    return () => {
+      window.removeEventListener('zetaauto:exit-fullscreen', exit);
+      if (auth.embedded) sendNativeMessage('FULLSCREEN', { enabled: false });
+    };
+  }, [auth.embedded]);
   const toggle = async (): Promise<void> => {
     const shell = document.querySelector<HTMLElement>('.app-shell');
+    if (auth.embedded) {
+      const enabled = !fallbackFullscreen;
+      shell?.classList.toggle('native-fullscreen', enabled);
+      setFallbackFullscreen(enabled);
+      sendNativeMessage('FULLSCREEN', { enabled });
+      return;
+    }
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
       else if (fallbackFullscreen) {
@@ -110,6 +131,20 @@ function SignedInApp() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
+  useEffect(() => subscribeNativeBack(() => {
+    if (document.querySelector('.chart-modal') || window.history.state?.zetaautoChart || screenRef.current.kind === 'STRATEGY') {
+      window.history.back();
+    } else if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else if (document.querySelector('.native-fullscreen')) {
+      document.querySelector('.native-fullscreen')?.classList.remove('native-fullscreen');
+      window.dispatchEvent(new Event('zetaauto:exit-fullscreen'));
+      sendNativeMessage('FULLSCREEN', { enabled: false });
+    } else {
+      sendNativeMessage('EXIT_BACKTEST');
+    }
+  }), []);
+
   const openStrategy = (strategy: Strategy): void => {
     window.history.pushState({ zetaautoApp: true, screen: 'STRATEGY', strategy }, '');
     setScreen({ kind: 'STRATEGY', strategy });
@@ -141,6 +176,10 @@ function SignedInApp() {
 
 export function App() {
   const auth = useAuth();
+  useEffect(() => {
+    if (auth.status === 'SIGNED_IN') return undefined;
+    return subscribeNativeBack(() => sendNativeMessage('EXIT_BACKTEST'));
+  }, [auth.status]);
   if (auth.status === 'RESTORING') {
     return <main className="screen centered"><div className="loading-card">로그인 세션을 확인하는 중입니다…</div></main>;
   }

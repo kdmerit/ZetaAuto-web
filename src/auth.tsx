@@ -11,10 +11,11 @@ import {
 
 import { AUTH_CONFIG_ERROR, tryGetAuthConfig } from './config';
 import type { AuthConfig } from './types';
+import { isEmbeddedWebView, requestNativeSession, sendNativeMessage } from './nativeBridge';
 
 interface TokenSet {
   accessToken: string;
-  refreshToken: string;
+  refreshToken: string | null;
   idToken: string | null;
   email: string | null;
   expiresAt: number;
@@ -26,6 +27,7 @@ export interface AuthContextValue {
   email: string | null;
   error: string | null;
   config: AuthConfig | null;
+  embedded: boolean;
   signIn: (selectAccount?: boolean) => Promise<void>;
   signOut: () => Promise<void>;
   refreshAccessToken: () => Promise<string | null>;
@@ -192,7 +194,7 @@ function requireAllowedAccount(tokenSet: TokenSet): TokenSet {
 
 function removeOAuthQuery(): void {
   const url = new URL(window.location.href);
-  url.search = '';
+  for (const key of ['code', 'state', 'error', 'error_description']) url.searchParams.delete(key);
   window.history.replaceState({}, document.title, url.toString());
 }
 
@@ -231,15 +233,62 @@ function saveOAuthState(state: string, verifier: string): void {
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const config = useMemo(() => tryGetAuthConfig(), []);
+  const embedded = useMemo(() => isEmbeddedWebView(), []);
   const [status, setStatus] = useState<AuthContextValue['status']>(
     config ? 'RESTORING' : 'CONFIGURATION_MISSING',
   );
   const [tokens, setTokens] = useState<TokenSet | null>(null);
   const [error, setError] = useState<string | null>(null);
   const refreshPromise = useRef<Promise<string | null> | null>(null);
+  const nativePromise = useRef<Promise<TokenSet> | null>(null);
+  const sessionGeneration = useRef(0);
+
+  const loadNativeSession = useCallback(async (forceRefresh = false): Promise<TokenSet> => {
+    if (!config) throw new Error(AUTH_CONFIG_ERROR);
+    if (nativePromise.current) return nativePromise.current;
+    const pending = (async () => {
+      const session = await requestNativeSession(config.apiBaseUrl, forceRefresh);
+      const next = requireAllowedAccount({ ...session, refreshToken: null, idToken: null });
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 15000);
+      try {
+        const response = await fetch(`${config.apiBaseUrl}/session`, {
+          headers: { Authorization: `Bearer ${next.accessToken}` },
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+        if (!response.ok) throw new Error('앱 로그인 세션이 만료되었습니다. 앱에서 다시 로그인해 주세요.');
+        const result = await response.json() as { userId?: unknown };
+        if (typeof result.userId !== 'string' || !result.userId) throw new Error('앱 로그인 상태를 확인하지 못했습니다.');
+        return next;
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    })();
+    nativePromise.current = pending;
+    try { return await pending; }
+    finally { if (nativePromise.current === pending) nativePromise.current = null; }
+  }, [config]);
 
   const signIn = useCallback(async (selectAccount = false) => {
     if (!config) throw new Error(AUTH_CONFIG_ERROR);
+    if (embedded) {
+      const generation = ++sessionGeneration.current;
+      setStatus('RESTORING');
+      setError(null);
+      try {
+        const next = await loadNativeSession();
+        if (generation !== sessionGeneration.current) return;
+        setTokens(next);
+        setStatus('SIGNED_IN');
+      } catch (failure) {
+        if (generation !== sessionGeneration.current) return;
+        setTokens(null);
+        setStatus('SIGNED_OUT');
+        setError(failure instanceof Error ? failure.message : '앱 로그인 연결에 실패했습니다.');
+      }
+      return;
+    }
     const verifier = randomBase64Url(48);
     const state = randomBase64Url(24);
     saveOAuthState(state, verifier);
@@ -262,9 +311,18 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
     url.search = params.toString();
     window.location.assign(url.toString());
-  }, [config]);
+  }, [config, embedded, loadNativeSession]);
 
   const signOut = useCallback(async () => {
+    sessionGeneration.current += 1;
+    if (embedded) {
+      clearAuthStorage();
+      setTokens(null);
+      setStatus('SIGNED_OUT');
+      setError(null);
+      sendNativeMessage('SIGN_OUT');
+      return;
+    }
     const refreshToken = tokens?.refreshToken ?? readRefreshToken();
     if (config && refreshToken) {
       try {
@@ -292,23 +350,30 @@ export function AuthProvider({ children }: PropsWithChildren) {
       }).toString();
       window.location.replace(logoutUrl.toString());
     }
-  }, [config, tokens?.refreshToken]);
+  }, [config, embedded, tokens?.refreshToken]);
 
   const refreshAccessToken = useCallback(async (): Promise<string | null> => {
     if (refreshPromise.current) return refreshPromise.current;
     if (!config || !tokens) return null;
+    const generation = sessionGeneration.current;
     const nextPromise = (async () => {
       try {
         const next = requireAllowedAccount(
-          await refreshTokens(config, tokens.refreshToken, tokens.email),
+          embedded
+            ? await loadNativeSession(true)
+            : await refreshTokens(config, tokens.refreshToken!, tokens.email),
         );
-        saveRefreshToken(next.refreshToken);
-        saveSessionEmail(next.email);
+        if (generation !== sessionGeneration.current) return null;
+        if (!embedded && next.refreshToken) {
+          saveRefreshToken(next.refreshToken);
+          saveSessionEmail(next.email);
+        }
         setTokens(next);
         setStatus('SIGNED_IN');
         setError(null);
         return next.accessToken;
       } catch {
+        if (generation !== sessionGeneration.current) return null;
         clearAuthStorage();
         setTokens(null);
         setStatus('SIGNED_OUT');
@@ -322,13 +387,23 @@ export function AuthProvider({ children }: PropsWithChildren) {
     } finally {
       if (refreshPromise.current === nextPromise) refreshPromise.current = null;
     }
-  }, [config, tokens]);
+  }, [config, embedded, loadNativeSession, tokens]);
 
   useEffect(() => {
     if (!config) return undefined;
     let active = true;
     const restore = async () => {
       try {
+        if (embedded) {
+          clearAuthStorage();
+          const next = await loadNativeSession();
+          if (active) {
+            setTokens(next);
+            setStatus('SIGNED_IN');
+            setError(null);
+          }
+          return;
+        }
         const callback = readOAuthCallback();
         const oauthError = readOAuthError();
         if (oauthError) {
@@ -343,7 +418,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
           }
           next = requireAllowedAccount(await exchangeCode(config, callback.code, saved.verifier));
           removeOAuthQuery();
-          saveRefreshToken(next.refreshToken);
+          if (next.refreshToken) saveRefreshToken(next.refreshToken);
           saveSessionEmail(next.email);
         } else {
           const refreshToken = readRefreshToken();
@@ -371,20 +446,24 @@ export function AuthProvider({ children }: PropsWithChildren) {
     return () => {
       active = false;
     };
-  }, [config]);
+  }, [config, embedded, loadNativeSession]);
 
   useEffect(() => {
     if (!tokens || !config) return undefined;
     const delay = Math.max(tokens.expiresAt - Date.now() - 60_000, 5_000);
     const timer = window.setTimeout(() => {
-      void refreshTokens(config, tokens.refreshToken, tokens.email)
+      if (embedded) { void refreshAccessToken(); return; }
+      const generation = sessionGeneration.current;
+      void refreshTokens(config, tokens.refreshToken!, tokens.email)
         .then(requireAllowedAccount)
         .then((next) => {
-          saveRefreshToken(next.refreshToken);
+          if (generation !== sessionGeneration.current) return;
+          if (next.refreshToken) saveRefreshToken(next.refreshToken);
           saveSessionEmail(next.email);
           setTokens(next);
         })
         .catch(() => {
+          if (generation !== sessionGeneration.current) return;
           clearAuthStorage();
           setTokens(null);
           setStatus('SIGNED_OUT');
@@ -392,7 +471,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         });
     }, delay);
     return () => window.clearTimeout(timer);
-  }, [config, tokens]);
+  }, [config, embedded, refreshAccessToken, tokens]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -401,11 +480,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
       email: tokens?.email ?? null,
       error,
       config,
+      embedded,
       signIn,
       signOut,
       refreshAccessToken,
     }),
-    [config, error, refreshAccessToken, signIn, signOut, status, tokens],
+    [config, embedded, error, refreshAccessToken, signIn, signOut, status, tokens],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

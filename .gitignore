@@ -3,3 +3,15 @@ dist/
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*credentials*.json
+google-services*.json
+*service-account*.json
+*.apk
+*.aab
+*.log
