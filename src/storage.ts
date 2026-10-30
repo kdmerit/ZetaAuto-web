@@ -5,6 +5,9 @@ const resultsPrefix = 'zetaauto.web.backtest.result.';
 const historyPrefix = 'zetaauto.web.backtest.history.';
 const historyRetentionMs = 30 * 24 * 60 * 60 * 1000;
 const maxHistoryEntries = 100;
+const candleCacheRetentionMs = 30 * 24 * 60 * 60 * 1000;
+const candleCacheMaxBytes = 1024 * 1024 * 1024;
+const candleCacheMaxRecords = 512;
 const dbName = 'zetaauto-web-cache';
 const dbVersion = 1;
 
@@ -144,6 +147,17 @@ interface CandleRecord {
   savedAt: number;
 }
 
+function isCandleRecord(value: unknown): value is CandleRecord {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<CandleRecord>;
+  return (
+    typeof record.cacheKey === 'string' &&
+    Array.isArray(record.candles) &&
+    typeof record.savedAt === 'number' &&
+    Number.isFinite(record.savedAt)
+  );
+}
+
 function openDatabase(): Promise<IDBDatabase | null> {
   if (!('indexedDB' in window)) return Promise.resolve(null);
   return new Promise((resolve) => {
@@ -159,6 +173,68 @@ function openDatabase(): Promise<IDBDatabase | null> {
   });
 }
 
+function readAllCandleRecords(db: IDBDatabase): Promise<CandleRecord[]> {
+  return new Promise((resolve) => {
+    const transaction = db.transaction('candles', 'readonly');
+    const request = transaction.objectStore('candles').getAll();
+    request.onsuccess = () => {
+      resolve((request.result as unknown[]).filter(isCandleRecord));
+    };
+    request.onerror = () => resolve([]);
+  });
+}
+
+function recordBytes(record: CandleRecord): number {
+  try {
+    return JSON.stringify(record).length * 2;
+  } catch {
+    return 0;
+  }
+}
+
+async function pruneCandleRecords(
+  db: IDBDatabase,
+  records: CandleRecord[],
+): Promise<CandleRecord[]> {
+  const cutoff = Date.now() - candleCacheRetentionMs;
+  const candidates = records
+    .filter((record) => record.savedAt >= cutoff)
+    .sort((left, right) => right.savedAt - left.savedAt);
+  const keep: CandleRecord[] = [];
+  const remove = new Set<string>();
+  let bytes = 0;
+
+  for (const record of candidates) {
+    const size = recordBytes(record);
+    if (
+      keep.length >= candleCacheMaxRecords ||
+      size > candleCacheMaxBytes ||
+      bytes + size > candleCacheMaxBytes
+    ) {
+      remove.add(record.cacheKey);
+      continue;
+    }
+    keep.push(record);
+    bytes += size;
+  }
+  for (const record of records) {
+    if (!keep.some((item) => item.cacheKey === record.cacheKey)) {
+      remove.add(record.cacheKey);
+    }
+  }
+  if (remove.size === 0) return keep;
+
+  await new Promise<void>((resolve) => {
+    const transaction = db.transaction('candles', 'readwrite');
+    const store = transaction.objectStore('candles');
+    remove.forEach((cacheKey) => store.delete(cacheKey));
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => resolve();
+    transaction.onabort = () => resolve();
+  });
+  return keep;
+}
+
 export async function loadCandles(cacheKey: string): Promise<Candle[] | null> {
   const db = await openDatabase();
   if (!db) return null;
@@ -171,6 +247,25 @@ export async function loadCandles(cacheKey: string): Promise<Candle[] | null> {
     };
     request.onerror = () => resolve(null);
   });
+}
+
+export async function loadCandleRange(
+  symbol: string,
+  interval: string,
+  startAt: number,
+  endAt: number,
+): Promise<Candle[]> {
+  const db = await openDatabase();
+  if (!db) return [];
+  const activeRecords = await pruneCandleRecords(db, await readAllCandleRecords(db));
+  const prefix = `${symbol}:${interval}:`;
+  const byTime = new Map<number, Candle>();
+  activeRecords
+    .filter((record) => record.cacheKey.startsWith(prefix))
+    .flatMap((record) => record.candles)
+    .filter((candle) => candle.openTime >= startAt && candle.openTime < endAt)
+    .forEach((candle) => byTime.set(candle.openTime, candle));
+  return [...byTime.values()].sort((left, right) => left.openTime - right.openTime);
 }
 
 export async function saveCandles(
@@ -188,7 +283,9 @@ export async function saveCandles(
     } satisfies CandleRecord);
     transaction.oncomplete = () => resolve();
     transaction.onerror = () => resolve();
+    transaction.onabort = () => resolve();
   });
+  await pruneCandleRecords(db, await readAllCandleRecords(db));
 }
 
 export const candleCacheKey = (

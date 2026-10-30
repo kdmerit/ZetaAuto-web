@@ -1,6 +1,6 @@
 import { buildLocalChart } from './engine';
-import { candleWindow, fetchBybitCandles, parseCsv } from './api';
-import { candleCacheKey, loadCandles, saveCandles } from './storage';
+import { candleWindow, fetchBybitCandlesRange, intervalSeconds, parseCsv } from './api';
+import { candleCacheKey, loadCandleRange, saveCandles } from './storage';
 import type {
   BacktestResult,
   BacktestSettings,
@@ -16,6 +16,40 @@ export interface LocalProgress {
   total: number;
 }
 
+interface CandleRange {
+  start: number;
+  end: number;
+}
+
+function missingCandleRanges(
+  candles: Candle[],
+  start: number,
+  end: number,
+  seconds: number,
+): CandleRange[] {
+  const available = new Set(candles.map((candle) => candle.openTime));
+  const ranges: CandleRange[] = [];
+  let cursor = start;
+  while (cursor < end) {
+    if (available.has(cursor)) {
+      cursor += seconds;
+      continue;
+    }
+    const rangeStart = cursor;
+    while (cursor < end && !available.has(cursor)) cursor += seconds;
+    ranges.push({ start: rangeStart, end: cursor });
+  }
+  return ranges;
+}
+
+function mergeCandles(first: Candle[], second: Candle[], start: number, end: number): Candle[] {
+  const byTime = new Map<number, Candle>();
+  [...first, ...second]
+    .filter((candle) => candle.openTime >= start && candle.openTime < end)
+    .forEach((candle) => byTime.set(candle.openTime, candle));
+  return [...byTime.values()].sort((left, right) => left.openTime - right.openTime);
+}
+
 export async function runLocalBacktest(
   settings: BacktestSettings,
   strategy: Strategy,
@@ -27,17 +61,51 @@ export async function runLocalBacktest(
     candles = parseCsv(await sourceFile.text(), settings.interval);
   } else {
     const window = candleWindow(settings);
-    const cacheKey = candleCacheKey(window.symbol, settings.interval, window.start, window.end);
-    const cached = await loadCandles(cacheKey);
-    if (cached && cached.length >= 20) {
-      candles = cached;
-      onProgress?.({ phase: 'DATA', completed: candles.length, total: candles.length });
-    } else {
-      candles = await fetchBybitCandles(settings, (completed, total) =>
-        onProgress?.({ phase: 'DATA', completed, total }),
+    const seconds = intervalSeconds(settings.interval);
+    const totalBars = Math.ceil((window.end - window.start) / seconds);
+    const cached = await loadCandleRange(
+      window.symbol,
+      settings.interval,
+      window.start,
+      window.end,
+    );
+    const ranges = missingCandleRanges(
+      cached,
+      window.start,
+      window.end,
+      seconds,
+    );
+    const initialCachedCount = new Set(cached.map((candle) => candle.openTime)).size;
+    let downloadedUnique = 0;
+    candles = cached;
+    onProgress?.({
+      phase: 'DATA',
+      completed: Math.min(initialCachedCount, totalBars),
+      total: totalBars,
+    });
+    for (const range of ranges) {
+      const fetched = await fetchBybitCandlesRange(
+        window.symbol,
+        settings.interval,
+        range.start,
+        range.end,
+        (completed, total) => onProgress?.({
+          phase: 'DATA',
+          completed: Math.min(totalBars, initialCachedCount + downloadedUnique + Math.min(completed, total)),
+          total: totalBars,
+        }),
       );
-      await saveCandles(cacheKey, candles);
+      const existing = new Set(candles.map((candle) => candle.openTime));
+      fetched.forEach((candle) => {
+        if (!existing.has(candle.openTime)) downloadedUnique += 1;
+      });
+      candles = mergeCandles(candles, fetched, window.start, window.end);
+      await saveCandles(
+        candleCacheKey(window.symbol, settings.interval, range.start, range.end),
+        fetched,
+      );
     }
+    if (candles.length < 20) throw new Error('분석 기간의 캔들이 부족합니다.');
   }
   const worker = new Worker(new URL('./backtest.worker.ts', import.meta.url), {
     type: 'module',

@@ -1,5 +1,6 @@
 import type {
   ApiEnvelope,
+  BacktestInterval,
   BacktestSettings,
   BacktestTrade,
   Candle,
@@ -324,8 +325,26 @@ export async function fetchBybitCandles(
   onProgress?: (completed: number, total: number) => void,
 ): Promise<Candle[]> {
   if (settings.mode !== 'SINGLE') throw new Error('브라우저 분석은 개별 종목만 지원합니다.');
-  const seconds = intervalSeconds(settings.interval);
   const { symbol, start, end } = candleWindow(settings);
+  const candles = await fetchBybitCandlesRange(
+    symbol,
+    settings.interval,
+    start,
+    end,
+    onProgress,
+  );
+  if (candles.length < 20) throw new Error('분석 기간의 캔들이 부족합니다.');
+  return candles;
+}
+
+export async function fetchBybitCandlesRange(
+  symbol: string,
+  interval: BacktestInterval,
+  start: number,
+  end: number,
+  onProgress?: (completed: number, total: number) => void,
+): Promise<Candle[]> {
+  const seconds = intervalSeconds(interval);
   if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
     throw new Error('분석 기간을 확인해 주세요.');
   }
@@ -341,7 +360,7 @@ export async function fetchBybitCandles(
     url.search = new URLSearchParams({
       category: 'linear',
       symbol,
-      interval: bybitInterval[settings.interval],
+      interval: bybitInterval[interval],
       limit: '1000',
       end: String(cursor),
     }).toString();
@@ -365,7 +384,7 @@ export async function fetchBybitCandles(
     if (page.length < 1000) break;
   }
   const candles = [...output.values()].sort((a, b) => a.openTime - b.openTime);
-  if (candles.length < 20) throw new Error('분석 기간의 캔들이 부족합니다.');
+  if (candles.length === 0) throw new Error('분석 기간의 캔들이 없습니다.');
   return candles;
 }
 
