@@ -1,29 +1,22 @@
-import { runBacktest } from './engine';
-import type { BacktestSettings, Candle, Strategy } from './types';
+/** Worker owns data loading and replay even while the strategy screen is unmounted. */
+import { executeLocalJob } from './localJobs';
+import type { BacktestSettings, Strategy } from './types';
 
 interface RunMessage {
-  type: 'RUN';
-  candles: Candle[];
-  settings: BacktestSettings;
+  type: 'START' | 'PAUSE';
+  settings?: BacktestSettings;
   strategy: Strategy;
+  resumeId?: string;
 }
 
+let controller: AbortController | null = null;
 self.onmessage = (event: MessageEvent<RunMessage>) => {
-  if (event.data.type !== 'RUN') return;
-  try {
-    const result = runBacktest(
-      event.data.candles,
-      event.data.settings,
-      event.data.strategy,
-      (completed, total) => self.postMessage({ type: 'PROGRESS', completed, total }),
-    );
-    self.postMessage({ type: 'RESULT', result });
-  } catch (error) {
-    self.postMessage({
-      type: 'ERROR',
-      message: error instanceof Error ? error.message : '브라우저 분석에 실패했습니다.',
-    });
-  }
+  if (event.data.type === 'PAUSE') { controller?.abort(); return; }
+  if (controller) return;
+  controller = new AbortController();
+  void executeLocalJob(event.data, view => self.postMessage({ type: 'UPDATE', view }), controller.signal)
+    .catch((error: unknown) => self.postMessage({ type: 'ERROR', message: error instanceof Error ? error.message : '브라우저 분석에 실패했습니다.' }))
+    .finally(() => { controller = null; self.postMessage({ type: 'IDLE' }); });
 };
 
 export {};

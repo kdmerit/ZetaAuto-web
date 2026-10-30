@@ -1,149 +1,125 @@
+/** Page-side worker controller and cache-backed charts. Authentication never enters the worker. */
+import { enrichCandles, intervalSeconds } from './api';
 import { buildLocalChart } from './engine';
-import { candleWindow, fetchBybitCandlesRange, intervalSeconds, parseCsv } from './api';
-import { candleCacheKey, loadCandleRange, saveCandles } from './storage';
-import type {
-  BacktestResult,
-  BacktestSettings,
-  BacktestTrade,
-  Candle,
-  ChartData,
-  Strategy,
-} from './types';
+import { loadLocalJob, loadLocalResult, type LocalJobView } from './localJobs';
+import { ensureCandles, listInstruments } from './marketData';
+import { saveBacktestHistory, saveCachedResult } from './storage';
+import type { BacktestResult, BacktestSettings, BacktestTrade, ChartData, Strategy } from './types';
 
-export interface LocalProgress {
-  phase: 'DATA' | 'REPLAY';
-  completed: number;
-  total: number;
+type LocalEvent = { type: 'UPDATE'; view: LocalJobView } | { type: 'ERROR'; message: string } | { type: 'IDLE' };
+const listeners = new Map<Strategy, Set<(event: LocalEvent) => void>>();
+const views = new Map<Strategy, LocalJobView>();
+let worker: Worker | null = null;
+let activeStrategy: Strategy | null = null;
+
+export function subscribeLocalBacktest(strategy: Strategy, receive: (event: LocalEvent) => void): () => void {
+  if (!listeners.has(strategy)) listeners.set(strategy, new Set());
+  listeners.get(strategy)!.add(receive);
+  return () => { listeners.get(strategy)?.delete(receive); };
 }
 
-interface CandleRange {
-  start: number;
-  end: number;
+function notify(strategy: Strategy, event: LocalEvent): void {
+  for (const receive of listeners.get(strategy) ?? []) receive(event);
 }
 
-function missingCandleRanges(
-  candles: Candle[],
-  start: number,
-  end: number,
-  seconds: number,
-): CandleRange[] {
-  const available = new Set(candles.map((candle) => candle.openTime));
-  const ranges: CandleRange[] = [];
-  let cursor = start;
-  while (cursor < end) {
-    if (available.has(cursor)) {
-      cursor += seconds;
-      continue;
-    }
-    const rangeStart = cursor;
-    while (cursor < end && !available.has(cursor)) cursor += seconds;
-    ranges.push({ start: rangeStart, end: cursor });
-  }
-  return ranges;
+export function isLocalBacktestRunning(strategy: Strategy): boolean {
+  return worker !== null && activeStrategy === strategy;
 }
 
-function mergeCandles(first: Candle[], second: Candle[], start: number, end: number): Candle[] {
-  const byTime = new Map<number, Candle>();
-  [...first, ...second]
-    .filter((candle) => candle.openTime >= start && candle.openTime < end)
-    .forEach((candle) => byTime.set(candle.openTime, candle));
-  return [...byTime.values()].sort((left, right) => left.openTime - right.openTime);
+export async function restoreLocalBacktest(strategy: Strategy): Promise<LocalJobView | null> {
+  const view = isLocalBacktestRunning(strategy) ? views.get(strategy) ?? await loadLocalJob(strategy) : await loadLocalJob(strategy);
+  if (view?.status === 'COMPLETED' && !view.result) view.result = (await loadLocalResult(view.id))?.result ?? null;
+  return view;
 }
 
-export async function runLocalBacktest(
-  settings: BacktestSettings,
-  strategy: Strategy,
-  onProgress?: (progress: LocalProgress) => void,
-  sourceFile?: File,
-): Promise<BacktestResult> {
-  let candles: Candle[];
-  if (sourceFile) {
-    candles = parseCsv(await sourceFile.text(), settings.interval);
-  } else {
-    const window = candleWindow(settings);
-    const seconds = intervalSeconds(settings.interval);
-    const totalBars = Math.ceil((window.end - window.start) / seconds);
-    const cached = await loadCandleRange(
-      window.symbol,
-      settings.interval,
-      window.start,
-      window.end,
-    );
-    const ranges = missingCandleRanges(
-      cached,
-      window.start,
-      window.end,
-      seconds,
-    );
-    const initialCachedCount = new Set(cached.map((candle) => candle.openTime)).size;
-    let downloadedUnique = 0;
-    candles = cached;
-    onProgress?.({
-      phase: 'DATA',
-      completed: Math.min(initialCachedCount, totalBars),
-      total: totalBars,
-    });
-    for (const range of ranges) {
-      const fetched = await fetchBybitCandlesRange(
-        window.symbol,
-        settings.interval,
-        range.start,
-        range.end,
-        (completed, total) => onProgress?.({
-          phase: 'DATA',
-          completed: Math.min(totalBars, initialCachedCount + downloadedUnique + Math.min(completed, total)),
-          total: totalBars,
-        }),
-      );
-      const existing = new Set(candles.map((candle) => candle.openTime));
-      fetched.forEach((candle) => {
-        if (!existing.has(candle.openTime)) downloadedUnique += 1;
-      });
-      candles = mergeCandles(candles, fetched, window.start, window.end);
-      await saveCandles(
-        candleCacheKey(window.symbol, settings.interval, range.start, range.end),
-        fetched,
-      );
-    }
-    if (candles.length < 20) throw new Error('분석 기간의 캔들이 부족합니다.');
-  }
-  const worker = new Worker(new URL('./backtest.worker.ts', import.meta.url), {
-    type: 'module',
-  });
-  return new Promise<BacktestResult>((resolve, reject) => {
-    worker.onmessage = (event: MessageEvent<{
-      type: 'PROGRESS' | 'RESULT' | 'ERROR';
-      completed?: number;
-      total?: number;
-      result?: BacktestResult;
-      message?: string;
-    }>) => {
-      if (event.data.type === 'PROGRESS') {
-        onProgress?.({
-          phase: 'REPLAY',
-          completed: event.data.completed ?? 0,
-          total: event.data.total ?? candles.length,
+export function startLocalBacktest(strategy: Strategy, settings: BacktestSettings, resumeId?: string): void {
+  if (worker) throw new Error('다른 분석이 진행 중입니다. 먼저 일시정지해 주세요.');
+  if (!resumeId) views.delete(strategy);
+  void navigator.storage?.persist?.().catch(() => false);
+  activeStrategy = strategy;
+  worker = new Worker(new URL('./backtest.worker.ts', import.meta.url), { type: 'module' });
+  const instance = worker;
+  instance.onmessage = (event: MessageEvent<LocalEvent>) => {
+    const message = event.data;
+    if (message.type === 'UPDATE') {
+      views.set(strategy, message.view);
+      const view = message.view;
+      if (view.status === 'COMPLETED' && view.result) {
+        const compact: BacktestResult = { ...view.result, recentTrades: [], equityCurve: [], candles: [] };
+        saveCachedResult(strategy, view.result);
+        saveBacktestHistory({
+          id: `${strategy}:local:${view.id}`, strategy, savedAt: view.updatedAt,
+          mode: view.settings.mode, symbol: view.settings.mode === 'ALL' ? 'ALL' : view.settings.symbol.replace(/USDT$/i, '').toUpperCase(),
+          interval: view.settings.interval, settings: view.settings, result: compact, serverJobId: null, localRunId: view.id,
         });
-      } else if (event.data.type === 'RESULT' && event.data.result) {
-        worker.terminate();
-        resolve(event.data.result);
-      } else if (event.data.type === 'ERROR') {
-        worker.terminate();
-        reject(new Error(event.data.message ?? '브라우저 분석에 실패했습니다.'));
       }
-    };
-    worker.onerror = (event) => {
-      worker.terminate();
-      reject(new Error(event.message || '브라우저 분석 worker가 중단되었습니다.'));
-    };
-    worker.postMessage({ type: 'RUN', candles, settings, strategy });
-  });
+    }
+    if (message.type === 'ERROR') {
+      const last = views.get(strategy);
+      if (last) {
+        const paused = { ...last, status: 'PAUSED' as const, message: message.message };
+        views.set(strategy, paused);
+        notify(strategy, { type: 'UPDATE', view: paused });
+      }
+    }
+    notify(strategy, message);
+    if (message.type === 'IDLE') {
+      instance.terminate();
+      if (worker === instance) { worker = null; activeStrategy = null; }
+    }
+  };
+  instance.onerror = () => {
+    instance.terminate();
+    worker = null;
+    activeStrategy = null;
+    const previous = views.get(strategy);
+    if (previous) views.set(strategy, { ...previous, status: 'PAUSED' });
+    notify(strategy, { type: 'ERROR', message: '분석이 중단되었습니다. 저장된 지점부터 이어가 주세요.' });
+    notify(strategy, { type: 'IDLE' });
+  };
+  instance.postMessage({ type: 'START', strategy, settings, resumeId });
 }
 
-export function chartForLocalTrade(
+export function pauseLocalBacktest(strategy: Strategy): void {
+  if (activeStrategy === strategy) worker?.postMessage({ type: 'PAUSE', strategy });
+}
+
+/** New results contain a small trade snapshot; candle pages are read on demand for either mode. */
+export async function chartForLocalTrade(
   result: BacktestResult,
   trade: BacktestTrade,
   settings: BacktestSettings,
-): ChartData {
-  return buildLocalChart(result, trade, settings);
+  beforeAt?: number,
+): Promise<ChartData> {
+  if (!result.localRunId && result.candles.length) return buildLocalChart(result, trade, settings);
+  const seconds = intervalSeconds(settings.interval);
+  const first = trade.executions.find(execution => execution.kind === 'ENTRY')?.candleOpenAt ?? trade.entryAt - seconds;
+  const end = beforeAt ?? Math.min(Math.floor(Date.now() / 1000 / seconds) * seconds, first + 160 * seconds);
+  const start = end - 300 * seconds;
+  const symbol = trade.symbol === 'LOCAL' ? `${settings.symbol.replace(/USDT$/i, '').toUpperCase()}USDT` : trade.symbol;
+  const instrument = (await listInstruments(symbol))[0] ?? { symbol, launchAt: 0 };
+  const rows = await ensureCandles(instrument, settings.interval, start - 200 * seconds, end);
+  const candles = enrichCandles(rows).filter(candle => candle.openTime >= start);
+  if (!candles.length) throw new Error('차트에 표시할 캔들이 없습니다.');
+  const indexFor = (time: number): number => candles.findIndex(candle => candle.openTime === time);
+  const executions: ChartData['markers'] = trade.executions.map((execution, index) => ({
+    id: `${trade.tradeId}:${index}`, orderId: `${trade.tradeId}:${index}`, kind: execution.kind,
+    label: execution.kind === 'CLOSE' ? 'C' : execution.kind === 'PARTIAL_TP' ? trade.side === 'LONG' ? 'S' : 'B' : trade.side === 'LONG' ? 'B' : 'S',
+    openTime: execution.candleOpenAt, price: execution.price, quantity: execution.quantity,
+    candleIndex: indexFor(execution.candleOpenAt),
+  }));
+  const fallback = buildLocalChart({ ...result, candles: rows }, { ...trade, entryIndex: rows.findIndex(candle => candle.openTime === first), signalIndex: rows.findIndex(candle => candle.openTime === first) }, settings);
+  return {
+    symbol, interval: settings.interval, side: trade.side, referenceAt: new Date(first * 1000).toISOString(),
+    referenceIndex: indexFor(first) < 0 ? null : indexFor(first), candles,
+    waves: (trade.signal.waves ?? []).flatMap(wave => {
+      const startIndex = candles.findIndex(candle => candle.openTime >= wave.startTime && candle.openTime <= wave.endTime);
+      if (startIndex < 0) return [];
+      let endIndex = startIndex;
+      while (endIndex + 1 < candles.length && candles[endIndex + 1]!.openTime <= wave.endTime) endIndex += 1;
+      return [{ ...wave, startIndex, endIndex }];
+    }),
+    markers: executions.filter(execution => execution.candleIndex >= 0), executions,
+    priceLines: trade.priceLines ?? fallback.priceLines,
+  };
 }

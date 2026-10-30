@@ -19,6 +19,8 @@ const SLIPPAGE = 0.0002;
 interface InternalWave {
   startIndex: number;
   endIndex: number;
+  startTime: number;
+  endTime: number;
   low: number;
   high: number;
   tailLow: number;
@@ -33,13 +35,14 @@ interface WaveBucket {
   current: InternalWave | null;
 }
 
-interface WaveState {
+export interface WaveState {
   trend: number;
   lastBodyHigh: number | null;
   lastBodyLow: number | null;
   lastTailLow: number | null;
   lastTailHigh: number | null;
   lastIndex: number | null;
+  lastAt: number | null;
   LONG: WaveBucket;
   SHORT: WaveBucket;
 }
@@ -112,8 +115,8 @@ function toWave(
   candles: Candle[],
   side: 'LONG' | 'SHORT',
 ): Wave {
-  const start = candles[wave.startIndex]?.openTime ?? 0;
-  const end = candles[wave.endIndex]?.openTime ?? 0;
+  const start = wave.startTime;
+  const end = wave.endTime;
   return {
     ...publicWave(wave, label, side),
     startTime: start,
@@ -133,6 +136,7 @@ function initialWaveState(): WaveState {
     lastTailLow: null,
     lastTailHigh: null,
     lastIndex: null,
+    lastAt: null,
     LONG: emptyBucket(),
     SHORT: emptyBucket(),
   };
@@ -147,6 +151,7 @@ function advanceWaveState(state: WaveState, candle: Candle, index: number): void
     state.lastTailLow = candle.low;
     state.lastTailHigh = candle.high;
     state.lastIndex = index;
+    state.lastAt = candle.openTime;
     return;
   }
   const oldTrend = state.trend;
@@ -156,7 +161,7 @@ function advanceWaveState(state: WaveState, candle: Candle, index: number): void
   if (highUp && !lowDown) trend = 1;
   else if (lowDown && !highUp) trend = -1;
   else if (highUp && lowDown) {
-    trend = state.trend || (candle.close === candle.open ? 1 : candle.close > candle.open ? 1 : -1);
+    trend = candle.close === candle.open ? state.trend || 1 : candle.close > candle.open ? 1 : -1;
   } else trend = state.trend || -1;
 
   const previousIndex = state.lastIndex ?? Math.max(index - 1, 0);
@@ -170,6 +175,8 @@ function advanceWaveState(state: WaveState, candle: Candle, index: number): void
       bucket.current = {
         startIndex: previousIndex,
         endIndex: previousIndex,
+        startTime: state.lastAt ?? candle.openTime,
+        endTime: state.lastAt ?? candle.openTime,
         low: state.lastBodyLow,
         high: state.lastBodyHigh,
         tailLow: state.lastTailLow ?? candle.low,
@@ -180,6 +187,7 @@ function advanceWaveState(state: WaveState, candle: Candle, index: number): void
     }
     if (bucket.current) {
       bucket.current.endIndex = index;
+      bucket.current.endTime = candle.openTime;
       bucket.current.low = Math.min(bucket.current.low, low);
       bucket.current.high = Math.max(bucket.current.high, high);
       bucket.current.tailLow = Math.min(bucket.current.tailLow, candle.low);
@@ -193,19 +201,21 @@ function advanceWaveState(state: WaveState, candle: Candle, index: number): void
   state.lastTailLow = candle.low;
   state.lastTailHigh = candle.high;
   state.lastIndex = index;
+  state.lastAt = candle.openTime;
 }
 
 function pullbackSignals(
   candles: Candle[],
   settings: BacktestSettings,
+  state: WaveState = initialWaveState(),
 ): Signal[] {
   const enriched = enrichCandles(candles);
-  const state = initialWaveState();
   const signals: Signal[] = [];
   const percentage = Number(settings.fullTpWavePercent || '100') / 100;
   for (let index = 0; index < candles.length; index += 1) {
     const candle = candles[index];
     if (!candle) continue;
+    if (state.lastAt !== null && candle.openTime <= state.lastAt) continue;
     const oldTrend = state.trend;
     const lastHigh = state.lastBodyHigh;
     const lastLow = state.lastBodyLow;
@@ -361,6 +371,53 @@ function volatilitySignals(
     });
   }
   return signals;
+}
+
+export interface PreparedBar {
+  candle: Candle;
+  signal: Signal | null;
+  ma20: number | null;
+  ma60Exit: number | null;
+}
+
+export interface PreparedSymbol {
+  symbol: string;
+  bars: PreparedBar[];
+  waveState?: WaveState;
+}
+
+/** Prepare a bounded time block; warm-up bars inform indicators but never place orders. */
+export function prepareSymbolBlock(
+  symbol: string,
+  candles: Candle[],
+  settings: BacktestSettings,
+  strategy: Strategy,
+  start: number,
+  end: number,
+  previousWaveState?: WaveState,
+): PreparedSymbol {
+  const waveState = strategy === 'PULLBACK' ? structuredClone(previousWaveState ?? initialWaveState()) : undefined;
+  const signals = strategy === 'PULLBACK' ? pullbackSignals(candles, settings, waveState)
+    : strategy === 'DISPARITY' ? disparitySignals(candles, settings) : volatilitySignals(candles, settings);
+  const seconds = intervalSeconds(settings.interval);
+  const byTime = new Map(signals.flatMap(signal => {
+    const time = candles[signal.index]?.openTime;
+    return time === undefined ? [] : [[time, {
+      ...signal, index: time / seconds,
+      waves: signal.waves?.map(wave => ({ ...wave, startIndex: wave.startTime / seconds, endIndex: wave.endTime / seconds })),
+    }] as const];
+  }));
+  return {
+    symbol,
+    bars: enrichCandles(candles).filter(candle => candle.openTime >= start && candle.openTime < end).map(candle => ({
+      candle,
+      signal: byTime.get(candle.openTime) ?? null,
+      ma20: candle.ma20,
+      // The intrabar MA60 touch equals the previous 59 closes' mean, independent of the final close.
+      ma60Exit: candle.ma60 === null ? null : (candle.ma60 * 60 - candle.close) / 59,
+    })),
+    waveState,
+  };
 }
 
 function profit(position: Position, price: number): number {

@@ -120,6 +120,7 @@ export interface BacktestTrade {
   signal: Signal;
   executions: Execution[];
   chart?: ChartData;
+  priceLines?: PriceLine[];
 }
 
 export interface Signal {
@@ -172,6 +173,10 @@ export interface BacktestResult {
   recentTrades: BacktestTrade[];
   equityCurve: { at: number; equityUsdt: number }[];
   candles: Candle[];
+  localRunId?: string;
+  universeCount?: number;
+  excludedCount?: number;
+  failedSymbols?: string[];
 }
 
 export type JobStatus =

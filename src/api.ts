@@ -487,13 +487,11 @@ export function parseCsv(text: string, interval: BacktestSettings['interval']): 
 }
 
 export function enrichCandles(candles: Candle[]): EnrichedCandle[] {
+  const prefix = [0];
+  for (const candle of candles) prefix.push(prefix[prefix.length - 1]! + candle.close);
   const ma = (index: number, period: number): number | null => {
     if (index + 1 < period) return null;
-    let total = 0;
-    for (let cursor = index - period + 1; cursor <= index; cursor += 1) {
-      total += candles[cursor]?.close ?? 0;
-    }
-    return total / period;
+    return (prefix[index + 1]! - prefix[index + 1 - period]!) / period;
   };
   return candles.map((candle, index) => ({
     ...candle,

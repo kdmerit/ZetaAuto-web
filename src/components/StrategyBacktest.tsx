@@ -9,7 +9,8 @@ import {
   type ApiContext,
   type BacktestRequestBody,
 } from '../api';
-import { chartForLocalTrade, runLocalBacktest } from '../localBacktest';
+import { chartForLocalTrade, isLocalBacktestRunning, pauseLocalBacktest, restoreLocalBacktest, startLocalBacktest, subscribeLocalBacktest } from '../localBacktest';
+import { loadLocalResult, localEngineVersion, type LocalJobView } from '../localJobs';
 import { estimateBars } from '../engine';
 import {
   loadBacktestHistory,
@@ -177,6 +178,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [localJob, setLocalJob] = useState<LocalJobView | null>(null);
   const [chart, setChart] = useState<ChartData | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
   const [selectedTrade, setSelectedTrade] = useState<BacktestTrade | null>(null);
@@ -237,12 +239,30 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     setHistoryOpen(false);
     setHistoryEntries([]);
     restoringHistoryRef.current = false;
-    void getServerBacktest(contextRef.current, strategy)
-      .then((job) => {
-        if (job && requestId === resultRequestRef.current) setServerJob(job);
-      })
-      .catch(() => undefined);
-    return () => { resultRequestRef.current += 1; };
+    setLocalJob(null);
+    setRunning(isLocalBacktestRunning(strategy));
+    const receive = (view: LocalJobView): void => {
+      setLocalJob(view);
+      if (view.status !== 'COMPLETED') setSettings(view.settings);
+      setRunning(view.status === 'RUNNING' && isLocalBacktestRunning(strategy));
+      analysisSettingsRef.current = view.settings;
+      if (view.result) setResult(view.result);
+      setNotice(view.message);
+      setProgress({ phase: view.progressLabel, completed: view.completed, total: view.total });
+      if (view.status === 'PAUSED' && view.message && !view.message.startsWith('분석을 일시정지')) setError(view.message);
+    };
+    const unsubscribe = subscribeLocalBacktest(strategy, event => {
+      if (event.type === 'UPDATE') receive(event.view);
+      else if (event.type === 'ERROR') { setError(event.message); setRunning(false); }
+      else setRunning(false);
+    });
+    void restoreLocalBacktest(strategy).then(async local => {
+      if (requestId !== resultRequestRef.current) return;
+      if (local) { receive(local); return; }
+      const job = await getServerBacktest(contextRef.current, strategy);
+      if (job && requestId === resultRequestRef.current) setServerJob(job);
+    }).catch(() => undefined);
+    return () => { unsubscribe(); resultRequestRef.current += 1; };
   }, [defaults, strategy]);
 
   useEffect(() => {
@@ -334,7 +354,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   const runServer = async (reason?: string): Promise<void> => {
     validate();
     resultRequestRef.current += 1;
-    const snapshot = { ...settings };
+    const snapshot = { ...(localJob?.status === 'PAUSED' ? localJob.settings : settings) };
     analysisSettingsRef.current = snapshot;
     saveSettings(strategy, snapshot);
     setRunning(true);
@@ -346,7 +366,10 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     setHistoryOpen(false);
     setHistoryEntries([]);
     try {
-      const job = await startServerBacktest(context, defaultRequest(snapshot, strategy));
+      const body = defaultRequest(snapshot, strategy);
+      if (localJob?.status === 'PAUSED') body.endAt = new Date(localJob.end * 1000).toISOString();
+      const job = await startServerBacktest(context, body);
+      setLocalJob(null);
       setServerJob(job);
       if (job.result) setResult(job.result);
     } catch (failure) {
@@ -356,59 +379,40 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     }
   };
 
-  const runLocal = async (): Promise<void> => {
-    validate();
+  const runLocal = (resume = false): void => {
+    if (!resume) validate();
     resultRequestRef.current += 1;
-    if (settings.mode !== 'SINGLE') {
-      await runServer('전체 종목 분석은 AWS 분석 서버를 사용합니다.');
-      return;
-    }
-    const snapshot = { ...settings };
+    const snapshot = { ...(resume && localJob ? localJob.settings : settings) };
     analysisSettingsRef.current = snapshot;
     saveSettings(strategy, snapshot);
-    setRunning(true);
     setError(null);
-    setNotice('Bybit 공개 캔들을 받아 브라우저에서 분석 중입니다.');
+    setNotice('저장된 캔들을 확인하며 이 기기에서 분석합니다.');
     restoringHistoryRef.current = false;
-    try {
-      const next = await runLocalBacktest(snapshot, strategy, (nextProgress) => {
-        setProgress({ phase: nextProgress.phase === 'DATA' ? '캔들 조회 중' : '전략 계산 중', completed: nextProgress.completed, total: nextProgress.total });
-      });
-      saveCachedResult(strategy, next);
-      const savedAt = Date.now();
-      saveBacktestHistory({
-        id: `${strategy}:local:${savedAt}`,
-        strategy,
-        savedAt,
-        mode: snapshot.mode,
-        symbol: historyScopeSymbol(snapshot),
-        interval: snapshot.interval,
-        settings: snapshot,
-        result: next,
-        serverJobId: null,
-      });
-      setResult(next);
-      setNotice('브라우저 분석이 완료되었습니다.');
-    } catch (failure) {
-      const message = failure instanceof Error ? failure.message : '브라우저 분석에 실패했습니다.';
-      if (/Bybit|CORS|너무 깁니다/.test(message)) {
-        await runServer('브라우저 캔들 조회가 불가능해 AWS 분석 서버로 전환합니다.');
-      } else setError(message);
-    } finally {
-      setRunning(false);
-    }
+    setServerJob(null);
+    setResult(null);
+    setHistoryOpen(false);
+    setHistoryEntries([]);
+    startLocalBacktest(strategy, snapshot, resume ? localJob?.id : undefined);
+    if (!resume) setLocalJob(null);
+    setSettings(snapshot);
+    setRunning(true);
+    setProgress({ phase: '분석 준비', completed: 0, total: 1 });
   };
 
-  const run = async (): Promise<void> => {
+  const run = (resume = false): void => {
     try {
-      if (settings.mode === 'ALL' || estimateBars(settings) > 30_000) await runServer('분석 범위가 길거나 전체 종목이므로 AWS 분석 서버를 사용합니다.');
-      else await runLocal();
+      runLocal(resume);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '입력값을 확인해 주세요.');
     }
   };
 
   const cancel = async (): Promise<void> => {
+    if (isLocalBacktestRunning(strategy)) {
+      setNotice('현재까지의 진행 상태를 저장하고 있습니다.');
+      pauseLocalBacktest(strategy);
+      return;
+    }
     if (!serverJob || !['QUEUED', 'RUNNING'].includes(serverJob.status)) return;
     try {
       setNotice('분석 중지 요청 중입니다.');
@@ -429,15 +433,24 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     setHistoryOpen(true);
   };
 
-  const openHistory = (entry: BacktestHistoryEntry): void => {
-    resultRequestRef.current += 1;
+  const openHistory = async (entry: BacktestHistoryEntry): Promise<void> => {
+    const requestId = ++resultRequestRef.current;
+    let restored = entry.result;
+    if (entry.localRunId) {
+      try {
+        const saved = await loadLocalResult(entry.localRunId);
+        if (!saved) throw new Error('저장된 분석 결과를 찾지 못했습니다. 다시 분석해 주세요.');
+        restored = saved.result;
+      } catch (failure) { setError(failure instanceof Error ? failure.message : '이력을 불러오지 못했습니다.'); return; }
+    }
+    if (requestId !== resultRequestRef.current) return;
     const snapshot = { ...defaults, ...entry.settings };
     analysisSettingsRef.current = snapshot;
     restoringHistoryRef.current = true;
     setSettings(snapshot);
     saveSettings(strategy, snapshot);
-    saveCachedResult(strategy, entry.result);
-    setResult(entry.result);
+    saveCachedResult(strategy, restored);
+    setResult(restored);
     setServerJob(entry.serverJobId ? restoredServerJob(entry) : null);
     setHistoryOpen(false);
     setHistoryEntries([]);
@@ -459,7 +472,8 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
         const next = await fetchServerEntryChart(context, trade.symbol, trade.side, new Date(trade.exitAt * 1000).toISOString(), serverJob.jobId, trade.tradeId);
         if (requestId === chartRequestRef.current) setChart(next);
       } else if (result) {
-        setChart(chartForLocalTrade(result, trade, analysisSettingsRef.current));
+        const next = await chartForLocalTrade(result, trade, analysisSettingsRef.current);
+        if (requestId === chartRequestRef.current) setChart(next);
       }
     } catch (failure) {
       if (requestId === chartRequestRef.current) setError(failure instanceof Error ? failure.message : '차트 조회에 실패했습니다.');
@@ -469,7 +483,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   };
 
   const loadOlder = async (): Promise<boolean> => {
-    if (!chart || !selectedTrade || !serverJob || selectedTrade.symbol === 'LOCAL' || olderRequestRef.current || !hasOlder) return false;
+    if (!chart || !selectedTrade || olderRequestRef.current || !hasOlder) return false;
     const oldest = chart.candles[0]?.openTime;
     if (!oldest || !Number.isFinite(oldest)) return false;
     const requestId = chartRequestRef.current;
@@ -477,7 +491,10 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     setLoadingOlder(true);
     setChartError(null);
     try {
-      const older = await fetchServerChart(context, selectedTrade.symbol, selectedTrade.side, new Date(selectedTrade.exitAt * 1000).toISOString(), serverJob.jobId, selectedTrade.tradeId, new Date(oldest * 1000).toISOString());
+      const older = serverJob
+        ? await fetchServerChart(context, selectedTrade.symbol, selectedTrade.side, new Date(selectedTrade.exitAt * 1000).toISOString(), serverJob.jobId, selectedTrade.tradeId, new Date(oldest * 1000).toISOString())
+        : result ? await chartForLocalTrade(result, selectedTrade, analysisSettingsRef.current, oldest) : null;
+      if (!older) return false;
       if (requestId !== chartRequestRef.current) return false;
       const merged = mergeChartPages(older, chart);
       if (merged.candles.length <= chart.candles.length) {
@@ -564,6 +581,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
         ) : null}
 
         <section className="surface-card form-card">
+          <fieldset className="analysis-fields" disabled={running || Boolean(activeServer)}>
           <h2>분석 대상</h2>
           <div className="segmented">
             {(['SINGLE', 'ALL'] as const).map((mode) => (
@@ -572,7 +590,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
               </button>
             ))}
           </div>
-          <p className="muted">전체 종목은 현재 슬리피지 조건을 통과한 종목만 AWS에서 분석합니다.</p>
+          <p className="muted small">저장된 캔들을 우선 사용하고 없는 구간만 조회합니다. 전체 종목은 현재 슬리피지 조건을 통과한 종목을 하나의 가상 계좌에서 분석합니다.</p>
           {settings.mode === 'SINGLE' ? (
             <label className="field-label">종목명
               <span className="suffix-field"><input value={baseSymbol(settings.symbol)} onChange={(event) => update('symbol', baseSymbol(event.target.value))} placeholder="BTC" /><b>USDT</b></span>
@@ -623,10 +641,14 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
             </>
           )}
 
+          </fieldset>
           <div className="action-row">
-            <button className="primary-button" type="button" disabled={running || Boolean(activeServer)} onClick={() => void run()}>{running ? '분석 진행 중' : activeServer ? '분석 진행 중' : '분석 시작'}</button>
-            {activeServer ? <button className="danger-button" type="button" onClick={() => void cancel()}>분석 중지</button> : null}
+            <button className="primary-button" type="button" disabled={running || Boolean(activeServer)} onClick={() => run()}>{running || activeServer ? '분석 진행 중' : localJob?.status === 'PAUSED' ? '새 분석 시작' : '분석 시작'}</button>
+            {running || activeServer ? <button className="danger-button" type="button" onClick={() => void cancel()}>{running ? '분석 일시정지' : '분석 중지'}</button> : null}
           </div>
+          {!running && !activeServer && localJob?.status === 'PAUSED' && localJob.version === localEngineVersion ? <button className="outline-button" type="button" onClick={() => run(true)}>분석 이어하기</button> : null}
+          {localJob && localJob.status !== 'COMPLETED' ? <p className="muted small">화면을 끄거나 탭을 닫으면 분석이 정지될 수 있습니다. 다시 열어 ‘분석 이어하기’를 누르면 저장된 지점부터 계속합니다.</p> : null}
+          {error && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
           <button
             className="outline-button history-toggle"
             type="button"
@@ -647,14 +669,15 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
           ) : null}
           {notice ? <p className="notice">{notice}</p> : null}
           {error ? <p className="error" role="alert">{error}</p> : null}
-          {running ? <ProgressBar completed={progress.completed} total={progress.total || Math.max(estimateBars(settings), 1)} label={progress.phase} /> : null}
+          {running || localJob?.status === 'PAUSED' ? <ProgressBar completed={progress.completed} total={progress.total || Math.max(estimateBars(settings), 1)} label={progress.phase} /> : null}
+          {localJob ? <p className="muted small">분석 대상 {localJob.universeCount.toLocaleString()}종목 · 슬리피지 제외 {localJob.excludedCount.toLocaleString()}종목{localJob.status === 'COMPLETED' ? ' · 완료' : localJob.status === 'PAUSED' ? ' · 일시정지' : ''}</p> : null}
           {activeServer ? <ProgressBar completed={serverJob.completedBars} total={Math.max(serverJob.totalBars, 1)} label={`${serverJob.phase === 'UNIVERSE' ? '종목 확인' : serverJob.phase === 'DATA' ? '캔들 조회' : '전략 계산'} · ${serverJob.status === 'QUEUED' ? '대기 중' : '분석 중'}`} /> : null}
         </section>
 
         {result ? <ResultCard result={result} onOpenTrade={(trade) => void openTrade(trade)} /> : null}
       </div>
       {chartLoading ? <div className="modal-backdrop"><div className="loading-card">체결 차트를 불러오는 중입니다…</div></div> : null}
-      {chart ? <ChartModal chart={chart} onClose={closeChart} onLoadOlder={serverJob && selectedTrade?.symbol !== 'LOCAL' && hasOlder ? loadOlder : undefined} loadingOlder={loadingOlder} historyError={chartError} /> : null}
+      {chart ? <ChartModal chart={chart} onClose={closeChart} onLoadOlder={selectedTrade && hasOlder ? loadOlder : undefined} loadingOlder={loadingOlder} historyError={chartError} /> : null}
     </main>
   );
 }
