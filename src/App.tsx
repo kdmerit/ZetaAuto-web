@@ -18,9 +18,14 @@ function LoginScreen() {
         <h1>ZetaAuto 로그인</h1>
         {auth.error ? <p className="error" role="alert">{auth.error}</p> : null}
         {missing ? <p className="notice">{AUTH_CONFIG_ERROR}</p> : null}
-        <button className="primary-button full-width" type="button" disabled={missing} onClick={() => void auth.signIn()}>
-          Google로 로그인
-        </button>
+        <div className="auth-actions">
+          <button className="primary-button full-width" type="button" disabled={missing} onClick={() => void auth.signIn()}>
+            기존 계정으로 로그인
+          </button>
+          <button className="outline-button full-width" type="button" disabled={missing} onClick={() => void auth.signIn(true)}>
+            다른 계정으로 로그인
+          </button>
+        </div>
       </div>
     </main>
   );

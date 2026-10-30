@@ -25,7 +25,7 @@ export interface AuthContextValue {
   email: string | null;
   error: string | null;
   config: AuthConfig | null;
-  signIn: () => Promise<void>;
+  signIn: (selectAccount?: boolean) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -231,24 +231,25 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [tokens, setTokens] = useState<TokenSet | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const signIn = useCallback(async () => {
+  const signIn = useCallback(async (selectAccount = false) => {
     if (!config) throw new Error(AUTH_CONFIG_ERROR);
     const verifier = randomBase64Url(48);
     const state = randomBase64Url(24);
     saveOAuthState(state, verifier);
     const challenge = await sha256Base64Url(verifier);
     const url = new URL(`${config.cognitoDomain}/oauth2/authorize`);
-    url.search = new URLSearchParams({
+    const params = new URLSearchParams({
       response_type: 'code',
       client_id: config.clientId,
       redirect_uri: config.redirectUri,
       scope: 'openid email profile',
       identity_provider: 'Google',
-      prompt: 'select_account',
       state,
       code_challenge: challenge,
       code_challenge_method: 'S256',
-    }).toString();
+    });
+    if (selectAccount) params.set('prompt', 'select_account');
+    url.search = params.toString();
     window.location.assign(url.toString());
   }, [config]);
 
