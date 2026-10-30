@@ -272,6 +272,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setTokens(null);
     setStatus(config ? 'SIGNED_OUT' : 'CONFIGURATION_MISSING');
     setError(null);
+    if (config) {
+      const logoutUrl = new URL(`${config.cognitoDomain}/logout`);
+      logoutUrl.search = new URLSearchParams({
+        client_id: config.clientId,
+        logout_uri: config.logoutUri,
+      }).toString();
+      window.location.replace(logoutUrl.toString());
+    }
   }, [config, tokens?.refreshToken]);
 
   useEffect(() => {
