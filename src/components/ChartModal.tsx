@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent } from 'react';
 
 import type { ChartData, ChartMarker, EnrichedCandle, PriceLine } from '../types';
 
@@ -63,6 +63,7 @@ function selectedAngle(candles: EnrichedCandle[], index: number, key: keyof Enri
 }
 
 function lineY(price: number, min: number, max: number, height: number): number {
+  if (!Number.isFinite(price) || !Number.isFinite(min) || !Number.isFinite(max)) return height / 2;
   return ((max - price) / Math.max(max - min, 0.0000001)) * height;
 }
 
@@ -71,24 +72,35 @@ function ChartSvg({
   visibleMas,
   selectedIndex,
   onSelect,
+  onClear,
 }: {
   chart: ChartData;
   visibleMas: Record<string, boolean>;
   selectedIndex: number | null;
   onSelect: (index: number) => void;
+  onClear: () => void;
 }) {
   const [dragging, setDragging] = useState(false);
-  const width = Math.max(760, chart.candles.length * 14);
+  const movedRef = useRef(false);
+  const width = Math.max(760, Math.min(12_000, chart.candles.length * 14));
   const height = 360;
   const volumeHeight = 58;
   const plotHeight = height - volumeHeight;
-  const values = chart.candles.flatMap((candle) => [candle.high, candle.low]);
-  chart.priceLines.forEach((line) => values.push(line.price));
-  const min = Math.min(...values) * 0.998;
-  const max = Math.max(...values) * 1.002;
+  const values = chart.candles
+    .flatMap((candle) => [candle.high, candle.low])
+    .filter(Number.isFinite);
+  chart.priceLines.forEach((line) => {
+    if (Number.isFinite(line.price)) values.push(line.price);
+  });
+  const safeValues = values.length > 0 ? values : [0, 1];
+  const min = Math.min(...safeValues) * 0.998;
+  const max = Math.max(...safeValues) * 1.002;
   const step = width / Math.max(chart.candles.length, 1);
   const candleWidth = Math.max(3, step * 0.48);
-  const maxVolume = Math.max(...chart.candles.map((candle) => candle.volume), 1);
+  const maxVolume = chart.candles.reduce(
+    (highest, candle) => Number.isFinite(candle.volume) ? Math.max(highest, candle.volume) : highest,
+    1,
+  );
   const markerByIndex = useMemo(() => {
     const map = new Map<number, ChartMarker[]>();
     for (const marker of chart.markers) {
@@ -101,12 +113,20 @@ function ChartSvg({
   const xFor = (index: number): number => (index + 0.5) * step;
   const yFor = (price: number): number => lineY(price, min, max, plotHeight - 8) + 4;
   const pointString = (key: keyof EnrichedCandle): string => chart.candles
-    .map((candle, index) => typeof candle[key] === 'number' ? `${xFor(index)},${yFor(candle[key] as number)}` : '')
+    .map((candle, index) => typeof candle[key] === 'number' && Number.isFinite(candle[key] as number) ? `${xFor(index)},${yFor(candle[key] as number)}` : '')
     .filter(Boolean)
     .join(' ');
 
+  const indexForPointer = (event: PointerEvent<SVGSVGElement> | ReactMouseEvent<SVGSVGElement>): number | null => {
+    if (chart.candles.length === 0) return null;
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0) return null;
+    const x = (event.clientX - rect.left) / rect.width * width;
+    return Math.max(0, Math.min(chart.candles.length - 1, Math.floor(x / step)));
+  };
+
   return (
-    <div className="chart-scroll" onPointerDown={() => setDragging(true)} onPointerUp={() => setDragging(false)}>
+    <div className={selectedIndex === null ? 'chart-scroll' : 'chart-scroll crosshair-active'}>
       <svg
         className={dragging ? 'chart-svg dragging' : 'chart-svg'}
         role="img"
@@ -114,16 +134,37 @@ function ChartSvg({
         viewBox={`0 0 ${width} ${height}`}
         width={width}
         height={height}
+        onPointerDown={(event) => {
+          if (selectedIndex === null) return;
+          movedRef.current = false;
+          setDragging(true);
+          event.currentTarget.setPointerCapture?.(event.pointerId);
+        }}
+        onPointerUp={(event) => {
+          setDragging(false);
+          if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+            event.currentTarget.releasePointerCapture?.(event.pointerId);
+          }
+        }}
+        onPointerCancel={() => setDragging(false)}
         onPointerMove={(event) => {
-          if (!dragging) return;
-          const rect = event.currentTarget.getBoundingClientRect();
-          const x = (event.clientX - rect.left) / rect.width * width;
-          onSelect(Math.max(0, Math.min(chart.candles.length - 1, Math.floor(x / step))));
+          if (!dragging || selectedIndex === null) return;
+          const nextIndex = indexForPointer(event);
+          if (nextIndex === null) return;
+          movedRef.current = true;
+          onSelect(nextIndex);
         }}
         onClick={(event) => {
-          const rect = event.currentTarget.getBoundingClientRect();
-          const x = (event.clientX - rect.left) / rect.width * width;
-          onSelect(Math.max(0, Math.min(chart.candles.length - 1, Math.floor(x / step))));
+          if (selectedIndex !== null) {
+            if (movedRef.current) {
+              movedRef.current = false;
+              return;
+            }
+            onClear();
+            return;
+          }
+          const nextIndex = indexForPointer(event);
+          if (nextIndex !== null) onSelect(nextIndex);
         }}
       >
         <rect width={width} height={height} fill="#202D42" rx="10" />
@@ -213,7 +254,7 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder }: ChartM
             ))}
           </div>
         </div>
-        <ChartSvg chart={chart} visibleMas={visibleMas} selectedIndex={selectedIndex} onSelect={setSelectedIndex} />
+        <ChartSvg chart={chart} visibleMas={visibleMas} selectedIndex={selectedIndex} onSelect={setSelectedIndex} onClear={() => setSelectedIndex(null)} />
         {selected ? (
           <div className="candle-info">
             <strong>{formatDate(selected.openTime)}</strong>

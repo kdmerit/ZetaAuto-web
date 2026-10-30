@@ -133,6 +133,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .ma-toggles { display: flex; flex-wrap: wrap; gap: 8px; }
 .ma-toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--ma-color); font-weight: 700; }
 .chart-scroll { overflow-x: auto; overflow-y: hidden; border-radius: 12px; background: #202d42; touch-action: pan-x; }
+.chart-scroll.crosshair-active { touch-action: none; }
 .chart-svg { display: block; min-width: 760px; cursor: crosshair; user-select: none; }
 .chart-svg.dragging { cursor: grabbing; }
 .candle-info { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; padding: 13px; border-radius: 12px; background: #202d42; color: #f4f7fb; line-height: 1.4; }
