@@ -11,10 +11,13 @@ import {
 import { chartForLocalTrade, runLocalBacktest } from '../localBacktest';
 import { estimateBars } from '../engine';
 import {
+  loadBacktestHistory,
   loadCachedResult,
   loadSettings,
+  saveBacktestHistory,
   saveCachedResult,
   saveSettings,
+  type BacktestHistoryEntry,
 } from '../storage';
 import type {
   BacktestResult,
@@ -126,6 +129,37 @@ function defaultRequest(settings: BacktestSettings, strategy: Strategy): Backtes
   return body;
 }
 
+function historyScopeSymbol(settings: BacktestSettings): string {
+  return settings.mode === 'ALL' ? 'ALL' : baseSymbol(settings.symbol);
+}
+
+function historyPeriod(settings: BacktestSettings): string {
+  const start = `${settings.startDate} ${settings.startTime}`;
+  const end = settings.endDate ? `${settings.endDate} ${settings.endTime}` : '현재';
+  return `${start} ~ ${end}`;
+}
+
+function restoredServerJob(entry: BacktestHistoryEntry): ServerJob {
+  return {
+    jobId: entry.serverJobId ?? `history-${entry.id}`,
+    status: 'COMPLETED',
+    createdAt: new Date(entry.savedAt).toISOString(),
+    updatedAt: new Date(entry.savedAt).toISOString(),
+    request: {},
+    strategyVersion: 'history',
+    phase: 'DONE',
+    processedSymbols: 0,
+    universeCount: 0,
+    excludedCount: 0,
+    failedCount: 0,
+    completedBars: entry.result.observedBars,
+    totalBars: entry.result.observedBars,
+    message: null,
+    assumptions: [],
+    result: entry.result,
+  };
+}
+
 export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   const defaults = useMemo(defaultSettings, []);
   const [settings, setSettings] = useState<BacktestSettings>(() => loadSettings(strategy, defaults));
@@ -140,9 +174,13 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   const [chartLoading, setChartLoading] = useState(false);
   const [selectedTrade, setSelectedTrade] = useState<BacktestTrade | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyEntries, setHistoryEntries] = useState<BacktestHistoryEntry[]>([]);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const chartHistoryPushed = useRef(false);
   const contextRef = useRef(context);
+  const analysisSettingsRef = useRef(settings);
+  const restoringHistoryRef = useRef(false);
 
   useEffect(() => {
     contextRef.current = context;
@@ -175,10 +213,14 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
 
   useEffect(() => {
     const fallback = loadSettings(strategy, defaults);
+    analysisSettingsRef.current = fallback;
     setSettings(fallback);
     setResult(loadCachedResult(strategy));
     setServerJob(null);
     setChart(null);
+    setHistoryOpen(false);
+    setHistoryEntries([]);
+    restoringHistoryRef.current = false;
     void getServerBacktest(contextRef.current, strategy)
       .then((job) => {
         if (job) setServerJob(job);
@@ -199,8 +241,34 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   }, [context, serverJob, strategy]);
 
   useEffect(() => {
-    if (serverJob?.result) setResult(serverJob.result);
-  }, [serverJob]);
+    if (!serverJob?.result) return;
+    setResult(serverJob.result);
+    if (restoringHistoryRef.current) {
+      restoringHistoryRef.current = false;
+      return;
+    }
+    if (serverJob.status === 'COMPLETED' || serverJob.status === 'PARTIAL') {
+      const snapshot = { ...analysisSettingsRef.current };
+      saveBacktestHistory({
+        id: `${strategy}:${serverJob.jobId}`,
+        strategy,
+        savedAt: Date.now(),
+        mode: snapshot.mode,
+        symbol: historyScopeSymbol(snapshot),
+        interval: snapshot.interval,
+        settings: snapshot,
+        result: serverJob.result,
+        serverJobId: serverJob.jobId,
+      });
+    }
+  }, [serverJob, strategy]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    setHistoryEntries(
+      loadBacktestHistory(strategy, settings.mode, historyScopeSymbol(settings)),
+    );
+  }, [historyOpen, settings.mode, settings.symbol, strategy]);
 
   const update = <K extends keyof BacktestSettings>(key: K, value: BacktestSettings[K]) => {
     setSettings((current) => ({ ...current, [key]: value }));
@@ -223,14 +291,19 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
 
   const runServer = async (reason?: string): Promise<void> => {
     validate();
-    saveSettings(strategy, settings);
+    const snapshot = { ...settings };
+    analysisSettingsRef.current = snapshot;
+    saveSettings(strategy, snapshot);
     setRunning(true);
     setError(null);
     setNotice(reason ?? 'AWS 분석 서버에 작업을 등록했습니다.');
+    restoringHistoryRef.current = false;
     setServerJob(null);
     setResult(null);
+    setHistoryOpen(false);
+    setHistoryEntries([]);
     try {
-      const job = await startServerBacktest(context, defaultRequest(settings, strategy));
+      const job = await startServerBacktest(context, defaultRequest(snapshot, strategy));
       setServerJob(job);
       if (job.result) setResult(job.result);
     } catch (failure) {
@@ -246,15 +319,30 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
       await runServer('전체 종목 분석은 AWS 분석 서버를 사용합니다.');
       return;
     }
-    saveSettings(strategy, settings);
+    const snapshot = { ...settings };
+    analysisSettingsRef.current = snapshot;
+    saveSettings(strategy, snapshot);
     setRunning(true);
     setError(null);
     setNotice(sourceFile ? 'CSV 캔들로 브라우저 분석 중입니다.' : 'Bybit 공개 캔들을 받아 브라우저에서 분석 중입니다.');
+    restoringHistoryRef.current = false;
     try {
-      const next = await runLocalBacktest(settings, strategy, (nextProgress) => {
+      const next = await runLocalBacktest(snapshot, strategy, (nextProgress) => {
         setProgress({ phase: nextProgress.phase === 'DATA' ? '캔들 조회 중' : '전략 계산 중', completed: nextProgress.completed, total: nextProgress.total });
       }, sourceFile);
       saveCachedResult(strategy, next);
+      const savedAt = Date.now();
+      saveBacktestHistory({
+        id: `${strategy}:local:${savedAt}`,
+        strategy,
+        savedAt,
+        mode: snapshot.mode,
+        symbol: historyScopeSymbol(snapshot),
+        interval: snapshot.interval,
+        settings: snapshot,
+        result: next,
+        serverJobId: null,
+      });
       setResult(next);
       setNotice('브라우저 분석이 완료되었습니다.');
     } catch (failure) {
@@ -284,6 +372,32 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : '분석 중지에 실패했습니다.');
     }
+  };
+
+  const toggleHistory = (): void => {
+    if (historyOpen) {
+      setHistoryOpen(false);
+      return;
+    }
+    setHistoryEntries(
+      loadBacktestHistory(strategy, settings.mode, historyScopeSymbol(settings)),
+    );
+    setHistoryOpen(true);
+  };
+
+  const openHistory = (entry: BacktestHistoryEntry): void => {
+    analysisSettingsRef.current = { ...entry.settings };
+    restoringHistoryRef.current = true;
+    setSettings(entry.settings);
+    saveSettings(strategy, entry.settings);
+    setResult(entry.result);
+    setServerJob(entry.serverJobId ? restoredServerJob(entry) : null);
+    setHistoryOpen(false);
+    setHistoryEntries([]);
+    setChart(null);
+    setSelectedTrade(null);
+    setError(null);
+    setNotice('저장된 분석 이력을 불러왔습니다.');
   };
 
   const openTrade = async (trade: BacktestTrade): Promise<void> => {
@@ -328,6 +442,10 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   const activeServer = serverJob && ['QUEUED', 'RUNNING'].includes(serverJob.status);
   const title = strategy === 'PULLBACK' ? '눌림목' : '이격매매';
   const resultTrades = result?.recentTrades ? [...result.recentTrades].reverse() : [];
+  const currentHistorySymbol = historyScopeSymbol(settings);
+  const historyLabel = settings.mode === 'ALL'
+    ? '전체종목 이력보기'
+    : `${currentHistorySymbol || '종목'} 이력보기`;
 
   return (
     <main className="screen">
@@ -424,6 +542,24 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
             <button className="primary-button" type="button" disabled={running || Boolean(activeServer)} onClick={() => void run()}>{running ? '분석 진행 중' : activeServer ? '분석 진행 중' : '분석 시작'}</button>
             {activeServer ? <button className="danger-button" type="button" onClick={() => void cancel()}>분석 중지</button> : null}
           </div>
+          <button
+            className="outline-button history-toggle"
+            type="button"
+            disabled={running || Boolean(activeServer)}
+            aria-expanded={historyOpen}
+            onClick={toggleHistory}
+          >
+            {historyOpen ? '이력 닫기' : historyLabel}
+          </button>
+          {historyOpen ? (
+            <HistoryList
+              entries={historyEntries}
+              emptyMessage={settings.mode === 'ALL'
+                ? '전체종목 분석 이력이 없습니다.'
+                : `${currentHistorySymbol || '해당 종목'} 분석 이력이 없습니다.`}
+              onOpen={openHistory}
+            />
+          ) : null}
           {settings.mode === 'SINGLE' ? (
             <>
               <input ref={fileInput} type="file" accept=".csv,text/csv" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void runLocal(file); event.currentTarget.value = ''; }} />
@@ -441,6 +577,34 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
       {chartLoading ? <div className="modal-backdrop"><div className="loading-card">체결 차트를 불러오는 중입니다…</div></div> : null}
       {chart ? <ChartModal chart={chart} onClose={closeChart} onLoadOlder={selectedTrade?.symbol !== 'LOCAL' ? loadOlder : undefined} loadingOlder={loadingOlder} /> : null}
     </main>
+  );
+}
+
+function HistoryList({
+  entries,
+  emptyMessage,
+  onOpen,
+}: {
+  entries: BacktestHistoryEntry[];
+  emptyMessage: string;
+  onOpen: (entry: BacktestHistoryEntry) => void;
+}) {
+  if (entries.length === 0) {
+    return <p className="muted history-empty">{emptyMessage}</p>;
+  }
+  return (
+    <div className="history-list">
+      {entries.map((entry) => (
+        <button className="history-card" type="button" key={entry.id} onClick={() => onOpen(entry)}>
+          <span className="history-card-heading">
+            <strong>{entry.symbol === 'ALL' ? '전체종목' : `${entry.symbol}USDT`}</strong>
+            <em className={entry.result.returnPercent >= 0 ? 'positive' : 'negative'}>{percent(entry.result.returnPercent)}</em>
+          </span>
+          <span>{entry.interval.toUpperCase()} · {historyPeriod(entry.settings)}</span>
+          <small>저장 {new Date(entry.savedAt).toLocaleDateString('ko-KR')}</small>
+        </button>
+      ))}
+    </div>
   );
 }
 

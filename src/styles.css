@@ -83,6 +83,15 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .checkbox-row { display: flex; align-items: center; gap: 10px; color: #f4f7fb; font-weight: 700; }
 .checkbox-row input, .ma-toggle input { width: 20px; height: 20px; accent-color: #7ea2ff; }
 .action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.history-toggle { margin-top: -4px; }
+.history-list { display: flex; flex-direction: column; gap: 9px; }
+.history-card { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 14px; border: 1px solid #34435b; border-radius: 12px; background: #202d42; color: #aab6c8; text-align: left; }
+.history-card:hover { border-color: #7ea2ff; }
+.history-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.history-card-heading strong { color: #f4f7fb; font-size: 17px; }
+.history-card-heading em { font-size: 17px; font-style: normal; font-weight: 800; }
+.history-card small { color: #7f8da4; }
+.history-empty { margin: 0; padding: 12px 14px; border-radius: 10px; background: #202d42; }
 .notice, .error { margin: 0; padding: 12px 14px; border-radius: 10px; line-height: 1.5; }
 .notice { background: rgba(240, 180, 93, .12); color: #f0b45d; }
 .error { background: rgba(255, 138, 138, .12); color: #ff8a8a; }
