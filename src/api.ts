@@ -35,6 +35,7 @@ export interface BacktestRequestBody {
   minDisparityPercent?: string;
   ma20HalfCloseEnabled?: boolean;
   roiClosePercent?: string;
+  volatilityK?: string;
 }
 
 function apiUrl(baseUrl: string, suffix: string): string {

@@ -23,7 +23,7 @@ export function serverSettingsSnapshot(
     settings.interval = request.interval;
   }
   if (request.side === 'BOTH' || request.side === 'LONG' || request.side === 'SHORT') settings.side = request.side;
-  for (const key of ['initialCapitalUsdt', 'betAmountUsdt', 'leverage', 'fullTpWavePercent', 'minDisparityPercent', 'roiClosePercent'] as const) {
+  for (const key of ['initialCapitalUsdt', 'betAmountUsdt', 'leverage', 'fullTpWavePercent', 'minDisparityPercent', 'roiClosePercent', 'volatilityK'] as const) {
     const value = request[key];
     if ((typeof value === 'string' && value.trim() !== '' || typeof value === 'number') && Number.isFinite(Number(value))) {
       settings[key] = String(value);

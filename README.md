@@ -1,15 +1,16 @@
 # ZetaAuto 웹 백테스트
 
-`kdmerit/ZetaAuto-web`의 GitHub Pages에서 모바일 앱의 백테스트 메뉴를 제공하는 정적 React 앱입니다.
+`kdmerit/ZetaAuto-web`의 GitHub Pages에서 모바일 앱의 백테스트 메뉴를 제공하는 정적 React 앱입니다. 현재 웹 버전은 v2.10.25입니다.
 
 - 개별 종목 분석: Bybit 공개 캔들을 브라우저에서 조회하고 Web Worker로 계산합니다.
 - 캔들 캐시·마지막 설정·결과: 브라우저의 IndexedDB와 localStorage에 저장합니다.
 - 전체 종목·장기 분석: 인증된 Cognito JWT로 기존 `/reference-candle-backtests` AWS 작업을 사용합니다.
+- 변동성 돌파: 직전 캔들 변동폭과 K값(기본 0.5)을 사용해 돌파 진입 후 신호 캔들 마감에 청산합니다. 개별 분석은 브라우저에서, 전체·장기 분석은 AWS에서 같은 규칙으로 계산합니다.
 - 웹앱에는 AWS 자격증명이나 Google Client Secret을 넣지 않습니다.
 
 ## 앱 안에서 사용
 
-ZetaAuto v2.10.23부터 백테스트 탭은 Chrome 맞춤 탭으로 이 페이지를 엽니다.
+ZetaAuto v2.10.24부터 백테스트 탭은 Chrome 맞춤 탭으로 이 페이지를 엽니다.
 동일 휴대폰·동일 Chrome 프로필의 일반 탭과 localStorage·IndexedDB를 공유하므로
 설정·분석 이력·캔들 캐시를 함께 사용합니다. 설정 변경은 즉시 저장하며 다른 탭의 변경도
 탭 복귀·storage 이벤트에서 반영합니다. 다른 기기·시크릿 모드·다른 프로필과의 동기화는 아닙니다.

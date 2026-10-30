@@ -102,7 +102,7 @@ function isHistoryEntry(value: unknown): value is BacktestHistoryEntry {
   const entry = value as Partial<BacktestHistoryEntry>;
   return (
     typeof entry.id === 'string' &&
-    (entry.strategy === 'PULLBACK' || entry.strategy === 'DISPARITY') &&
+    (entry.strategy === 'PULLBACK' || entry.strategy === 'DISPARITY' || entry.strategy === 'VOLATILITY') &&
     typeof entry.savedAt === 'number' &&
     Number.isFinite(entry.savedAt) &&
     (entry.mode === 'SINGLE' || entry.mode === 'ALL') &&

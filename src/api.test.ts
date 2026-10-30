@@ -47,6 +47,7 @@ describe('web backtest candle utilities', () => {
       minDisparityPercent: '1.0',
       ma20HalfCloseEnabled: false,
       roiClosePercent: '100',
+      volatilityK: '0.5',
     });
     expect(window.symbol).toBe('BTCUSDT');
     expect(window.end - window.start).toBe(86_400);

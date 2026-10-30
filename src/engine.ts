@@ -320,6 +320,49 @@ function disparitySignals(
   return signals;
 }
 
+function volatilitySignals(
+  candles: Candle[],
+  settings: BacktestSettings,
+): Signal[] {
+  const k = Number(settings.volatilityK || '0.5');
+  const signals: Signal[] = [];
+  if (!Number.isFinite(k) || k <= 0) return signals;
+  for (let index = 1; index < candles.length; index += 1) {
+    const candle = candles[index];
+    const previous = candles[index - 1];
+    if (!candle || !previous) continue;
+    const range = previous.high - previous.low;
+    if (!Number.isFinite(range) || range <= 0) continue;
+    const longLevel = candle.open + range * k;
+    const shortLevel = candle.open - range * k;
+    const longTriggered = candle.high >= longLevel;
+    const shortTriggered = candle.low <= shortLevel;
+    // Both sides touching the same candle cannot be ordered from OHLC data.
+    if (longTriggered === shortTriggered) continue;
+    const side = longTriggered ? 'LONG' : 'SHORT';
+    if (settings.side !== 'BOTH' && settings.side !== side) continue;
+    const entry = longTriggered ? longLevel : shortLevel;
+    if (!Number.isFinite(entry) || entry <= 0) continue;
+    signals.push({
+      strategy: 'VOLATILITY',
+      side,
+      index,
+      entry,
+      // The original short-term system exits at the signal candle's close;
+      // these fields remain populated for the shared position model but are
+      // intentionally not rendered as SL/TP lines for this strategy.
+      stop: entry,
+      target: entry,
+      initialTarget: entry,
+      volatilityK: k,
+      breakoutRange: range,
+      breakoutLevel: entry,
+      exitMode: 'BAR_CLOSE',
+    });
+  }
+  return signals;
+}
+
 function profit(position: Position, price: number): number {
   return (price - position.averageEntry) * position.quantity * (position.side === 'LONG' ? 1 : -1);
 }
@@ -350,7 +393,7 @@ function closePosition(
   if (position.pendingSecond && qtyAtLeast(quantity, position.quantity)) {
     cancelPendingSecond(state, position);
   }
-  const marketExit = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK'].includes(reason);
+  const marketExit = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE'].includes(reason);
   const fill = marketExit
     ? price * (position.side === 'LONG' ? 1 - SLIPPAGE : 1 + SLIPPAGE)
     : price;
@@ -534,12 +577,12 @@ function entryPosition(
   candle: Candle,
   index: number,
   settings: BacktestSettings,
-): void {
+): Position | null {
   const leverage = Number(settings.leverage);
   const bet = Number(settings.betAmountUsdt);
   if (!Number.isFinite(leverage) || !Number.isFinite(bet) || state.cash < bet * (1 + leverage * FEE)) {
     state.insufficientFunds += 1;
-    return;
+    return null;
   }
   const split = signal.strategy === 'PULLBACK';
   const margin = split ? bet / 2 : bet;
@@ -578,6 +621,7 @@ function entryPosition(
   state.position = position;
   state.entries += 1;
   position.signal = { ...signal, initialStop: signal.stop, activeStop: signal.stop, averageEntry: fill };
+  return position;
 }
 
 function positionEquity(position: Position, mark: number): number {
@@ -649,7 +693,11 @@ export function runBacktest(
   onProgress?: ProgressCallback,
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
-  const signals = strategy === 'PULLBACK' ? pullbackSignals(candles, settings) : disparitySignals(candles, settings);
+  const signals = strategy === 'PULLBACK'
+    ? pullbackSignals(candles, settings)
+    : strategy === 'DISPARITY'
+      ? disparitySignals(candles, settings)
+      : volatilitySignals(candles, settings);
   const byIndex = new Map(signals.map((signal) => [signal.index, signal]));
   const enriched = enrichCandles(candles);
   const state: SimulationState = {
@@ -674,7 +722,12 @@ export function runBacktest(
     }
     if (!hadPosition && state.position === null) {
       const signal = byIndex.get(index);
-      if (signal) entryPosition(state, signal, candle, index, settings);
+      if (signal) {
+        const openedPosition = entryPosition(state, signal, candle, index, settings);
+        if (openedPosition && signal.exitMode === 'BAR_CLOSE') {
+          closePosition(state, openedPosition, candle.close, 'SESSION_CLOSE', candle, openedPosition.quantity, signal, index);
+        }
+      }
     }
     const equity = state.cash + (state.position ? positionEquity(state.position, candle.close) : 0);
     state.equityCurve.push({ at: candle.closeTime, equityUsdt: equity });
@@ -725,12 +778,14 @@ export function buildLocalChart(
     if (signal.initialTarget !== signal.target) lines.push(line('INITIAL_TP', signal.initialTarget));
     lines.push(line('TP', signal.target));
     if (signal.partial) lines.push(line('PARTIAL_TP', signal.partial));
-  } else {
+  } else if (signal.strategy === 'DISPARITY') {
     lines.push(line('ENTRY', trade.entryPrice));
     lines.push(line('SL', signal.activeStop ?? signal.stop));
     if (signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
     lines.push(line('TP', signal.target));
     if (signal.partial) lines.push(line('PARTIAL_TP', signal.partial));
+  } else {
+    lines.push(line('ENTRY', trade.entryPrice));
   }
   const waves = (signal.waves ?? []).flatMap((wave) => {
     const visibleStart = Math.max(start, wave.startIndex);
@@ -755,9 +810,13 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
-  return strategy === 'PULLBACK'
-    ? '공통 몸통 파동의 고점·저점 상승과 MA10·MA20·간격의 3봉 연속 증가를 확인한 반전 첫 봉을 2분할 매수합니다.'
-    : 'MA20·MA60 사이 이격, 현재 캔들 절반, 직전 5봉 몸통 돌파와 직전 10봉 MA20 조건을 분석합니다.';
+  if (strategy === 'PULLBACK') {
+    return '공통 몸통 파동의 고점·저점 상승과 MA10·MA20·간격의 3봉 연속 증가를 확인한 반전 첫 봉을 2분할 매수합니다.';
+  }
+  if (strategy === 'DISPARITY') {
+    return 'MA20·MA60 사이 이격, 현재 캔들 절반, 직전 5봉 몸통 돌파와 직전 10봉 MA20 조건을 분석합니다.';
+  }
+  return '직전 캔들 변동폭에 K값을 적용한 돌파 기준으로 진입하고 신호 캔들 마감에 청산합니다.';
 }
 
 export function estimateBars(settings: BacktestSettings): number {

@@ -1,4 +1,4 @@
-export type Strategy = 'PULLBACK' | 'DISPARITY';
+export type Strategy = 'PULLBACK' | 'DISPARITY' | 'VOLATILITY';
 export type BacktestInterval = '15m' | '1h' | '4h' | '1d';
 export type BacktestMode = 'SINGLE' | 'ALL';
 export type BacktestSide = 'BOTH' | 'LONG' | 'SHORT';
@@ -20,6 +20,7 @@ export interface BacktestSettings {
   minDisparityPercent: string;
   ma20HalfCloseEnabled: boolean;
   roiClosePercent: string;
+  volatilityK: string;
 }
 
 export interface Candle {
@@ -138,6 +139,10 @@ export interface Signal {
   disparityPercent?: number;
   ma20?: number;
   ma60?: number;
+  volatilityK?: number;
+  breakoutRange?: number;
+  breakoutLevel?: number;
+  exitMode?: 'BAR_CLOSE';
   waves?: Wave[];
 }
 

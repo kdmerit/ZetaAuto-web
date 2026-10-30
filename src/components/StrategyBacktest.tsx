@@ -61,6 +61,7 @@ function defaultSettings(): BacktestSettings {
     minDisparityPercent: '1.0',
     ma20HalfCloseEnabled: false,
     roiClosePercent: '100',
+    volatilityK: '0.5',
   };
 }
 
@@ -105,6 +106,7 @@ const reasonLabels: Record<string, string> = {
   MA60_TOUCH: 'MA60 접촉 청산',
   MA20_HALF_BREAK: '캔들 절반 MA20 청산',
   ROI_LOSS: 'ROI 손실 청산',
+  SESSION_CLOSE: '신호 캔들 마감 청산',
 };
 
 function defaultRequest(settings: BacktestSettings, strategy: Strategy): BacktestRequestBody {
@@ -120,14 +122,16 @@ function defaultRequest(settings: BacktestSettings, strategy: Strategy): Backtes
     leverage: settings.leverage,
     entryMode: strategy === 'PULLBACK' ? 'SPLIT' : 'ALL_IN',
     ma10CloseEnabled: false,
-    partialTpEnabled: settings.partialTpEnabled,
+    partialTpEnabled: strategy === 'VOLATILITY' ? false : settings.partialTpEnabled,
   };
   if (settings.endDate) body.endAt = toIso(settings.endDate, settings.endTime);
   if (strategy === 'PULLBACK') body.fullTpWavePercent = Number(settings.fullTpWavePercent);
-  else {
+  else if (strategy === 'DISPARITY') {
     body.minDisparityPercent = settings.minDisparityPercent;
     body.ma20HalfCloseEnabled = settings.ma20HalfCloseEnabled;
     body.roiClosePercent = settings.roiClosePercent;
+  } else {
+    body.volatilityK = settings.volatilityK;
   }
   return body;
 }
@@ -321,6 +325,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     if (strategy === 'PULLBACK' && (!/^\d+$/.test(settings.fullTpWavePercent) || Number(settings.fullTpWavePercent) < 1 || Number(settings.fullTpWavePercent) > 100)) throw new Error('전체 TP 파동폭은 1~100 정수로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^(0\.[1-9]|[1-9](\.\d)?|10(\.0)?)$/.test(settings.minDisparityPercent))) throw new Error('MA60 이격률은 0.1~10.0%로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^([1-9]|[1-9]\d|100)$/.test(settings.roiClosePercent))) throw new Error('ROI 손실 청산은 1~100 정수로 입력해 주세요.');
+    if (strategy === 'VOLATILITY' && (!/^(0\.[1-9]\d?|1(\.\d{1,2})?|2(\.0{1,2})?)$/.test(settings.volatilityK))) throw new Error('K값은 0.1~2.0으로 입력해 주세요.');
     const start = Date.parse(`${settings.startDate}T${settings.startTime}:00+09:00`);
     const end = settings.endDate ? Date.parse(`${settings.endDate}T${settings.endTime}:00+09:00`) : Date.now();
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start > Date.now()) throw new Error('분석 기간을 확인해 주세요.');
@@ -502,7 +507,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   };
 
   const activeServer = serverJob && ['QUEUED', 'RUNNING'].includes(serverJob.status);
-  const title = strategy === 'PULLBACK' ? '눌림목' : '이격매매';
+  const title = strategy === 'PULLBACK' ? '눌림목' : strategy === 'DISPARITY' ? '이격매매' : '변동성 돌파';
   const resultTrades = result?.recentTrades ? [...result.recentTrades].reverse() : [];
   const currentHistorySymbol = historyScopeSymbol(settings);
   const historyLabel = settings.mode === 'ALL'
@@ -534,7 +539,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
                 <strong>숏 포지션</strong>
                 <p>위 조건을 반대로 적용합니다. SL은 전파동 꼬리 극값이며 2차 체결 후 TP는 평단가·1차가 중간값입니다.</p>
               </div>
-            ) : (
+            ) : strategy === 'DISPARITY' ? (
               <div className="condition-copy">
                 <strong>롱 포지션</strong>
                 <p>1. MA20 &lt; 종가 &lt; MA60, 캔들 절반 이상 MA20 위</p>
@@ -543,6 +548,16 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
                 <p>4. SL은 이전 10봉 최저가, MA60 접촉·선택 조건으로 청산</p>
                 <strong>숏 포지션</strong>
                 <p>위 조건을 반대로 적용합니다. ROI 손실은 레버리지가 반영된 가격 기준입니다.</p>
+              </div>
+            ) : (
+              <div className="condition-copy">
+                <strong>롱 포지션</strong>
+                <p>1. 돌파 기준 = 현재 시가 + (직전 고가 − 직전 저가) × K</p>
+                <p>2. 현재 고가가 돌파 기준에 닿으면 기준가로 매수합니다.</p>
+                <strong>숏 포지션</strong>
+                <p>1. 돌파 기준 = 현재 시가 − (직전 고가 − 직전 저가) × K</p>
+                <p>2. 현재 저가가 돌파 기준에 닿으면 기준가로 매도합니다.</p>
+                <p>3. 한 캔들에서 양쪽 기준이 모두 닿으면 순서를 알 수 없어 신호를 제외하고, 체결된 포지션은 신호 캔들 종가에 청산합니다.</p>
               </div>
             )}
           </section>
@@ -590,15 +605,23 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
 
           {strategy === 'PULLBACK' ? (
             <label className="field-label">전체 TP 직전 파동폭 (%)<input inputMode="numeric" value={settings.fullTpWavePercent} onChange={(event) => update('fullTpWavePercent', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>1~100 · 기본 100</small></label>
-          ) : (
+          ) : strategy === 'DISPARITY' ? (
             <>
               <label className="field-label">MA60 최소 이격률 (%)<input inputMode="decimal" value={settings.minDisparityPercent} onChange={(event) => update('minDisparityPercent', event.target.value)} /><small>0.1~10.0</small></label>
               <label className="checkbox-row"><input type="checkbox" checked={settings.ma20HalfCloseEnabled} onChange={(event) => update('ma20HalfCloseEnabled', event.target.checked)} /><span>캔들 절반 MA20 청산</span></label>
               <label className="field-label">ROI 손실 청산 (%)<input inputMode="numeric" value={settings.roiClosePercent} onChange={(event) => update('roiClosePercent', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>레버리지 적용 ROI · 1~100</small></label>
             </>
+          ) : (
+            <label className="field-label">변동성 K값<input inputMode="decimal" value={settings.volatilityK} onChange={(event) => update('volatilityK', event.target.value.replace(/[^0-9.]/g, '').slice(0, 4))} /><small>0.1~2.0 · 기본 0.5</small></label>
           )}
-          <label className="checkbox-row"><input type="checkbox" checked={settings.partialTpEnabled} onChange={(event) => update('partialTpEnabled', event.target.checked)} /><span>부분 TP 50%</span></label>
-          <p className="muted small">{strategy === 'PULLBACK' ? '1차 매수가와 최초 TP의 중간에서 50% 청산합니다. 2차 체결 시 미체결 부분 TP는 취소됩니다.' : '매수가와 신호 시점 MA60의 중간에서 50% 청산하고 SL을 최초 매수가로 옮깁니다.'}</p>
+          {strategy === 'VOLATILITY' ? (
+            <p className="muted small">선택한 캔들 주기를 하나의 세션으로 보고, 돌파 기준에 체결된 포지션을 해당 캔들 종가에 청산합니다. 부분 TP·SL은 사용하지 않습니다.</p>
+          ) : (
+            <>
+              <label className="checkbox-row"><input type="checkbox" checked={settings.partialTpEnabled} onChange={(event) => update('partialTpEnabled', event.target.checked)} /><span>부분 TP 50%</span></label>
+              <p className="muted small">{strategy === 'PULLBACK' ? '1차 매수가와 최초 TP의 중간에서 50% 청산합니다. 2차 체결 시 미체결 부분 TP는 취소됩니다.' : '매수가와 신호 시점 MA60의 중간에서 50% 청산하고 SL을 최초 매수가로 옮깁니다.'}</p>
+            </>
+          )}
 
           <div className="action-row">
             <button className="primary-button" type="button" disabled={running || Boolean(activeServer)} onClick={() => void run()}>{running ? '분석 진행 중' : activeServer ? '분석 진행 중' : '분석 시작'}</button>

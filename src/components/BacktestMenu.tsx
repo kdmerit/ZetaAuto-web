@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
 interface BacktestMenuProps {
-  onOpen: (strategy: 'PULLBACK' | 'DISPARITY') => void;
+  onOpen: (strategy: 'PULLBACK' | 'DISPARITY' | 'VOLATILITY') => void;
   onSignOut: () => void;
   email: string | null;
 }
@@ -20,6 +20,12 @@ export function BacktestMenu({ onOpen, onSignOut, email }: BacktestMenuProps) {
       title: '이격매매 백테스트',
       description:
         'MA20·MA60 사이 이격과 직전 10봉 MA20 조건으로 진입하고, 직전 10봉 SL·MA60 청산을 분석합니다.',
+    },
+    {
+      strategy: 'VOLATILITY' as const,
+      title: '변동성 돌파 백테스트',
+      description:
+        '직전 캔들 변동폭에 K값을 적용한 돌파 기준으로 진입하고, 신호 캔들 마감에 청산합니다.',
     },
   ];
 

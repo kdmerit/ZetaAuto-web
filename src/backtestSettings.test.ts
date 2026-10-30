@@ -7,7 +7,7 @@ const fallback: BacktestSettings = {
   mode: 'SINGLE', symbol: 'BTC', interval: '15m', side: 'BOTH',
   startDate: '2026-10-01', startTime: '00:00', endDate: '', endTime: '00:00',
   initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '1',
-  fullTpWavePercent: '100', minDisparityPercent: '1', roiClosePercent: '100',
+  fullTpWavePercent: '100', minDisparityPercent: '1', roiClosePercent: '100', volatilityK: '0.5',
   partialTpEnabled: true, ma20HalfCloseEnabled: true,
 };
 
