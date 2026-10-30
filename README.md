@@ -1,47 +1,150 @@
-# ZetaAuto 웹 백테스트
+# ZetaAuto
 
-`kdmerit/ZetaAuto-web`의 GitHub Pages에서 모바일 앱의 백테스트 메뉴를 제공하는 정적 React 앱입니다.
+현재 개발 버전은 v2.10.20이다. 하단 메뉴는 자동조회·백테스트·자동매매·잔고·설정이며
+백테스트에는 눌림목·이격매매 전략을 제공한다. 기준봉매매 메뉴·화면과 신규 분석은 제거했다.
+이격매매는 현재가의 MA20·MA60 사이 위치, 현재 캔들의 MA20 위·아래 절반 조건, 직전 5봉 대비
+몸통 돌파·0.5% 이상 양·음봉, 직전 10봉의
+MA20 대비 종가, MA60 이격률(0.1~10.0%)로
+진입하고 직전 10봉 SL·MA60 접촉으로 전량 청산한다. 숏은 대칭이며
+레버리지 적용 ROI 손실 청산(1~100%, 기본100%)과 별도 설정 저장·개별/전체·4개 주기·고정 증거금·레버리지·중지·체결 차트를 제공한다.
+[이격매매 명세](docs/disparity-backtest-spec.md)를 따른다.
+눌림목은 공통 몸통 파동의 고점·저점이
+높아진 뒤 눌림이 끝나는 반전 첫 봉과 MA10·MA20·간격의 3봉 연속 증가를 확인한다.
+숏은 반대로 적용한다. 증거금을 50%씩 신호봉 종가와 실제 1차 체결가·SL 중간에서 2단계 매수한다.
+최초 롱 TP는 매수봉 몸통 저점 + 전파동 높이 × 선택 비율(1~100%, 기본100%), 숏은 반대다.
+SL은 전파동 전체의 꼬리 포함 저점(롱)·고점(숏)이다. 2차 체결 후 전체 TP는 최초 매수
+실제 매수 평단가와 최초 1차 체결가의 중간으로 변경한다. 선택형 부분 TP는 1차 체결가와
+최초 TP 중간에서 50%를
+한 번 청산하며 2차 체결 시 미체결 부분 TP를 취소한다. 모든 팝업차트는 매수가 주황·SL 빨강·TP/부분 TP 초록의 가는 점선을 사용하며,
+눌림목은 1·2차 매수가와 최초·변경 TP를 보존하고 2차 체결 후 평단가를 보라 점선으로 추가한다. 진입 B/S·청산 C와 매수 당시
+세 파동을 차트에 표시한다. [눌림목 명세](docs/pullback-backtest-spec.md)를 따른다.
 
-- 개별 종목 분석: Bybit 공개 캔들을 브라우저에서 조회하고 Web Worker로 계산합니다.
-- 캔들 캐시·마지막 설정·결과: 브라우저의 IndexedDB와 localStorage에 저장합니다.
-- 전체 종목·장기 분석: 인증된 Cognito JWT로 기존 `/reference-candle-backtests` AWS 작업을 사용합니다.
-- 웹앱에는 AWS 자격증명이나 Google Client Secret을 넣지 않습니다.
-- 모바일 브라우저에서는 우측 상단 `⛶` 버튼으로 앱 프레임을 전체화면으로 열고, 프레임 안에서 스크롤할 수 있습니다.
+종목 입력은 `[BTC] USDT` 형식이며 USDT는 고정 표시한다. TP 비율을 포함한 마지막 입력은
+기기에 저장하며 긴 규칙·설명은 기본 접고 `상세설명보기`로 최상단 검색조건과 함께 펼친다.
+팝업차트는 터치 시 십자선·가격·캔들 정보·선택 이평선 이격률과 이전 2개 봉을 포함한 3봉 각도를 표시하며,
+십자선 상태에서 드래그하면 선택 위치를 이동하고 짧게 터치하면 닫는다.
+설정의 `잔고 조회 사용`을 끄면 잔고 자동조회와 기존 잔고 표시를 중단하고 설정 안내만 표시한다.
+최초 설치는 ON이며 선택은 기기에 저장한다. 실거래 자동매매 실행 여부와는 별개다.
+v2.10.20 화면 사용에는 dev 백엔드와 새 APK가 필요하다.
 
-## GitHub Pages 설정
+v2.10.1은 백테스트의 최근 청산 내역에서 해당 거래의 과거 캔들과 B/S/C 체결 마커를
+보는 팝업을 제공한다. 분석 주기·실제 가상 체결가를 유지하며 체결 버튼으로 시점을 이동한다.
+[백테스트 차트 명세](docs/backtest-chart-spec.md)를 따른다.
 
-배포 워크플로에는 현재 배포된 공개값이 기본값으로 들어 있습니다. 필요하면 저장소 Settings → Secrets and variables → Actions → Variables에서 아래 공개 변수로 덮어쓸 수 있습니다.
+백테스트는 개별·전체 종목, 15m·1h·4h·1d, 시작·종료 기간과 고정 총 증거금·
+1~100배 레버리지를 선택한다. 실제 설정·계좌·주문과 독립적이며 강제청산은 재현하지 않는다.
+제거된 기준봉 전략의 완료 데이터와 과거 명세는 보존하되 새 요청·대기 작업의 재개는 허용하지 않는다.
+
+ZetaAuto는 Bybit USDT Linear Perpetual 활성 종목 중 24시간 거래대금이 `500,000 USDT` 이상인 종목의 `15분` 진행 중 캔들을 `롱1·숏1` 조건으로 검색하고 앱 Push와 Telegram으로 알리는 개인용 시스템입니다. v2.10.1은 현재가가 속한 캔들을 항상 현재 캔들로 사용하며 생성 후 33%(15분봉 5분)부터 평가합니다. 최신 조건 정의 v1.12.0은 현재봉 포함 최근 3봉의 MA5·MA10 관계와 가격 극값, 현재 봉 방향·몸통/꼬리, 몸통과 거래량 각각 직전의 2배 이상, 현재가·MA 정렬, 직전 고저가·몸통 극값 및 방향별 MA 차이 증가를 비교하는 9개 규칙을 적용합니다. 검색 우선순위는 1시간봉·일봉 MA20·MA60·MA120 가중치 점수(항목당 5점, 최대 30점)와 동점 시 호가창 예상 슬리피지를 사용합니다. 자동매매에는 3개 파동 꼬리 극값 SL, 선택형 LIQ 안전 여유, MA5/MA10·MA5/MA20·MA20/MA60 교차·MA10·MA20 터치·현재 파동 꼬리 극값·MA5 절반 돌파 Close By와 FIXED/AUTO 부분 TP를 제공합니다. 잔고·검색 결과 카드에서는 최신 15분봉 최대 300개(현재 진행 중 봉 포함 가능), 기본 이평선, 기준 시점의 현재·전·전전 파동을 차트 팝업으로 확인하고 종목명을 복사할 수 있습니다. 이 저장소는 Expo 모바일 앱, Python Lambda 백엔드, AWS SAM 인프라와 두 런타임이 공유하는 API 계약을 한 곳에서 관리합니다. 과거 자유 조합 AST와 KIS 적립식 매수 코드는 미래 참고용으로 보존합니다.
+
+공식 저장소: <https://github.com/kdmerit/ZetaAuto>
+
+v2.10.1는 매수 비율 입력 방식을 유지하고, 비율로 계산된 USDT 매수금액만 소수점 둘째 자리까지 남겨 셋째 자리 이하는 버린다. 앱 예상금액·탐색 한도·AUTO 진입·주문 직전 재계산에 같은 기준을 적용한다. 자동매매 이력의 마지막 확인 시간 아래에는 롱·숏별 탐색 건너뛴 사유나 탐색 요청 상태를 표시한다. 확인 시각 갱신은 탐색 완료·주문 체결을 뜻하지 않는다.
+
+v2.7.4 개발 변경: master OFF 중 AUTO 매수의 저장된 선택은 유지하되 토글을 비활성 색상으로 표시한다. SOXLUSDT·SOXSUSDT는 전용 조회 후보와 모든 신규 롱·숏 진입에서 제외하며 기존 포지션의 청산·보호 관리는 유지한다. Close By MA10·MA20 터치는 롱 -0.3%·숏 +0.3%이고, ROI 바로 아래의 `매수캔들 긴 윗꼬리 발생`은 최초 진입 15분봉이 진행 중일 때 롱 윗꼬리·숏 아랫꼬리가 몸통보다 길면 전체 청산한다.
+
+현재 작업 릴리스는 v2.10.1이다. 롱1·숏1의 최신 조건 정의 버전은 v1.12.0이며 현재봉 포함 최근 3봉의 MA5·MA10 관계와 가격 극값, 현재 봉 방향·몸통/꼬리, 몸통과 거래량 각각 직전의 2배 이상, 현재가·MA 정렬, 직전 고저가·몸통 극값 및 방향별 MA 차이 증가를 비교하는 9개 규칙을 사용한다. 33% 전에는 자동조회·AUTO 매수 탐색을 시작하지 않고, 수동조회는 다음 조회 시작 시각을 안내한 뒤 대기한다.
+
+버전 규칙: 개발 변경을 반영할 때마다 제품 버전을 자동으로 올리고, 모바일·백엔드·계약·인프라 설정·문서의 현재 버전과 Android `versionCode`를 함께 갱신한다. 과거 릴리스 기록과 조건 정의 버전은 보존한다.
+
+자동매매 설정은 실행 토글을 껐다 켜도 마지막 체크·숫자를 유지한다. 자동매매·AUTO 매수 토글 변경 시 현재 입력을 함께 저장하며, 상위 옵션을 끄면 하위 선택은 유지하고 실행만 중지한다. Close By의 ROI 손실 조건은 맨 위에 표시한다.
+
+v2.10.1의 자동 레버리지는 첫 주문 전에 최소수량·설정 증거금·목표 LIQ를 유지증거금과 계정 수수료까지 반영해 검증한다. 조건을 충족하지 못하면 Funding 이체와 레버리지 변경도 실행하지 않는다. 수량 재시도와 잔여매수도 검증하며, 체결 후 배율 조정은 사전 검증 상한을 넘지 않는다. 교차마진의 실제 LIQ는 계정 상태에 따라 달라질 수 있으므로 체결 후 거래소 확인을 유지한다.
+
+현재 제품은 v2.10.1이다. 고정 USDT 또는 Total Asset 비율 매수와 주문 직전 서버 재계산, 시장가 1회와 현재 파동 기준 지정가를 사용하는 분할 매수를 포함한다. 분할 매수는 2~50회만 허용하고, 실제 AUTO 매수 시도가 실패한 종목은 실패 원인과 관계없이 24시간 금지하며, 보유 후 청산 체결이 확인된 종목은 6시간 동안 AUTO 매수를 금지한다. 분할 보호주문 갱신은 별도 체크 시에만 실행하며 SL은 건드리지 않고 전체 TP·부분 TP·Trailing Stop만 대상으로 한다. 부분 TP는 FIXED 모드에서 기존 1·2단계 목표를 사용하고 AUTO 모드에서 MA5 절반 돌파 조건으로 보유 수량 50%를 한 번만 시장가 부분 청산한다. 모든 전용 조건 조회는 15분봉을 사용하고, 매수 우선순위는 기존 1시간봉·일봉 MA20·MA60·MA120 가중치 점수를 유지한다. 자동매매에는 현재·이전·전전 파동 중 롱 최저/숏 최고 꼬리 극값 SL과 선택형 LIQ 안전 여유, MA5/MA10·MA5/MA20·MA20/MA60 교차·MA10·MA20 터치·현재 파동 꼬리 극값·MA5 절반 돌파 Close By를 제공한다. 기존 잔고·주문·보호주문·단계별 이력 기능도 유지한다.
+
+ROI 손실 Close By는 미실현 ROI가 설정값 이하인 것과 함께 롱은 현재가가 MA5 아래, 숏은 현재가가 MA5 위인 경우에만 발동한다.
+
+AUTO 매수 탐색 결과는 최근 24시간의 모든 탐색 배치를 최신 시각순으로 표시한다. 같은 배치에서는 점수 내림차순을 우선하고, 결과가 24시간을 넘으면 표시·저장 대상에서 제외한다.
+
+현재 앱 v2.10.1은 롱1·숏1 검색, 자산·잔고, 자동매매, 설정, 검색 결과 BUY/SELL 시장가 진입을 제공한다. 현재가가 속한 15분봉은 생성 후 33%(5분)가 지나야 평가하며, 롱1·숏1은 v1.12.0의 9개 규칙을 사용한다. 잔고 화면의 롱·숏 포지션 개수 요약, 분할 매수 보호주문 이력, AUTO 매수의 단계별 결과와 주문 실패 24시간·청산 후 6시간 종목 금지, 앱 종료 후 자동매매 오류 Push 라우팅을 유지한다. 수동조회·자동조회·AUTO 매수의 활성 조회 캔들 주기는 모두 15분봉이며, 결과 순위는 1시간봉·일봉 가중치 점수와 동점 시 호가창 예상 슬리피지 순으로 표시한다. 잔고·검색 결과 카드에는 종목 복사 아이콘과 최신 최대 300개 캔들, 기준 시점의 15분봉·이평선·현재/전/전전 파동 차트 팝업을 제공한다. 잔고·이력 차트에는 거래소 체결 기준 분할매수·부분 TP·전체 TP/청산 B/S/C 마커를 표시한다. 자동매매의 부분 TP 카드에서는 FIXED/AUTO 방식을 선택할 수 있다.
+
+차트 체결 마커는 Bybit 실행 이력의 `executionType=TRADE`만 사용한다. Funding·정산 등 회계성 실행 행은 주문 마커에서 제외한다.
+
+자동 탐색 중복 알림은 15분봉 같은 종목에 대해 마지막 알림 시각부터 1시간 동안 차단합니다. 자동 실행과 수동·자동·AUTO 매수 조회 캔들 주기는 모두 15분봉을 사용합니다.
+
+v2.1.2 모바일 앱은 하단 네비게이션에서 수동조회·자동조회·자동매매·잔고·설정을 분리합니다. 설치 후 첫 로그인은 앱 푸시 알림 설정을 위해 설정 화면을 우선 표시하고, 안내를 완료한 다음 로그인부터는 수동조회 화면을 기본 표시합니다. API Secret은 서버 검증·암호화 저장 후 모바일에 반환하지 않습니다.
+
+2026-09-15 과거 릴리스 기록: 당시 산출물은 `ZetaAuto v1.6.2.apk`였다. 앱 알림은 생성 시각 기준 최근 24시간만 표시하고 10일 보존한다. 기존 알림에도 같은 조회·삭제 기준을 적용하며, 10일을 초과한 알림은 조회 시 서버 삭제 대상이고 신규 알림 TTL은 생성 시각 + 10일이다. 이 보존·표시 정책은 현재 v2.10.1에도 적용된다.
+
+각 평가에는 MA120을 확인할 수 있도록 진행 중인 15분봉을 포함한 연속 120개 이상의 캔들이 필요하다. 캔들 수 확보는 평가 가능 요건이지 조건 일치를 뜻하지 않는다.
+
+## 저장소 구조
 
 ```text
-VITE_API_BASE_URL=https://qsytnyfa5c.execute-api.ap-northeast-2.amazonaws.com/dev
-VITE_COGNITO_DOMAIN=https://<project>-<environment>-<account-id>.auth.ap-northeast-2.amazoncognito.com
-VITE_COGNITO_CLIENT_ID=<CognitoWebAppClientId 출력값>
+ZetaAuto/
+├─ mobile/          Expo + React Native + TypeScript 앱
+├─ backend/         Python 3.12 ZIP Lambda와 Provider 공통 계층
+├─ infrastructure/ AWS SAM 템플릿과 환경별 배포 설정
+├─ contracts/       OpenAPI/JSON Schema 계약과 공통 오류 코드
+├─ docs/            설계 결정, 개발 방법, 리뷰 체크리스트
+└─ plan.md          전체 제품 및 구현 계획
 ```
 
-선택 변수는 기본 Pages 주소를 사용하므로 보통 생략해도 됩니다.
+모바일과 백엔드는 의존성과 빌드 수명주기가 다르므로 각각 독립적으로 설치하고 검증합니다. Node 패키지를 백엔드 배포물에 넣거나 Python 패키지를 APK 빌드에 포함하지 않습니다.
 
-```text
-VITE_COGNITO_REDIRECT_URI=https://kdmerit.github.io/ZetaAuto-web/
-VITE_COGNITO_LOGOUT_URI=https://kdmerit.github.io/ZetaAuto-web/
-```
+## 요구 도구
 
-## AWS/Cognito 설정
+- Node.js 22.13 이상과 npm 10 이상
+- Python 3.12
+- AWS SAM CLI(인프라 템플릿 빌드·검증 시)
+- EAS CLI 및 Expo 계정(Android APK 원격 빌드 시)
 
-`infrastructure/template.yaml`의 Google federation을 활성화할 때 다음을 함께 설정합니다.
+실제 AWS, Bybit private API 또는 KIS 자격증명은 로컬 검증에 필요하지 않습니다. 저장소에 `.env`, 거래소 API key, bot token, webhook secret, App Key, App Secret, 계좌번호, Access Token 또는 AWS 장기 자격증명을 추가하지 마세요.
 
-1. `WebOAuthCallbackUri`와 `WebOAuthLogoutUri`를 `https://kdmerit.github.io/ZetaAuto-web/`로 등록합니다.
-2. Google OAuth 콘솔의 승인된 리디렉션 URI에는 Cognito의 `/oauth2/idpresponse` 출력값을 등록합니다.
-3. `AllowedEmailSha256`에는 `kdmerit@gmail.com`의 SHA-256 값 `cea3a87911783e6c41d2ef2cdf2b5091b2a965a27a058882aeb5aa707234d32b`를 사용합니다.
-4. 스택 출력 `CognitoWebAppClientId`를 `VITE_COGNITO_CLIENT_ID`에 넣습니다.
+## 빠른 검증
 
-Cognito PreSignUp Lambda의 서버 allow-list가 실제 접근 통제이고, 웹앱도 토큰 이메일이 `kdmerit@gmail.com`이 아닐 경우 세션을 폐기하는 보조 검사를 수행합니다.
-
-## 로컬 실행
+모바일 의존성을 처음 한 번 설치한 뒤 각 프로젝트의 검증 명령을 실행합니다.
 
 ```bash
-cp .env.example .env.local
-npm ci
-npm run dev
+cd mobile
+npm install
+npm run validate
 ```
 
-GitHub Pages의 프로젝트 base path는 `/ZetaAuto-web/`로 고정되어 있습니다.
+```bash
+cd backend
+python3 -m venv ../.venv
+../.venv/bin/python -m pip install -r requirements-dev.txt
+../.venv/bin/python -m pytest
+../.venv/bin/python -m ruff check src scripts tests
+../.venv/bin/python -m mypy src scripts
+../.venv/bin/python -m compileall -q src scripts
+```
+
+가상환경은 `backend/.venv`가 아니라 `backend` 밖에 둡니다. SAM의 Lambda
+함수가 `backend`를 각각 `CopySource`할 때 개발 의존성을 반복 복사하지 않게 하기
+위한 규칙입니다.
+
+SAM CLI가 설치되어 있으면 저장소 루트에서 다음을 실행합니다.
+
+```bash
+bash infrastructure/scripts/validate.sh
+sam build --template-file infrastructure/template.yaml
+```
+
+CloudFormation lint까지 실행하려면 AWS 자격증명이 구성된 환경에서
+`SAM_VALIDATE_LINT=1 bash infrastructure/scripts/validate.sh`를 사용합니다.
+
+런타임과 인증·조건검색 의존성은 [아키텍처](docs/architecture.md), 로그·DLQ·smoke test는 [알리미 운영 가이드](docs/alert-operations.md), 세부 개발 절차는 [개발 가이드](docs/development.md), 환경 분리 방식은 [환경 전략](docs/environment-strategy.md), 금융 코드 리뷰 항목은 [코드 리뷰 체크리스트](docs/code-review-checklist.md)를 참고하세요.
+
+## 현재 안전 경계
+
+- 모바일에는 공개 가능한 API 기준 URL, Cognito 도메인과 Client ID만 들어갈 수 있습니다.
+- Google Client Secret은 NoEcho 배포 파라미터이며 APK·Git·`samconfig.toml`에 저장하지 않습니다.
+- 신규 Cognito 사용자는 검증된 Google 이메일의 SHA-256 allow-list가 일치할 때만 생성됩니다.
+- API는 JWT Authorizer를 기본값으로 사용하고 `/health`, `/providers`만 명시적으로 공개합니다. 조건·실행·신호·알림·기기·Telegram 연결 API는 검증된 Cognito `sub`의 파티션만 사용합니다. 조건부 Telegram webhook은 별도 secret header를 검증하는 유일한 추가 공개 route입니다.
+- Refresh Token만 SecureStore에 저장하고 Access/ID Token은 앱 메모리에만 둡니다.
+- 앱 잠금 설정은 기기 SecureStore에 저장하고 생체인증 또는 OS 기기 자격증명만 사용합니다.
+- 모든 기기 로그아웃은 검증된 Cognito `username`으로 서버에서 전체 Refresh 세션을 폐기합니다. 이미 발급된 Access Token은 현재 15분 만료까지 JWT Authorizer를 통과할 수 있습니다.
+- DynamoDB는 on-demand, due-monitoring GSI와 TTL을 사용합니다. 역할은 기능별로 분리하고 Telegram delivery/webhook만 각자의 정확한 SSM ARN을 읽습니다.
+- scanner와 자동 탐색 경로는 Bybit 공개 market endpoint와 DynamoDB의 비밀값 없는 계정별 거래 가능 종목 스냅샷만 사용하며 주문 권한이 없습니다. 인증 API Lambda만 소유자별 BYBIT private 호출과 주문 취소·Close By 권한을 가지며, API Secret은 SSM SecureString에 저장합니다. 지역 제한 종목은 수동·자동 조회 결과에서 제외합니다.
+- signal, batch와 channel delivery ID는 결정적입니다. 알림 이력을 먼저 저장하고 완료 전달은 queue 중복 수신에도 다시 보내지 않습니다.
+- CloudWatch 외부 호출 로그는 URL·header·token·chat ID·request/response body 없이 고정 결과 필드만 기록하며 기본 14일 보존합니다.
+- Provider 공통 계층은 특정 회사의 요청 필드나 오류 코드를 알지 못합니다.
+- 등록되지 않은 Provider는 명시적인 공통 오류로 거부합니다.
+- 금액은 부동소수점이 아닌 십진수 모델로 표현합니다.
+- 주문 상태 `SUBMITTING`과 `UNKNOWN`은 재전송이 안전하다는 뜻으로 취급하지 않습니다.
+- 개발과 실전은 스택 이름, 앱 식별자, 환경 변수와 향후 데이터 저장소를 공유하지 않습니다.
+
+프로젝트 전체 목표와 단계별 범위는 [plan.md](plan.md)를 기준으로 합니다.

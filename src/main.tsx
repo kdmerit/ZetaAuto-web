@@ -1,17 +1,1 @@
-import { StrictMode } from 'react';
-import { createRoot } from 'react-dom/client';
-
-import { AuthProvider } from './auth';
-import { App } from './App';
-import './styles.css';
-
-const root = document.getElementById('root');
-if (!root) throw new Error('ì•± ë£¨íŠ¸ë¥¼ ì°¾ì§€ ëª»í–ˆìŠµë‹ˆë‹¤.');
-
-createRoot(root).render(
-  <StrictMode>
-    <AuthProvider>
-      <App />
-    </AuthProvider>
-  </StrictMode>,
-);
+m«ë‹+sùšŠ{lÄÚ,¹È_ŠW¨­Ø«yËh¯
