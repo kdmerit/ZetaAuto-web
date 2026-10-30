@@ -249,6 +249,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       code_challenge_method: 'S256',
     });
     if (selectAccount) params.set('prompt', 'select_account');
+    else params.set('login_hint', ALLOWED_WEB_EMAIL);
     url.search = params.toString();
     window.location.assign(url.toString());
   }, [config]);
