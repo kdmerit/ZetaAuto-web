@@ -40,7 +40,10 @@ function apiUrl(baseUrl: string, suffix: string): string {
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) {
     throw new Error('API URL 설정이 올바르지 않습니다.');
   }
-  url.pathname = `${url.pathname.replace(/\/+$/, '')}${suffix}`;
+  const queryIndex = suffix.indexOf('?');
+  const path = queryIndex >= 0 ? suffix.slice(0, queryIndex) : suffix;
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}${path}`;
+  url.search = queryIndex >= 0 ? suffix.slice(queryIndex) : '';
   return url.toString();
 }
 

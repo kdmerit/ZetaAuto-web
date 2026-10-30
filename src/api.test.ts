@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { candleWindow, enrichCandles, intervalSeconds, parseCsv } from './api';
+import {
+  candleWindow,
+  enrichCandles,
+  fetchServerChart,
+  intervalSeconds,
+  parseCsv,
+} from './api';
 
 describe('web backtest candle utilities', () => {
   it('maps supported intervals to Bybit seconds', () => {
@@ -44,5 +50,47 @@ describe('web backtest candle utilities', () => {
     });
     expect(window.symbol).toBe('BTCUSDT');
     expect(window.end - window.start).toBe(86_400);
+  });
+
+  it('keeps server chart parameters in the URL query string', async () => {
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = '';
+    globalThis.fetch = async (input) => {
+      requestedUrl = String(input);
+      return new Response(JSON.stringify({
+        chart: {
+          symbol: 'DOGEUSDT',
+          interval: '1h',
+          side: 'SHORT',
+          referenceAt: '2026-10-20T00:00:00Z',
+          referenceIndex: null,
+          candles: [],
+          waves: [],
+          markers: [],
+          executions: [],
+          priceLines: [],
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    try {
+      await fetchServerChart(
+        {
+          apiBaseUrl: 'https://example.com/dev',
+          accessToken: 'token',
+        },
+        'DOGEUSDT',
+        'SHORT',
+        '2026-10-20T00:00:00.000Z',
+        'a'.repeat(32),
+        'b'.repeat(32),
+      );
+      const parsed = new URL(requestedUrl);
+      expect(parsed.pathname).toBe('/dev/market/charts/DOGEUSDT');
+      expect(parsed.searchParams.get('side')).toBe('SHORT');
+      expect(parsed.searchParams.get('backtestJobId')).toBe('a'.repeat(32));
+      expect(parsed.searchParams.get('backtestTradeId')).toBe('b'.repeat(32));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
