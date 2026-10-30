@@ -6,6 +6,7 @@ import type { BacktestInterval, BacktestSettings, Candle } from './types';
 export interface Instrument { symbol: string; launchAt: number }
 export interface EligibleInstrument extends Instrument { LONG: boolean; SHORT: boolean }
 interface PublicSnapshot<T> { expiresAt: number; data: T }
+interface ListingPrefix { emptyUntil: number; firstAt?: number }
 interface BybitEnvelope<T> { retCode: number; result: T }
 const intervals = { '15m': '15', '1h': '60', '4h': '240', '1d': 'D' };
 let nextRequestAt = 0;
@@ -138,18 +139,27 @@ async function download(symbol: string, interval: BacktestInterval, start: numbe
     symbol, interval: intervals[interval], limit: '1000', start: String(start * 1000), end: String(end * 1000 - 1),
   }, signal);
   if (!Array.isArray(result.list)) throw new Error('캔들 응답을 확인하지 못했습니다.');
-  return result.list.map(row => ({
+  if (result.list.some(row => !Array.isArray(row) || row.length < 6 || !Number.isFinite(Number(row[0])))) throw new Error('캔들 응답의 시각을 확인하지 못했습니다.');
+  const rows = result.list.map(row => ({
     openTime: Number(row[0]) / 1000, closeTime: Number(row[0]) / 1000 + seconds,
     open: Number(row[1]), high: Number(row[2]), low: Number(row[3]), close: Number(row[4]), volume: Number(row[5]),
-  })).filter(candle => Object.values(candle).every(Number.isFinite) && candle.openTime >= start && candle.openTime < end && candle.closeTime <= Date.now() / 1000
-    && Math.min(candle.open, candle.high, candle.low, candle.close) > 0 && candle.high >= Math.max(candle.open, candle.close, candle.low) && candle.low <= Math.min(candle.open, candle.close) && candle.volume >= 0)
-    .sort((a, b) => a.openTime - b.openTime);
+  })).filter(candle => candle.openTime >= start && candle.openTime < end && candle.closeTime <= Date.now() / 1000);
+  if (rows.some(candle => !Object.values(candle).every(Number.isFinite) || candle.openTime % seconds !== 0
+    || Math.min(candle.open, candle.high, candle.low, candle.close) <= 0 || candle.high < Math.max(candle.open, candle.close, candle.low)
+    || candle.low > Math.min(candle.open, candle.close) || candle.volume < 0)) {
+    throw new Error(`${symbol}의 캔들 가격 또는 시각이 올바르지 않습니다. 다시 이어가 주세요.`);
+  }
+  return rows.sort((a, b) => a.openTime - b.openTime);
 }
 
 /** Read only the needed series pages. Each missing request fills up to 1,000 bars for later blocks. */
 export async function ensureCandles(instrument: Instrument, interval: BacktestInterval, from: number, end: number, prefetchEnd = end, signal?: AbortSignal): Promise<Candle[]> {
   const seconds = intervalSeconds(interval);
-  const start = Math.max(Math.floor(from / seconds) * seconds, Math.floor(instrument.launchAt / seconds) * seconds);
+  const listingBucket = Math.floor(instrument.launchAt / seconds) * seconds;
+  const prefixKey = `listing-prefix:v1:${instrument.symbol}:${interval}:${instrument.launchAt}`;
+  const previousPrefix = instrument.launchAt > 0 ? await readValue<ListingPrefix>('publicData', prefixKey) : null;
+  let prefix = previousPrefix ?? { emptyUntil: listingBucket };
+  const start = Math.max(Math.floor(from / seconds) * seconds, listingBucket, prefix.emptyUntil);
   if (end <= start) return [];
   const byTime = new Map((await readCandlePages(instrument.symbol, interval, start, end)).map(candle => [candle.openTime, candle]));
   for (let cursor = start; cursor < end; cursor += seconds) {
@@ -160,7 +170,22 @@ export async function ensureCandles(instrument: Instrument, interval: BacktestIn
     const fetched = await download(instrument.symbol, interval, cursor, nextKnown, signal);
     await cacheCandles(instrument.symbol, interval, fetched);
     fetched.forEach(candle => byTime.set(candle.openTime, candle));
-    if (!byTime.has(cursor)) throw new Error(`${instrument.symbol}의 ${new Date(cursor * 1000).toLocaleString('ko-KR')} 캔들이 누락되었습니다. 다시 이어가 주세요.`);
+    if (byTime.has(cursor)) continue;
+    // Instrument registration can precede the first trade. Only an API-confirmed empty
+    // prefix anchored at listing is skipped; an internal gap must never be bridged.
+    if (instrument.launchAt > 0 && prefix.firstAt === undefined && cursor === prefix.emptyUntil) {
+      const first = [...byTime.keys()].filter(at => at >= cursor).sort((a, b) => a - b)[0];
+      const emptyUntil = Math.min(first ?? nextKnown, nextKnown);
+      prefix = { emptyUntil, ...(first !== undefined && first <= nextKnown ? { firstAt: first } : {}) };
+      await writeValue('publicData', prefixKey, prefix);
+      cursor = emptyUntil - seconds;
+      continue;
+    }
+    // Retry the precise absent bar once in case a broad response was temporarily incomplete.
+    const retried = await download(instrument.symbol, interval, cursor, cursor + seconds, signal);
+    await cacheCandles(instrument.symbol, interval, retried);
+    retried.forEach(candle => byTime.set(candle.openTime, candle));
+    if (!byTime.has(cursor)) throw new Error(`${instrument.symbol}의 ${new Date(cursor * 1000).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} 캔들이 누락되었습니다. 다시 이어가 주세요.`);
   }
   return [...byTime.values()].filter(candle => candle.openTime >= start && candle.openTime < end).sort((a, b) => a.openTime - b.openTime);
 }

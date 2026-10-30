@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { lease, openCacheDatabase, readValue } from './database';
+import { cacheCandles, lease, openCacheDatabase, readValue } from './database';
 import { executeLocalJob, loadLocalJob, loadLocalResult, type LocalJobView } from './localJobs';
 import { ensureCandles, instrumentEligibility, listInstruments } from './marketData';
 import type { BacktestSettings, Candle } from './types';
@@ -91,5 +91,47 @@ describe('durable local analysis', () => {
     expect(after.id).toBe(before.id);
     expect(after.status).toBe('COMPLETED');
     expect(after.result).toEqual(before.result);
+  });
+
+  it('resumes an existing 2.10.26 job paused on the CTUSDT listing hour using its cached data', async () => {
+    const first = 1790845200;
+    const launchAt = 1790844328;
+    const october = { ...settings, startDate: '2026-10-01', startTime: '00:00', endDate: '2026-10-04', endTime: '00:00' };
+    vi.mocked(listInstruments).mockResolvedValue([{ symbol: 'AAAUSDT', launchAt: origin }, { symbol: 'CTUSDT', launchAt }]);
+    const originalLoader = vi.mocked(ensureCandles).getMockImplementation()!;
+    vi.mocked(ensureCandles).mockImplementation((instrument, ...args) => {
+      if (instrument.symbol === 'CTUSDT') throw new Error('CTUSDT의 2026. 10. 1. 오후 5:00:00 캔들이 누락되었습니다. 다시 이어가 주세요.');
+      return originalLoader(instrument, ...args);
+    });
+    const end = Date.parse('2026-10-04T00:00:00+09:00') / 1000;
+    const cached: Candle[] = [];
+    for (let at = first; at < end; at += 3600) cached.push({ openTime: at, closeTime: at + 3600, open: 100, high: 102, low: 99, close: 101, volume: 10 });
+    await cacheCandles('CTUSDT', '1h', cached);
+    await executeLocalJob({ strategy: 'VOLATILITY', settings: october }, () => undefined, new AbortController().signal);
+    const paused = (await loadLocalJob('VOLATILITY'))!;
+    expect(paused.version).toBe('2.10.26');
+    expect(paused.status).toBe('PAUSED');
+    expect(paused.cursor).toBe(1);
+    expect(paused.message).toContain('CTUSDT');
+
+    const actual = await vi.importActual<typeof import('./marketData')>('./marketData');
+    vi.mocked(ensureCandles).mockImplementation(actual.ensureCandles);
+    const fetcher = vi.fn(async (input: URL | RequestInfo) => {
+      const url = new URL(String(input));
+      if (url.searchParams.get('symbol') === 'CTUSDT') {
+        expect(Number(url.searchParams.get('start'))).toBe(1790841600000);
+        expect(Number(url.searchParams.get('end'))).toBe(first * 1000 - 1);
+        return new Response(JSON.stringify({ retCode: 0, result: { list: [] } }));
+      }
+      throw new Error('prepared symbols must not be downloaded again');
+    });
+    vi.stubGlobal('fetch', fetcher);
+    await executeLocalJob({ strategy: 'VOLATILITY', resumeId: paused.id }, () => undefined, new AbortController().signal);
+    const resumed = (await loadLocalJob('VOLATILITY'))!;
+    expect(resumed.id).toBe(paused.id);
+    expect(resumed.status).toBe('COMPLETED');
+    expect(resumed.universeCount).toBe(2);
+    expect(resumed.result?.entryCount).toBeGreaterThan(0);
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });

@@ -667,7 +667,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
               onOpen={openHistory}
             />
           ) : null}
-          {notice ? <p className="notice">{notice}</p> : null}
+          {notice && notice !== error ? <p className="notice">{notice}</p> : null}
           {error ? <p className="error" role="alert">{error}</p> : null}
           {running || localJob?.status === 'PAUSED' ? <ProgressBar completed={progress.completed} total={progress.total || Math.max(estimateBars(settings), 1)} label={progress.phase} /> : null}
           {localJob ? <p className="muted small">분석 대상 {localJob.universeCount.toLocaleString()}종목 · 슬리피지 제외 {localJob.excludedCount.toLocaleString()}종목{localJob.status === 'COMPLETED' ? ' · 완료' : localJob.status === 'PAUSED' ? ' · 일시정지' : ''}</p> : null}

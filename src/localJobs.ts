@@ -6,6 +6,7 @@ import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, 
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import type { BacktestResult, BacktestSettings, Strategy } from './types';
 
+// Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export interface LocalJob {
   id: string;
