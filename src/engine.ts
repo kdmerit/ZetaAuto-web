@@ -368,9 +368,8 @@ function volatilitySignals(
       side,
       index,
       entry,
-      // No SL was specified. This placeholder is never used by the v2 replay
-      // and must not be drawn as an actual stop order.
-      stop: entry,
+      stop: long ? candle.low : candle.high,
+      volatilityStopEnabled: true,
       target,
       initialTarget: target,
       volatilityK1: k1,
@@ -457,6 +456,7 @@ function closePosition(
   quantity: number,
   signal: Signal,
   index: number,
+  opening = false,
 ): void {
   if (position.pendingSecond && qtyAtLeast(quantity, position.quantity)) {
     cancelPendingSecond(state, position);
@@ -478,7 +478,7 @@ function closePosition(
   countReason(state, reason);
   const execution: Execution = {
     kind: reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE',
-    at: candle.closeTime,
+    at: opening ? candle.openTime : candle.closeTime,
     candleOpenAt: candle.openTime,
     price: fill,
     quantity: qty,
@@ -489,7 +489,7 @@ function closePosition(
     symbol: 'LOCAL',
     side: position.side,
     entryAt: position.entryAt,
-    exitAt: candle.closeTime,
+    exitAt: opening ? candle.openTime : candle.closeTime,
     reason,
     quantity: qty,
     entryPrice: position.averageEntry,
@@ -570,7 +570,8 @@ function handlePrice(
 ): void {
   if (state.position !== position || position.quantity <= 0) return;
   const long = position.side === 'LONG';
-  const stopped = position.signal.exitMode !== 'VOLATILITY_CLOSE' && (long ? price <= position.activeStop : price >= position.activeStop);
+  const stopped = (position.signal.exitMode !== 'VOLATILITY_CLOSE' || position.signal.volatilityStopEnabled === true)
+    && (long ? price <= position.activeStop : price >= position.activeStop);
   if (stopped) {
     closePosition(state, position, position.activeStop, 'SL', candle, position.quantity, position.signal, index);
     return;
@@ -610,6 +611,12 @@ function processCandle(
   settings: BacktestSettings,
   enriched: EnrichedCandle,
 ): void {
+  // A stop gap cannot fill at the better stop price. Existing non-volatility
+  // simulations keep their conventions; live local jobs use the shared replay.
+  if (position.signal.volatilityStopEnabled && (position.side === 'LONG' ? candle.open <= position.activeStop : candle.open >= position.activeStop)) {
+    closePosition(state, position, candle.open, 'SL', candle, position.quantity, position.signal, index, true);
+    return;
+  }
   const path = position.side === 'LONG'
     ? [candle.open, candle.low, candle.high, candle.close]
     : [candle.open, candle.high, candle.low, candle.close];
@@ -617,7 +624,7 @@ function processCandle(
     const before = path[cursor - 1] as number;
     const after = path[cursor] as number;
     const levels = [
-      ...(position.signal.exitMode === 'VOLATILITY_CLOSE' ? [] : [position.activeStop]),
+      ...(position.signal.exitMode !== 'VOLATILITY_CLOSE' || position.signal.volatilityStopEnabled === true ? [position.activeStop] : []),
       ...(position.pendingSecond ? [position.secondPrice] : []),
       ...(position.partial !== null && !position.partialDone ? [position.partial] : []),
       ...(roiStop(position, settings) !== null ? [roiStop(position, settings) as number] : []),
@@ -861,6 +868,7 @@ export function buildLocalChart(
     if (signal.partial) lines.push(line('PARTIAL_TP', signal.partial));
   } else {
     lines.push(line('ENTRY', trade.entryPrice));
+    if (signal.volatilityStopEnabled === true) lines.push(line('SL', signal.activeStop ?? signal.stop));
     if (signal.exitMode === 'VOLATILITY_CLOSE') lines.push(line('TP', signal.target));
   }
   const waves = (signal.waves ?? []).flatMap((wave) => {

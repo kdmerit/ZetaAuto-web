@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { prepareSymbolBlock, runBacktest } from './engine';
+import { buildLocalChart, prepareSymbolBlock, runBacktest } from './engine';
 import type { BacktestSettings, Candle } from './types';
 
 function candle(index: number, overrides: Partial<Candle> = {}): Candle {
@@ -55,7 +55,7 @@ describe('volatility breakout backtest', () => {
   it.each([false, true])('uses the mirrored three-bar pattern, close band and prior range, short=%s', short => {
     const signal = signals(rows(short));
     expect(signal).toHaveLength(1);
-    expect(signal[0]).toMatchObject({ side: short ? 'SHORT' : 'LONG', entry: short ? 85 : 115, breakoutRange: 20, volatilityK1: 0.5, volatilityK2: 1, exitMode: 'VOLATILITY_CLOSE', target: short ? 65 : 135 });
+    expect(signal[0]).toMatchObject({ side: short ? 'SHORT' : 'LONG', entry: short ? 85 : 115, breakoutRange: 20, volatilityK1: 0.5, volatilityK2: 1, exitMode: 'VOLATILITY_CLOSE', target: short ? 65 : 135, stop: short ? 105 : 95, volatilityStopEnabled: true });
   });
 
   it.each([110, 120])('includes the K1/K2 boundaries at close=%s', close => {
@@ -110,11 +110,34 @@ describe('volatility breakout backtest', () => {
     expect(result.recentTrades[0]?.exitAt).toBe(candles[12]!.closeTime);
   });
 
-  it.each([false, true])('takes the full one-range TP intrabar and retains no SL/partial orders, short=%s', short => {
+  it.each([false, true])('takes the full one-range TP intrabar with no partial orders, short=%s', short => {
     const candles = rows(short);
     candles[11] = candle(11, short ? { open: 85, high: 90, low: 60, close: 80 } : { open: 115, high: 140, low: 110, close: 120 });
     const result = runBacktest(candles, { ...settings, partialTpEnabled: true }, 'VOLATILITY');
     expect(result.exitReasons).toEqual({ FULL_TP: 1 });
     expect(result.recentTrades[0]?.exitPrice).toBeCloseTo((short ? 85 * 0.9998 - 20 : 115 * 1.0002 + 20));
+  });
+
+  it.each([false, true])('stops at the entry candle wick and shows the original SL, short=%s', short => {
+    const candles = rows(short);
+    candles[11] = candle(11, short ? { open: 85, high: 105, low: 80, close: 84 } : { open: 115, high: 120, low: 95, close: 116 });
+    const result = runBacktest(candles, settings, 'VOLATILITY');
+    expect(result.exitReasons).toEqual({ SL: 1 });
+    const trade = result.recentTrades[0]!;
+    const stop = short ? 105 : 95;
+    expect(trade.exitPrice).toBeCloseTo(stop * (short ? 1.0002 : 0.9998), 10);
+    expect(buildLocalChart(result, trade, settings).priceLines).toContainEqual({ kind: 'SL', price: stop });
+    const legacy = { ...trade, signal: { ...trade.signal, volatilityStopEnabled: undefined, stop: trade.signal.entry } };
+    expect(buildLocalChart(result, legacy, settings).priceLines.some(line => line.kind === 'SL')).toBe(false);
+  });
+
+  it.each([false, true])('does not fill an opening stop gap at the better stop price, short=%s', short => {
+    const candles = rows(short);
+    candles[11] = candle(11, short ? { open: 110, high: 115, low: 100, close: 104 } : { open: 90, high: 100, low: 85, close: 96 });
+    const result = runBacktest(candles, settings, 'VOLATILITY');
+    expect(result.exitReasons).toEqual({ SL: 1 });
+    expect(result.recentTrades[0]?.exitPrice).toBeCloseTo((short ? 110 * 1.0002 : 90 * 0.9998), 10);
+    expect(result.recentTrades[0]?.exitAt).toBe(candles[11]!.openTime);
+    expect(result.recentTrades[0]?.executions.at(-1)?.at).toBe(candles[11]!.openTime);
   });
 });

@@ -137,16 +137,16 @@ describe('durable local analysis', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it('separates changed volatility checkpoints but preserves other strategy versions and old results', async () => {
+  it.each(['2.10.26', '2.10.28'])('separates old volatility checkpoints (%s) but preserves other strategy versions and old results', async version => {
     expect(engineVersionFor('PULLBACK')).toBe('2.10.26');
     expect(engineVersionFor('DISPARITY')).toBe('2.10.26');
-    expect(engineVersionFor('VOLATILITY')).toBe('2.10.28');
+    expect(engineVersionFor('VOLATILITY')).toBe('2.10.29');
     const controller = new AbortController();
     await executeLocalJob({ strategy: 'VOLATILITY', settings }, view => {
       if (view.blockStart > origin) controller.abort();
     }, controller.signal);
     const header = (await readValue<Record<string, unknown>>('jobs', 'VOLATILITY'))!;
-    await writeValue('jobs', 'VOLATILITY', { ...header, version: '2.10.26' });
+    await writeValue('jobs', 'VOLATILITY', { ...header, version });
     const old = (await loadLocalJob('VOLATILITY'))!;
     expect(old.message).toContain('분석 방식이 변경');
     await expect(executeLocalJob({ strategy: 'VOLATILITY', resumeId: old.id }, () => undefined, new AbortController().signal)).rejects.toThrow('새 분석');

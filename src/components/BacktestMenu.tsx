@@ -25,7 +25,7 @@ export function BacktestMenu({ onOpen, onSignOut, email }: BacktestMenuProps) {
       strategy: 'VOLATILITY' as const,
       title: '변동성 돌파 백테스트',
       description:
-        '3봉 방향·최소 변동폭·K1~K2 종가 구간으로 진입하고, 이후 K1 종가 조건 또는 변동폭 1배 TP로 청산합니다.',
+        '3봉 방향·최소 변동폭·K1~K2 종가 구간으로 진입하고, 매수봉 저가·고가 SL과 K1 종가 조건·변동폭 1배 TP로 청산합니다.',
     },
   ];
 

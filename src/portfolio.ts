@@ -74,6 +74,7 @@ export function portfolioEquity(state: PortfolioState): number {
 function priceLines(p: Holding): PriceLine[] {
   if (p.signal.strategy === 'VOLATILITY') return [
     { kind: 'ENTRY', price: p.first },
+    ...(p.signal.volatilityStopEnabled === true ? [{ kind: 'SL' as const, price: p.stop }] : []),
     ...(p.signal.exitMode === 'VOLATILITY_CLOSE' ? [{ kind: 'TP' as const, price: p.target }] : []),
   ];
   const split = p.signal.strategy === 'PULLBACK';
@@ -191,7 +192,8 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
   const p = state.positions[symbol];
   if (!p) return;
   const long = p.signal.side === 'LONG';
-  const stopped = p.signal.exitMode !== 'VOLATILITY_CLOSE' && (long ? price <= p.stop : price >= p.stop);
+  const stopped = (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true)
+    && (long ? price <= p.stop : price >= p.stop);
   if (p.pending && !stopped && (long ? price <= p.second : price >= p.second)) fillSecond(state, p, opening ? price : p.second, candle, settings, opening);
   if (stopped) { close(state, p, opening ? price : p.stop, p.qty, 'SL', candle, opening); return; }
   const roi = roiPrice(p, settings);
@@ -218,7 +220,7 @@ function replayPath(position: Holding, bar: PreparedBar, settings: BacktestSetti
     const before = path[i - 1]!;
     const after = path[i]!;
     const levels = new Set([p.target]);
-    if (p.signal.exitMode !== 'VOLATILITY_CLOSE') levels.add(p.stop);
+    if (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true) levels.add(p.stop);
     if (p.pending) levels.add(p.second);
     if (p.partial !== null && !p.partialDone) levels.add(p.partial);
     const roi = roiPrice(p, settings);

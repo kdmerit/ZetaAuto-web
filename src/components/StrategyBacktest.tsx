@@ -589,6 +589,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
                 <p>5. 위 조건을 모두 만족한 확정봉 종가에 롱 진입</p>
                 <p>6. 진입 다음 봉부터 종가 ≥ 매수가 + R×K1이면 확정 종가에 전량 청산</p>
                 <p>7. TP = 매수가 + R · 진입 이후 고가가 TP에 닿으면 전량 청산</p>
+                <p>8. SL = 매수 신호봉 저가 · 이후 저가가 SL 이하이면 전량 손절</p>
                 <strong>숏 포지션</strong>
                 <p>1. 전전봉 종가 &gt; 시가 (양봉)</p>
                 <p>2. 직전봉 종가 &lt; 시가, 현재봉 종가 &lt; 시가 (음봉)</p>
@@ -597,9 +598,10 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
                 <p>5. 위 조건을 모두 만족한 확정봉 종가에 숏 진입</p>
                 <p>6. 진입 다음 봉부터 종가 ≤ 매수가 − R×K1이면 확정 종가에 전량 청산</p>
                 <p>7. TP = 매수가 − R · 진입 이후 저가가 TP에 닿으면 전량 청산</p>
+                <p>8. SL = 매수 신호봉 고가 · 이후 고가가 SL 이상이면 전량 손절</p>
                 <strong>공통 체결 기준</strong>
-                <p>최소 변동폭 조건을 포함해 모두 충족해야 진입합니다. 변동폭 R은 진입 시 고정하고 매수가에는 진입 슬리피지를 반영합니다. TP 접촉을 먼저 처리한 뒤 미청산 포지션에 종가 조건을 적용합니다.</p>
-                <p>별도 SL·부분 TP·신호봉 즉시 청산은 사용하지 않습니다. 확정 전 캔들 색이나 진입봉의 과거 고저가로 소급 체결하지 않습니다. 기간 말 미청산 포지션은 평가금액에 포함합니다.</p>
+                <p>최소 변동폭 조건을 포함해 모두 충족해야 진입합니다. 변동폭 R과 신호봉 SL은 진입 시 고정하고 매수가에는 진입 슬리피지를 반영합니다. 같은 봉에서 SL·TP에 모두 닿으면 SL 우선이며, 미청산 포지션에 종가 조건을 적용합니다.</p>
+                <p>부분 TP·신호봉 즉시 청산은 사용하지 않습니다. SL도 진입 다음 봉부터 적용하며, SL을 넘겨 갭이 나면 해당 봉 시가에 손절합니다. 확정 전 캔들 색이나 진입봉의 과거 고저가로 소급 체결하지 않습니다. 기간 말 미청산 포지션은 평가금액에 포함합니다.</p>
               </div>
             )}
           </section>
@@ -664,7 +666,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
             </>
           )}
           {strategy === 'VOLATILITY' ? (
-            <p className="muted small">조건을 충족한 확정봉 종가에 진입합니다. 이후 K1 종가 조건 또는 변동폭 1배 TP로 전량 청산하며 별도 SL·부분 TP는 없습니다.</p>
+            <p className="muted small">조건을 충족한 확정봉 종가에 진입합니다. SL은 매수 신호봉 저가(롱)·고가(숏)이며, 이후 SL·K1 종가 조건·변동폭 1배 TP로 전량 청산합니다. 부분 TP는 없습니다.</p>
           ) : (
             <>
               <label className="checkbox-row"><input type="checkbox" checked={settings.partialTpEnabled} onChange={(event) => update('partialTpEnabled', event.target.checked)} /><span>부분 TP 50%</span></label>

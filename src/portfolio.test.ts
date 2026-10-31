@@ -71,7 +71,7 @@ describe('local shared portfolio', () => {
   });
 });
 
-describe('volatility v2 shared-account exits', () => {
+describe('volatility shared-account exits with signal candle SL', () => {
   const settings = { ...testSettings, leverage: '1', partialTpEnabled: true };
   function document(short: boolean, tail: number[][]): PreparedSymbol {
     const data = [
@@ -104,7 +104,7 @@ describe('volatility v2 shared-account exits', () => {
     expect(trade.exitPrice).toBeCloseTo(exit, 10);
     expect(saved.realized).toBeCloseTo(profit - totalFees, 10);
     expect(saved.cash).toBeCloseTo(250 + profit - totalFees, 10);
-    expect(trade.priceLines).toEqual([{ kind: 'ENTRY', price: entry }, { kind: 'TP', price: entry + (short ? -20 : 20) }]);
+    expect(trade.priceLines).toEqual([{ kind: 'ENTRY', price: entry }, { kind: 'SL', price: short ? 105 : 95 }, { kind: 'TP', price: entry + (short ? -20 : 20) }]);
     const whole = initialPortfolio(250);
     replayPortfolioBlock(whole, [doc], settings, start, start + 2700, 900);
     expect(saved).toEqual(whole);
@@ -142,8 +142,8 @@ describe('volatility v2 shared-account exits', () => {
     expect(state.trades[0]?.executions.at(-1)?.at).toBe(start + 900);
   });
 
-  it.each([false, true])('does not exit on a K1 wick, SL placeholder or analysis end, short=%s', short => {
-    const doc = document(short, [[115, 130, 80, 116]]);
+  it.each([false, true])('does not exit on a K1 wick, entry price or analysis end above the SL, short=%s', short => {
+    const doc = document(short, [[115, 130, 96, 116]]);
     const state = initialPortfolio(250);
     replayPortfolioBlock(state, [doc], settings, start, start + 1800, 900);
     expect(state.closed).toBe(0);
@@ -153,10 +153,74 @@ describe('volatility v2 shared-account exits', () => {
   });
 
   it.each([false, true])('does not move the range or K1 threshold when later candles become larger, short=%s', short => {
-    const doc = document(short, [[115, 130, 50, 116], [116, 128, 110, 126]]);
+    const doc = document(short, [[115, 130, 96, 116], [116, 128, 110, 126]]);
     const state = initialPortfolio(250);
     replayPortfolioBlock(state, [doc], settings, start, start + 2700, 900);
     expect(state.exitReasons).toEqual({ VOLATILITY_CLOSE: 1 });
     expect(state.trades[0]?.signal.breakoutRange).toBe(20);
+  });
+
+  it.each([false, true])('does not trigger SL on its already closed entry candle, short=%s', short => {
+    const doc = document(short, []);
+    const state = initialPortfolio(250);
+    replayPortfolioBlock(state, [doc], settings, start, start + 900, 900);
+    expect(state.entries).toBe(1);
+    expect(state.closed).toBe(0);
+    expect(state.positions.AAAUSDT?.stop).toBe(short ? 105 : 95);
+    expect(state.positions.AAAUSDT?.executions).toHaveLength(1);
+  });
+
+  it.each([false, true])('includes an exact SL wick touch and applies market exit fees and slippage, short=%s', short => {
+    const doc = document(short, [[115, 120, 95, 116]]);
+    const state = initialPortfolio(250);
+    replayPortfolioBlock(state, [doc], settings, start, start + 1800, 900);
+    const entry = short ? 85 * 0.9998 : 115 * 1.0002;
+    const stop = short ? 105 : 95;
+    const exit = stop * (short ? 1.0002 : 0.9998);
+    const quantity = 100 / entry;
+    const gross = (exit - entry) * quantity * (short ? -1 : 1);
+    const fees = 0.055 + exit * quantity * 0.00055;
+    expect(state.exitReasons).toEqual({ SL: 1 });
+    expect(state.closed).toBe(1);
+    expect(state.losses).toBe(1);
+    expect(state.trades[0]?.exitPrice).toBeCloseTo(exit, 10);
+    expect(state.cash).toBeCloseTo(250 + gross - fees, 10);
+    expect(state.fees).toBeCloseTo(fees, 10);
+    expect(state.trades[0]?.priceLines).toContainEqual({ kind: 'SL', price: stop });
+    expect(state.trades[0]?.executions.map(fill => fill.kind)).toEqual(['ENTRY', 'CLOSE']);
+  });
+
+  it.each([false, true])('prefers SL when the same candle also touches TP or qualifies for a K1 close, short=%s', short => {
+    for (const high of [130, 140]) {
+      const doc = document(short, [[115, high, 90, 126]]);
+      const state = initialPortfolio(250);
+      replayPortfolioBlock(state, [doc], settings, start, start + 1800, 900);
+      expect(state.exitReasons).toEqual({ SL: 1 });
+      expect(state.trades[0]?.exitPrice).toBeCloseTo(short ? 105 * 1.0002 : 95 * 0.9998, 10);
+    }
+  });
+
+  it.each([false, true])('fills a stop gap at opening price and preserves the entry candle SL across checkpoints, short=%s', short => {
+    const doc = document(short, [[115, 120, 96, 116], [90, 100, 85, 96]]);
+    const state = initialPortfolio(250);
+    replayPortfolioBlock(state, [doc], settings, start, start + 1800, 900);
+    const saved = JSON.parse(JSON.stringify(state)) as typeof state;
+    expect(saved.positions.AAAUSDT?.stop).toBe(short ? 105 : 95);
+    replayPortfolioBlock(saved, [doc], settings, start + 1800, start + 2700, 900);
+    expect(saved.exitReasons).toEqual({ SL: 1 });
+    expect(saved.trades[0]?.exitPrice).toBeCloseTo(short ? 110 * 1.0002 : 90 * 0.9998, 10);
+    expect(saved.trades[0]?.exitAt).toBe(start + 1800);
+    expect(saved.trades[0]?.priceLines).toContainEqual({ kind: 'SL', price: short ? 105 : 95 });
+  });
+
+  it.each([false, true])('does not turn a legacy pre-SL entry placeholder into a real stop or chart line, short=%s', short => {
+    const doc = document(short, [[115, 130, 80, 116], [116, 128, 110, 126]]);
+    const signal = doc.bars[0]!.signal!;
+    delete signal.volatilityStopEnabled;
+    signal.stop = signal.entry;
+    const state = initialPortfolio(250);
+    replayPortfolioBlock(state, [doc], settings, start, start + 2700, 900);
+    expect(state.exitReasons).toEqual({ VOLATILITY_CLOSE: 1 });
+    expect(state.trades[0]?.priceLines?.some(line => line.kind === 'SL')).toBe(false);
   });
 });
