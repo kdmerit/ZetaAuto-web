@@ -119,7 +119,7 @@ function ChartSvg({
   const widthForZoom = (factor: number): number => Math.max(viewport.width || 320, Math.min(24_000, baseWidth * factor));
   const width = widthForZoom(zoom.factor);
   const height = Math.max(150, viewport.height);
-  const volumeHeight = 72;
+  const volumeHeight = 64.8;
   const plotHeight = height - volumeHeight;
   const plotPadding = 24;
   const plotBottomPadding = 6;
