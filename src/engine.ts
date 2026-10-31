@@ -1,4 +1,5 @@
 import { enrichCandles, intervalSeconds } from './api';
+import { volatilityParameters } from './backtestSettings';
 import type {
   BacktestResult,
   BacktestSettings,
@@ -334,40 +335,50 @@ function volatilitySignals(
   candles: Candle[],
   settings: BacktestSettings,
 ): Signal[] {
-  const k = Number(settings.volatilityK || '0.5');
+  const { minimum, k1, k2 } = volatilityParameters(settings);
   const signals: Signal[] = [];
-  if (!Number.isFinite(k) || k <= 0) return signals;
-  for (let index = 1; index < candles.length; index += 1) {
+  for (let index = 2; index < candles.length; index += 1) {
     const candle = candles[index];
     const previous = candles[index - 1];
-    if (!candle || !previous) continue;
+    const older = candles[index - 2];
+    if (!candle || !previous || !older || previous.close <= 0) continue;
     const range = previous.high - previous.low;
     if (!Number.isFinite(range) || range <= 0) continue;
-    const longLevel = candle.open + range * k;
-    const shortLevel = candle.open - range * k;
-    const longTriggered = candle.high >= longLevel;
-    const shortTriggered = candle.low <= shortLevel;
-    // Both sides touching the same candle cannot be ordered from OHLC data.
-    if (longTriggered === shortTriggered) continue;
-    const side = longTriggered ? 'LONG' : 'SHORT';
+    const rangePercent = range / previous.close * 100;
+    if (rangePercent + 1e-10 < minimum) continue;
+    const long = older.close < older.open && previous.close > previous.open && candle.close > candle.open
+      && previous.low < candle.low;
+    const short = older.close > older.open && previous.close < previous.open && candle.close < candle.open
+      && previous.high > candle.high;
+    if (!long && !short) continue;
+    const side = long ? 'LONG' : 'SHORT';
     if (settings.side !== 'BOTH' && settings.side !== side) continue;
-    const entry = longTriggered ? longLevel : shortLevel;
+    const direction = long ? 1 : -1;
+    const offset = direction * (candle.close - candle.open);
+    const tolerance = Math.max(candle.open, range) * 1e-12;
+    if (offset < range * k1 - tolerance || offset > range * k2 + tolerance) continue;
+    // Candle colour and its extreme are only known at close. Never enter earlier
+    // in this same bar using the now-known OHLC, or exit against its past high/low.
+    const entry = candle.close;
+    const target = entry + direction * range;
     if (!Number.isFinite(entry) || entry <= 0) continue;
+    if (!Number.isFinite(target) || target <= 0) continue;
     signals.push({
       strategy: 'VOLATILITY',
       side,
       index,
       entry,
-      // The original short-term system exits at the signal candle's close;
-      // these fields remain populated for the shared position model but are
-      // intentionally not rendered as SL/TP lines for this strategy.
+      // No SL was specified. This placeholder is never used by the v2 replay
+      // and must not be drawn as an actual stop order.
       stop: entry,
-      target: entry,
-      initialTarget: entry,
-      volatilityK: k,
+      target,
+      initialTarget: target,
+      volatilityK1: k1,
+      volatilityK2: k2,
       breakoutRange: range,
+      breakoutRangePercent: rangePercent,
       breakoutLevel: entry,
-      exitMode: 'BAR_CLOSE',
+      exitMode: 'VOLATILITY_CLOSE',
     });
   }
   return signals;
@@ -450,7 +461,7 @@ function closePosition(
   if (position.pendingSecond && qtyAtLeast(quantity, position.quantity)) {
     cancelPendingSecond(state, position);
   }
-  const marketExit = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE'].includes(reason);
+  const marketExit = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE'].includes(reason);
   const fill = marketExit
     ? price * (position.side === 'LONG' ? 1 - SLIPPAGE : 1 + SLIPPAGE)
     : price;
@@ -559,7 +570,7 @@ function handlePrice(
 ): void {
   if (state.position !== position || position.quantity <= 0) return;
   const long = position.side === 'LONG';
-  const stopped = long ? price <= position.activeStop : price >= position.activeStop;
+  const stopped = position.signal.exitMode !== 'VOLATILITY_CLOSE' && (long ? price <= position.activeStop : price >= position.activeStop);
   if (stopped) {
     closePosition(state, position, position.activeStop, 'SL', candle, position.quantity, position.signal, index);
     return;
@@ -606,7 +617,7 @@ function processCandle(
     const before = path[cursor - 1] as number;
     const after = path[cursor] as number;
     const levels = [
-      position.activeStop,
+      ...(position.signal.exitMode === 'VOLATILITY_CLOSE' ? [] : [position.activeStop]),
       ...(position.pendingSecond ? [position.secondPrice] : []),
       ...(position.partial !== null && !position.partialDone ? [position.partial] : []),
       ...(roiStop(position, settings) !== null ? [roiStop(position, settings) as number] : []),
@@ -624,6 +635,11 @@ function processCandle(
     const midpoint = (candle.high + candle.low) / 2;
     const halfBreak = position.side === 'LONG' ? midpoint <= enriched.ma20 : midpoint >= enriched.ma20;
     if (halfBreak) closePosition(state, position, candle.close, 'MA20_HALF_BREAK', candle, position.quantity, position.signal, index);
+  }
+  if (state.position === position && position.signal.exitMode === 'VOLATILITY_CLOSE') {
+    const direction = position.side === 'LONG' ? 1 : -1;
+    const threshold = position.firstEntry + direction * position.signal.breakoutRange! * position.signal.volatilityK1!;
+    if (direction * (candle.close - threshold) >= 0) closePosition(state, position, candle.close, 'VOLATILITY_CLOSE', candle, position.quantity, position.signal, index);
   }
   void index;
 }
@@ -645,6 +661,8 @@ function entryPosition(
   const margin = split ? bet / 2 : bet;
   const raw = signal.entry;
   const fill = raw * (signal.side === 'LONG' ? 1 + SLIPPAGE : 1 - SLIPPAGE);
+  const target = signal.exitMode === 'VOLATILITY_CLOSE' ? fill + (signal.side === 'LONG' ? 1 : -1) * signal.breakoutRange! : signal.target;
+  if (!Number.isFinite(target) || target <= 0) return null;
   const firstQuantity = margin * leverage / fill;
   const firstFee = margin * leverage * FEE;
   const reservedFee = split ? bet / 2 * leverage * FEE : 0;
@@ -664,8 +682,8 @@ function entryPosition(
     pendingSecond: split,
     secondPrice: signal.second ?? fill,
     leverage,
-    target: signal.target,
-    partial: settings.partialTpEnabled ? signal.partial ?? null : null,
+    target,
+    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' ? signal.partial ?? null : null,
     partialDone: false,
     activeStop: signal.stop,
     initialStop: signal.stop,
@@ -843,6 +861,7 @@ export function buildLocalChart(
     if (signal.partial) lines.push(line('PARTIAL_TP', signal.partial));
   } else {
     lines.push(line('ENTRY', trade.entryPrice));
+    if (signal.exitMode === 'VOLATILITY_CLOSE') lines.push(line('TP', signal.target));
   }
   const waves = (signal.waves ?? []).flatMap((wave) => {
     const visibleStart = Math.max(start, wave.startIndex);
@@ -873,7 +892,7 @@ export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'DISPARITY') {
     return 'MA20·MA60 사이 이격, 현재 캔들 절반, 직전 5봉 몸통 돌파와 직전 10봉 MA20 조건을 분석합니다.';
   }
-  return '직전 캔들 변동폭에 K값을 적용한 돌파 기준으로 진입하고 신호 캔들 마감에 청산합니다.';
+  return '직전 변동폭·3봉 방향·K1~K2 종가 구간으로 진입하고, 이후 K1 종가 조건 또는 1배 변동폭 TP로 청산합니다.';
 }
 
 export function estimateBars(settings: BacktestSettings): number {

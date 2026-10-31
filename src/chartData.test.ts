@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { fetchServerChart, fetchServerEntryChart } from './api';
-import { chartTimestamp, entryCandleIndex, mergeChartPages, visibleCandleRange } from './chartData';
+import { chartTimestamp, entryCandleIndex, mergeChartPages, movingAverageAngle, visibleCandleRange } from './chartData';
 import type { ChartData, ChartMarker } from './types';
 
 const opened = Date.parse('2026-10-28T14:00:00Z') / 1000;
@@ -40,6 +40,40 @@ function wireChart(chart: ChartData): unknown {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('fixed three-candle MA angle', () => {
+  it('uses t−2 to t with positive rising, negative falling and flat zero', () => {
+    const chart = chartAt([opened - 7200, opened - 3600, opened]);
+    chart.candles.forEach((candle, i) => { candle.ma5 = [100, 101, 102][i]!; });
+    expect(movingAverageAngle(chart.candles, 2, 'ma5')).toBeCloseTo(45, 10);
+    chart.candles[2]!.ma5 = 98;
+    expect(movingAverageAngle(chart.candles, 2, 'ma5')).toBeCloseTo(-45, 10);
+    chart.candles[2]!.ma5 = 100;
+    expect(movingAverageAngle(chart.candles, 2, 'ma5')).toBe(0);
+  });
+
+  it('is independent of currency magnitude, view scale and values after the selected candle', () => {
+    const chart = chartAt([opened - 7200, opened - 3600, opened, opened + 3600]);
+    chart.candles.forEach((candle, i) => { candle.ma5 = [80_000, 80_400, 80_800, 999_999][i]!; });
+    const angle = movingAverageAngle(chart.candles, 2, 'ma5');
+    const small = chart.candles.map(candle => ({ ...candle, ma5: candle.ma5! / 1_000_000 }));
+    expect(movingAverageAngle(small, 2, 'ma5')).toBeCloseTo(angle!, 10);
+    expect(angle).toBeCloseTo(Math.atan(0.5) * 180 / Math.PI, 10);
+    expect(Math.abs(angle!)).toBeLessThan(30);
+    chart.candles[3]!.ma5 = 1;
+    expect(movingAverageAngle(chart.candles, 2, 'ma5')).toBe(angle);
+  });
+
+  it('does not invent an angle without three valid MA values', () => {
+    const chart = chartAt([opened - 7200, opened - 3600, opened]);
+    expect(movingAverageAngle(chart.candles, 1, 'ma5')).toBeNull();
+    chart.candles[1]!.ma5 = null;
+    expect(movingAverageAngle(chart.candles, 2, 'ma5')).toBeNull();
+    chart.candles[1]!.ma5 = 100;
+    chart.candles[0]!.ma5 = 0;
+    expect(movingAverageAngle(chart.candles, 2, 'ma5')).toBeNull();
+  });
+});
 
 describe('visible chart scaling', () => {
   it('scales to visible candles while ignoring distant price and volume spikes', () => {

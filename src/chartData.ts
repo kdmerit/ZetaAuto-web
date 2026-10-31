@@ -1,4 +1,17 @@
-import type { Candle, ChartData, ChartMarker } from './types';
+import type { Candle, ChartData, ChartMarker, EnrichedCandle } from './types';
+
+/** Fixed angle from t−2 to t: 1% of the starting MA per candle is 45°. */
+export function movingAverageAngle(
+  candles: EnrichedCandle[],
+  index: number,
+  key: 'ma5' | 'ma10' | 'ma20' | 'ma60' | 'ma120',
+): number | null {
+  if (index < 2) return null;
+  const values = candles.slice(index - 2, index + 1).map(candle => candle[key]);
+  if (values.length !== 3 || values.some(value => value === null || !Number.isFinite(value) || value <= 0)) return null;
+  const percentPerCandle = (values[2]! / values[0]! - 1) * 100 / 2;
+  return Math.atan(percentPerCandle) * 180 / Math.PI;
+}
 
 export function visibleCandleRange(
   candles: Candle[],

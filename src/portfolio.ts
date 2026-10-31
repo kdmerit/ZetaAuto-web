@@ -72,7 +72,10 @@ export function portfolioEquity(state: PortfolioState): number {
 }
 
 function priceLines(p: Holding): PriceLine[] {
-  if (p.signal.strategy === 'VOLATILITY') return [{ kind: 'ENTRY', price: p.first }];
+  if (p.signal.strategy === 'VOLATILITY') return [
+    { kind: 'ENTRY', price: p.first },
+    ...(p.signal.exitMode === 'VOLATILITY_CLOSE' ? [{ kind: 'TP' as const, price: p.target }] : []),
+  ];
   const split = p.signal.strategy === 'PULLBACK';
   const lines: PriceLine[] = [{ kind: split ? 'FIRST_ENTRY' : 'ENTRY', price: p.first }];
   if (split) lines.push({ kind: 'SECOND_ENTRY', price: p.secondFill ?? p.second });
@@ -97,7 +100,7 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE'].includes(reason);
+  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE'].includes(reason);
   const fill = market ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
   const qty = Math.min(p.qty, quantity);
   const profit = gross(p, fill, qty);
@@ -139,13 +142,16 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   if (state.cash + 1e-10 < bet * (1 + leverage * feeRate)) { state.insufficientFunds += 1; return; }
   const split = signal.strategy === 'PULLBACK';
   const entry = signal.entry * (signal.side === 'LONG' ? 1 + slippage : 1 - slippage);
+  const target = signal.exitMode === 'VOLATILITY_CLOSE' ? entry + (signal.side === 'LONG' ? 1 : -1) * signal.breakoutRange! : signal.target;
+  if (!Number.isFinite(target) || target <= 0) return;
   const margin = split ? bet / 2 : bet;
   const fee = margin * leverage * feeRate;
   const p: Holding = {
     symbol, signal, opened: candle.closeTime, first: entry, entry, qty: margin * leverage / entry,
     margin, reserved: bet - margin, reservedFee: (bet - margin) * leverage * feeRate,
     pending: split, second: split ? (entry + signal.stop) / 2 : entry,
-    target: signal.target, partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' ? (entry + signal.initialTarget) / 2 : null,
+    target,
+    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' ? (entry + signal.initialTarget) / 2 : null,
     partialDone: false, stop: signal.stop, mark: candle.close, net: -fee, executions: [],
   };
   state.positions[symbol] = p;
@@ -185,7 +191,7 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
   const p = state.positions[symbol];
   if (!p) return;
   const long = p.signal.side === 'LONG';
-  const stopped = long ? price <= p.stop : price >= p.stop;
+  const stopped = p.signal.exitMode !== 'VOLATILITY_CLOSE' && (long ? price <= p.stop : price >= p.stop);
   if (p.pending && !stopped && (long ? price <= p.second : price >= p.second)) fillSecond(state, p, opening ? price : p.second, candle, settings, opening);
   if (stopped) { close(state, p, opening ? price : p.stop, p.qty, 'SL', candle, opening); return; }
   const roi = roiPrice(p, settings);
@@ -211,7 +217,8 @@ function replayPath(position: Holding, bar: PreparedBar, settings: BacktestSetti
   for (let i = 1; i < path.length && state.positions[p.symbol]; i += 1) {
     const before = path[i - 1]!;
     const after = path[i]!;
-    const levels = new Set([p.stop, p.target]);
+    const levels = new Set([p.target]);
+    if (p.signal.exitMode !== 'VOLATILITY_CLOSE') levels.add(p.stop);
     if (p.pending) levels.add(p.second);
     if (p.partial !== null && !p.partialDone) levels.add(p.partial);
     const roi = roiPrice(p, settings);
@@ -221,7 +228,12 @@ function replayPath(position: Holding, bar: PreparedBar, settings: BacktestSetti
     if (state.positions[p.symbol]) {
       const halfBreak = p.signal.strategy === 'DISPARITY' && settings.ma20HalfCloseEnabled && bar.ma20 !== null
         && (p.signal.side === 'LONG' ? (candle.high + candle.low) / 2 <= bar.ma20 : (candle.high + candle.low) / 2 >= bar.ma20);
-      if (halfBreak && i === path.length - 1) close(state, p, after, p.qty, 'MA20_HALF_BREAK', candle);
+      const direction = p.signal.side === 'LONG' ? 1 : -1;
+      const closeThreshold = p.first + direction * p.signal.breakoutRange! * p.signal.volatilityK1!;
+      const volatilityClose = p.signal.exitMode === 'VOLATILITY_CLOSE'
+        && direction * (after - closeThreshold) >= 0;
+      if (i === path.length - 1 && volatilityClose) close(state, p, after, p.qty, 'VOLATILITY_CLOSE', candle);
+      else if (halfBreak && i === path.length - 1) close(state, p, after, p.qty, 'MA20_HALF_BREAK', candle);
       else p.mark = after;
     }
   }

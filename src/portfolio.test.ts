@@ -8,7 +8,7 @@ const origin = Date.UTC(2026, 0, 1) / 1000;
 export const testSettings: BacktestSettings = {
   mode: 'ALL', symbol: 'AAA', interval: '15m', startDate: '2026-01-01', startTime: '09:00', endDate: '2026-01-04', endTime: '09:00',
   initialCapitalUsdt: '250', betAmountUsdt: '100', leverage: '3', side: 'BOTH', partialTpEnabled: false,
-  fullTpWavePercent: '100', minDisparityPercent: '1.0', ma20HalfCloseEnabled: false, roiClosePercent: '100', volatilityK: '0.5',
+  fullTpWavePercent: '100', minDisparityPercent: '1.0', ma20HalfCloseEnabled: false, roiClosePercent: '100', minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1.0',
 };
 
 function candle(index: number, row = [100, 101, 99, 100]): Candle {
@@ -68,5 +68,95 @@ describe('local shared portfolio', () => {
     expect(second.bars.map(bar => bar.signal)).toEqual(whole.bars.filter(bar => bar.candle.openTime >= cut).map(bar => bar.signal));
     expect(second.waveState?.LONG.previousPrevious?.tailLow).toBe(98);
     expect(second.waveState?.LONG.previousPrevious?.startTime).toBeLessThan(rows[180]!.openTime);
+  });
+});
+
+describe('volatility v2 shared-account exits', () => {
+  const settings = { ...testSettings, leverage: '1', partialTpEnabled: true };
+  function document(short: boolean, tail: number[][]): PreparedSymbol {
+    const data = [
+      ...Array.from({ length: 20 }, () => [100, 101, 99, 100]),
+      [104, 105, 99, 100], [100, 110, 90, 105], [100, 140, 95, 115], ...tail,
+    ];
+    const rows = data.map((row, i) => candle(i, short ? [200 - row[0]!, 200 - row[2]!, 200 - row[1]!, 200 - row[3]!] : row));
+    return prepareSymbolBlock('AAAUSDT', rows, settings, 'VOLATILITY', origin + 22 * 900, rows.at(-1)!.closeTime);
+  }
+  const start = origin + 22 * 900;
+
+  it.each([false, true])('holds across bars and checkpoints until a later K1 close, short=%s', short => {
+    const doc = document(short, [[115, 121, 100, 116], [115, 128, 114, 126]]);
+    const state = initialPortfolio(250);
+    replayPortfolioBlock(state, [doc], settings, start, start + 1800, 900);
+    expect(state.entries).toBe(1);
+    expect(state.closed).toBe(0);
+    expect(state.positions.AAAUSDT?.partial).toBeNull();
+    const saved = JSON.parse(JSON.stringify(state)) as typeof state;
+    replayPortfolioBlock(saved, [doc], settings, start + 1800, start + 2700, 900);
+    expect(saved.closed).toBe(1);
+    expect(saved.exitReasons).toEqual({ VOLATILITY_CLOSE: 1 });
+    const trade = saved.trades[0]!;
+    const entry = short ? 85 * 0.9998 : 115 * 1.0002;
+    const exit = short ? 74 * 1.0002 : 126 * 0.9998;
+    const quantity = 100 / entry;
+    const profit = (exit - entry) * quantity * (short ? -1 : 1);
+    const totalFees = 0.055 + exit * quantity * 0.00055;
+    expect(trade.entryPrice).toBeCloseTo(entry, 10);
+    expect(trade.exitPrice).toBeCloseTo(exit, 10);
+    expect(saved.realized).toBeCloseTo(profit - totalFees, 10);
+    expect(saved.cash).toBeCloseTo(250 + profit - totalFees, 10);
+    expect(trade.priceLines).toEqual([{ kind: 'ENTRY', price: entry }, { kind: 'TP', price: entry + (short ? -20 : 20) }]);
+    const whole = initialPortfolio(250);
+    replayPortfolioBlock(whole, [doc], settings, start, start + 2700, 900);
+    expect(saved).toEqual(whole);
+  });
+
+  it.each([false, true])('uses the full TP before a qualifying close, short=%s', short => {
+    const doc = document(short, [[115, 140, 110, 130]]);
+    const state = initialPortfolio(250);
+    replayPortfolioBlock(state, [doc], settings, start, start + 1800, 900);
+    const entry = short ? 85 * 0.9998 : 115 * 1.0002;
+    expect(state.exitReasons).toEqual({ FULL_TP: 1 });
+    expect(state.trades[0]?.exitPrice).toBeCloseTo(entry + (short ? -20 : 20), 10);
+    expect(state.trades[0]?.executions.map(fill => fill.kind)).toEqual(['ENTRY', 'CLOSE']);
+  });
+
+  it.each([false, true])('includes the exact K1 close boundary but not a close just before it, short=%s', short => {
+    const doc = document(short, [[115, 130, 100, 116], [115, 130, 100, 116]]);
+    const entry = short ? 85 * 0.9998 : 115 * 1.0002;
+    const threshold = entry + (short ? -10 : 10);
+    doc.bars[1]!.candle.close = threshold + (short ? 0.00001 : -0.00001);
+    doc.bars[2]!.candle.close = threshold;
+    const state = initialPortfolio(250);
+    replayPortfolioBlock(state, [doc], settings, start, start + 1800, 900);
+    expect(state.closed).toBe(0);
+    replayPortfolioBlock(state, [doc], settings, start + 1800, start + 2700, 900);
+    expect(state.exitReasons).toEqual({ VOLATILITY_CLOSE: 1 });
+  });
+
+  it.each([false, true])('fills a TP crossed by the next opening gap, short=%s', short => {
+    const doc = document(short, [[140, 145, 139, 141]]);
+    const state = initialPortfolio(250);
+    replayPortfolioBlock(state, [doc], settings, start, start + 1800, 900);
+    expect(state.exitReasons).toEqual({ FULL_TP: 1 });
+    expect(state.trades[0]?.exitAt).toBe(start + 900);
+    expect(state.trades[0]?.executions.at(-1)?.at).toBe(start + 900);
+  });
+
+  it.each([false, true])('does not exit on a K1 wick, SL placeholder or analysis end, short=%s', short => {
+    const doc = document(short, [[115, 130, 80, 116]]);
+    const state = initialPortfolio(250);
+    replayPortfolioBlock(state, [doc], settings, start, start + 1800, 900);
+    expect(state.closed).toBe(0);
+    expect(state.positions.AAAUSDT?.executions).toHaveLength(1);
+    expect(state.exitReasons).toEqual({});
+    expect(portfolioResult(state, settings).openPositionCount).toBe(1);
+  });
+
+  it.each([false, true])('does not move the range or K1 threshold when later candles become larger, short=%s', short => {
+    const doc = document(short, [[115, 130, 50, 116], [116, 128, 110, 126]]);
+    const state = initialPortfolio(250);
+    replayPortfolioBlock(state, [doc], settings, start, start + 2700, 900);
+    expect(state.exitReasons).toEqual({ VOLATILITY_CLOSE: 1 });
+    expect(state.trades[0]?.signal.breakoutRange).toBe(20);
   });
 });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 
-import { chartTimestamp, entryCandleIndex, firstEntryTime, visibleCandleRange } from '../chartData';
+import { chartTimestamp, entryCandleIndex, firstEntryTime, movingAverageAngle, visibleCandleRange } from '../chartData';
 import { chartMaStorageKey, loadChartMas, saveChartMas } from '../storage';
 import type { ChartData, ChartMarker, EnrichedCandle, PriceLine } from '../types';
 
@@ -64,14 +64,6 @@ function rangePercent(candle: EnrichedCandle): number | null {
   return candle.open !== 0 ? (candle.high - candle.low) / candle.open * 100 : null;
 }
 
-function selectedAngle(candles: EnrichedCandle[], index: number, key: keyof EnrichedCandle): number | null {
-  if (index < 2) return null;
-  const current = candles[index]?.[key];
-  const start = candles[index - 2]?.[key];
-  if (typeof current !== 'number' || typeof start !== 'number' || !Number.isFinite(current) || !Number.isFinite(start)) return null;
-  return Math.atan2(start - current, 2) * 180 / Math.PI;
-}
-
 function lineY(price: number, min: number, max: number, height: number): number {
   if (!Number.isFinite(price) || !Number.isFinite(min) || !Number.isFinite(max) || max <= min) return height / 2;
   return ((max - price) / (max - min)) * height;
@@ -97,7 +89,7 @@ function ChartSvg({
   loadingOlder?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const gestureRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean; inspecting: boolean } | null>(null);
+  const gestureRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean; selection: CrosshairSelection | null } | null>(null);
   const previousViewRef = useRef<{ firstAt: number | undefined; step: number; focusRequest: number } | null>(null);
   const requestedBeforeRef = useRef<number | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
@@ -106,24 +98,26 @@ function ChartSvg({
   const pendingZoomLeftRef = useRef<number | null>(null);
   const [zoom, setZoom] = useState({ factor: 1 });
   const [pinching, setPinching] = useState(false);
-  const [viewport, setViewport] = useState({ left: 0, width: 0 });
+  const [viewport, setViewport] = useState({ left: 0, width: 0, height: window.innerHeight });
   const plotClipId = useId();
   const syncViewport = useCallback(() => {
     const host = scrollRef.current;
     if (!host) return;
-    setViewport((current) => current.left === host.scrollLeft && current.width === host.clientWidth
+    const height = window.visualViewport?.height ?? window.innerHeight;
+    setViewport((current) => current.left === host.scrollLeft && current.width === host.clientWidth && current.height === height
       ? current
-      : { left: host.scrollLeft, width: host.clientWidth });
+      : { left: host.scrollLeft, width: host.clientWidth, height });
   }, []);
   const selectedIndex = selection === null ? -1 : chart.candles.findIndex((candle) => candle.openTime === selection.openTime);
   const baseWidth = Math.max(760, Math.min(12_000, chart.candles.length * 14));
   const widthForZoom = (factor: number): number => Math.max(viewport.width || 320, Math.min(24_000, baseWidth * factor));
   const width = widthForZoom(zoom.factor);
-  const height = 360;
-  const volumeHeight = 58;
+  const height = Math.round(Math.max(150, Math.min(300, viewport.height - 420)));
+  const volumeHeight = 36;
   const plotHeight = height - volumeHeight;
   const plotPadding = 24;
-  const priceHeight = plotHeight - 2 * plotPadding;
+  const plotBottomPadding = 6;
+  const priceHeight = plotHeight - plotPadding - plotBottomPadding;
   const step = width / Math.max(chart.candles.length, 1);
   const rangeStart = viewport.width > 0
     ? Math.max(0, Math.floor(viewport.left / step))
@@ -160,6 +154,8 @@ function ChartSvg({
     if (!host) return undefined;
     const observer = new ResizeObserver(syncViewport);
     observer.observe(host);
+    window.addEventListener('resize', syncViewport);
+    window.visualViewport?.addEventListener('resize', syncViewport);
     const preventBrowserPinch = (event: TouchEvent): void => {
       if (event.touches.length >= 2) event.preventDefault();
     };
@@ -167,6 +163,8 @@ function ChartSvg({
     host.addEventListener('touchmove', preventBrowserPinch, { passive: false });
     return () => {
       observer.disconnect();
+      window.removeEventListener('resize', syncViewport);
+      window.visualViewport?.removeEventListener('resize', syncViewport);
       host.removeEventListener('touchstart', preventBrowserPinch);
       host.removeEventListener('touchmove', preventBrowserPinch);
       if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
@@ -189,15 +187,22 @@ function ChartSvg({
     .filter(Boolean)
     .join(' ');
 
-  const selectPointer = (event: PointerEvent<SVGSVGElement>): void => {
+  const selectPointer = (event: PointerEvent<SVGSVGElement>, origin?: NonNullable<typeof gestureRef.current>): void => {
     if (chart.candles.length === 0) return;
     const rect = event.currentTarget.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
-    const x = (event.clientX - rect.left) / rect.width * width;
-    const index = Math.max(0, Math.min(chart.candles.length - 1, Math.floor(x / step)));
+    const anchorIndex = origin?.selection ? chart.candles.findIndex(candle => candle.openTime === origin.selection!.openTime) : -1;
+    const x = anchorIndex >= 0 && origin
+      ? xFor(anchorIndex) + (event.clientX - origin.startX) / rect.width * width
+      : (event.clientX - rect.left) / rect.width * width;
+    const boundedX = Math.max(viewport.left, Math.min(viewport.left + viewport.width - 1, x));
+    const index = Math.max(0, Math.min(chart.candles.length - 1, Math.floor(boundedX / step)));
     const candle = chart.candles[index];
     if (!candle) return;
-    const y = Math.max(plotPadding, Math.min(plotHeight - plotPadding, (event.clientY - rect.top) / rect.height * height));
+    const pointerY = origin?.selection
+      ? yFor(origin.selection.price) + (event.clientY - origin.startY) / rect.height * height
+      : (event.clientY - rect.top) / rect.height * height;
+    const y = Math.max(plotPadding, Math.min(plotHeight - plotBottomPadding, pointerY));
     const price = max - (y - plotPadding) / priceHeight * (max - min);
     onSelect({ openTime: candle.openTime, price });
   };
@@ -255,7 +260,7 @@ function ChartSvg({
             return;
           }
           if (!event.isPrimary || pointersRef.current.size !== 1) return;
-          gestureRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false, inspecting: selection !== null };
+          gestureRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false, selection };
           if (selection !== null) {
             event.preventDefault();
             event.currentTarget.setPointerCapture(event.pointerId);
@@ -267,9 +272,9 @@ function ChartSvg({
           if (!gesture || gesture.pointerId !== event.pointerId) return;
           const moved = gesture.moved || Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > 6;
           if (!moved) {
-            if (gesture.inspecting) onClear();
+            if (gesture.selection) onClear();
             else selectPointer(event);
-          } else if (!gesture.inspecting) requestOlderAtEdge();
+          } else if (!gesture.selection) requestOlderAtEdge();
           if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
         }}
         onPointerCancel={(event) => forgetPointer(event.pointerId)}
@@ -293,7 +298,7 @@ function ChartSvg({
           const gesture = gestureRef.current;
           if (!gesture || gesture.pointerId !== event.pointerId) return;
           if (Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > 6) gesture.moved = true;
-          if (gesture.inspecting && gesture.moved) selectPointer(event);
+          if (gesture.selection && gesture.moved) selectPointer(event, gesture);
         }}
       >
         <defs><clipPath id={plotClipId}><rect x="0" y="0" width={width} height={plotHeight} /></clipPath></defs>
@@ -384,7 +389,7 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyE
     : maDefinitions.filter((definition) => visibleMas[definition.key]).map((definition) => {
         const value = selected[definition.key];
         const deviation = typeof value === 'number' && value !== 0 ? (selected.close - value) / value * 100 : null;
-        return { ...definition, value, deviation, angle: selectedAngle(chart.candles, selectedIndex, definition.key) };
+        return { ...definition, value, deviation, angle: movingAverageAngle(chart.candles, selectedIndex, definition.key) };
       });
   return (
     <div className="modal-backdrop" role="presentation"
@@ -405,8 +410,7 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyE
           </div>
           <button className="close-button" type="button" onClick={onClose} aria-label="차트 닫기">×</button>
         </div>
-        <div className="ma-panel">
-          <strong>이동평균선 표시</strong>
+        <div className="ma-panel" role="group" aria-label="이동평균선 선택">
           <div className="ma-toggles">
             {maDefinitions.map((definition) => (
               <label className="ma-toggle" key={definition.key} style={{ '--ma-color': definition.color } as CSSProperties}>
@@ -426,14 +430,15 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyE
             <strong>{formatDate(selected.openTime)}</strong>
             <span>시가 {formatPrice(selected.open)} · 고가 {formatPrice(selected.high)}</span>
             <span>저가 {formatPrice(selected.low)} · 종가 {formatPrice(selected.close)}</span>
-            <span>몸통 등락률 <em className={selected.close >= selected.open ? 'positive' : 'negative'}>{signedPercent(bodyPercent(selected))}</em></span>
-            <span>최대 등락률 {signedPercent(rangePercent(selected))}</span>
+            <div className="candle-change-row"><span>몸통 <em className={selected.close >= selected.open ? 'positive' : 'negative'}>{signedPercent(bodyPercent(selected))}</em></span><span>최대 {signedPercent(rangePercent(selected))}</span></div>
             <span>거래량 {formatPrice(selected.volume)}</span>
+            <div className="candle-ma-grid">
             {selectedReadings.map((reading) => (
-              <span key={reading.key} style={{ color: reading.color }}>{reading.label} 이격 {signedPercent(reading.deviation)} <em>({reading.angle === null ? '—' : `${reading.angle >= 0 ? '+' : ''}${reading.angle.toFixed(1)}°`})</em></span>
+              <span key={reading.key} style={{ color: reading.color }} title="현재봉·이전 2봉의 고정 각도 · 1봉당 1% 상승=45° · 확대/축소와 무관">{reading.label} {signedPercent(reading.deviation)} <em>({reading.angle === null ? '—' : `${reading.angle >= 0 ? '+' : ''}${reading.angle.toFixed(1)}°`})</em></span>
             ))}
+            </div>
           </div>
-        ) : <p className="muted chart-hint">차트를 터치하면 십자선과 캔들 정보가 표시됩니다. 십자선 상태에서 드래그하면 위치가 이동합니다. 두 손가락을 벌리면 확대되고 오므리면 더 많은 캔들이 보입니다.</p>}
+        ) : null}
         <div className="price-legend">
           {chart.priceLines.map((priceLine) => {
             const style = lineStyles[priceLine.kind];

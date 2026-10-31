@@ -20,7 +20,9 @@ export interface BacktestSettings {
   minDisparityPercent: string;
   ma20HalfCloseEnabled: boolean;
   roiClosePercent: string;
-  volatilityK: string;
+  minVolatilityPercent: string;
+  volatilityK1: string;
+  volatilityK2: string;
 }
 
 export interface Candle {
@@ -141,9 +143,12 @@ export interface Signal {
   ma20?: number;
   ma60?: number;
   volatilityK?: number;
+  volatilityK1?: number;
+  volatilityK2?: number;
+  breakoutRangePercent?: number;
   breakoutRange?: number;
   breakoutLevel?: number;
-  exitMode?: 'BAR_CLOSE';
+  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE';
   waves?: Wave[];
 }
 

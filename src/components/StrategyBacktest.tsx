@@ -10,7 +10,7 @@ import {
   type BacktestRequestBody,
 } from '../api';
 import { chartForLocalTrade, isLocalBacktestRunning, pauseLocalBacktest, restoreLocalBacktest, startLocalBacktest, subscribeLocalBacktest } from '../localBacktest';
-import { loadLocalResult, localEngineVersion, type LocalJobView } from '../localJobs';
+import { loadLocalResult, engineVersionFor, type LocalJobView } from '../localJobs';
 import { estimateBars } from '../engine';
 import {
   loadBacktestHistory,
@@ -31,7 +31,7 @@ import type {
 } from '../types';
 import { ChartModal } from './ChartModal';
 import { mergeChartPages } from '../chartData';
-import { serverSettingsSnapshot } from '../backtestSettings';
+import { serverSettingsSnapshot, volatilityParameters } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
 
 interface StrategyBacktestProps {
@@ -62,7 +62,9 @@ function defaultSettings(): BacktestSettings {
     minDisparityPercent: '1.0',
     ma20HalfCloseEnabled: false,
     roiClosePercent: '100',
-    volatilityK: '0.5',
+    minVolatilityPercent: '0.5',
+    volatilityK1: '0.5',
+    volatilityK2: '1.0',
   };
 }
 
@@ -108,9 +110,13 @@ const reasonLabels: Record<string, string> = {
   MA20_HALF_BREAK: '캔들 절반 MA20 청산',
   ROI_LOSS: 'ROI 손실 청산',
   SESSION_CLOSE: '신호 캔들 마감 청산',
+  VOLATILITY_CLOSE: '변동폭 K1 종가 청산',
 };
 
 function defaultRequest(settings: BacktestSettings, strategy: Strategy): BacktestRequestBody {
+  // The optional AWS fallback still runs VOLATILITY v1. Do not silently send a
+  // v2 request to that incompatible calculation. Old server histories stay readable.
+  if (strategy === 'VOLATILITY') throw new Error('새 변동성 돌파 조건은 이 기기에서 분석합니다.');
   const body: BacktestRequestBody = {
     strategy,
     mode: settings.mode,
@@ -123,7 +129,7 @@ function defaultRequest(settings: BacktestSettings, strategy: Strategy): Backtes
     leverage: settings.leverage,
     entryMode: strategy === 'PULLBACK' ? 'SPLIT' : 'ALL_IN',
     ma10CloseEnabled: false,
-    partialTpEnabled: strategy === 'VOLATILITY' ? false : settings.partialTpEnabled,
+    partialTpEnabled: settings.partialTpEnabled,
   };
   if (settings.endDate) body.endAt = toIso(settings.endDate, settings.endTime);
   if (strategy === 'PULLBACK') body.fullTpWavePercent = Number(settings.fullTpWavePercent);
@@ -131,8 +137,6 @@ function defaultRequest(settings: BacktestSettings, strategy: Strategy): Backtes
     body.minDisparityPercent = settings.minDisparityPercent;
     body.ma20HalfCloseEnabled = settings.ma20HalfCloseEnabled;
     body.roiClosePercent = settings.roiClosePercent;
-  } else {
-    body.volatilityK = settings.volatilityK;
   }
   return body;
 }
@@ -243,11 +247,13 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     setRunning(isLocalBacktestRunning(strategy));
     const receive = (view: LocalJobView): void => {
       setLocalJob(view);
-      if (view.status !== 'COMPLETED') setSettings(view.settings);
+      const snapshot = { ...defaults, ...view.settings };
+      if (view.status !== 'COMPLETED') setSettings(snapshot);
       setRunning(view.status === 'RUNNING' && isLocalBacktestRunning(strategy));
-      analysisSettingsRef.current = view.settings;
+      analysisSettingsRef.current = snapshot;
       if (view.result) setResult(view.result);
-      setNotice(view.message);
+      setNotice(strategy === 'VOLATILITY' && view.version !== engineVersionFor(strategy) && view.status === 'COMPLETED'
+        ? '이전 변동성 돌파 조건의 결과입니다. 새 분석을 시작하면 변경된 조건으로 계산합니다.' : view.message);
       setProgress({ phase: view.progressLabel, completed: view.completed, total: view.total });
       if (view.status === 'PAUSED' && view.message && !view.message.startsWith('분석을 일시정지')) setError(view.message);
     };
@@ -260,7 +266,10 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
       if (requestId !== resultRequestRef.current) return;
       if (local) { receive(local); return; }
       const job = await getServerBacktest(contextRef.current, strategy);
-      if (job && requestId === resultRequestRef.current) setServerJob(job);
+      if (job && requestId === resultRequestRef.current) {
+        setServerJob(job);
+        if (strategy === 'VOLATILITY') setNotice('이전 변동성 돌파 조건의 서버 결과입니다. 새 분석은 변경된 조건으로 이 기기에서 계산합니다.');
+      }
     }).catch(() => undefined);
     return () => { unsubscribe(); resultRequestRef.current += 1; };
   }, [defaults, strategy]);
@@ -345,7 +354,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     if (strategy === 'PULLBACK' && (!/^\d+$/.test(settings.fullTpWavePercent) || Number(settings.fullTpWavePercent) < 1 || Number(settings.fullTpWavePercent) > 100)) throw new Error('전체 TP 파동폭은 1~100 정수로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^(0\.[1-9]|[1-9](\.\d)?|10(\.0)?)$/.test(settings.minDisparityPercent))) throw new Error('MA60 이격률은 0.1~10.0%로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^([1-9]|[1-9]\d|100)$/.test(settings.roiClosePercent))) throw new Error('ROI 손실 청산은 1~100 정수로 입력해 주세요.');
-    if (strategy === 'VOLATILITY' && (!/^(0\.[1-9]\d?|1(\.\d{1,2})?|2(\.0{1,2})?)$/.test(settings.volatilityK))) throw new Error('K값은 0.1~2.0으로 입력해 주세요.');
+    if (strategy === 'VOLATILITY') volatilityParameters(settings);
     const start = Date.parse(`${settings.startDate}T${settings.startTime}:00+09:00`);
     const end = settings.endDate ? Date.parse(`${settings.endDate}T${settings.endTime}:00+09:00`) : Date.now();
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start > Date.now()) throw new Error('분석 기간을 확인해 주세요.');
@@ -457,7 +466,9 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     setChart(null);
     setSelectedTrade(null);
     setError(null);
-    setNotice('저장된 분석 이력을 불러왔습니다.');
+    setNotice(strategy === 'VOLATILITY' && (entry.serverJobId || !entry.settings.volatilityK1)
+      ? '이전 변동성 돌파 조건의 이력입니다. 새 분석을 시작하면 변경된 조건으로 계산합니다.'
+      : '저장된 분석 이력을 불러왔습니다.');
   };
 
   const openTrade = async (trade: BacktestTrade): Promise<void> => {
@@ -568,13 +579,27 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
               </div>
             ) : (
               <div className="condition-copy">
+                <p>R = 직전 고가 − 직전 저가 · 변동폭(%) = R ÷ 직전 종가 × 100</p>
+                <p>변동폭 ≥ {settings.minVolatilityPercent}% · 0.1 ≤ K1 ≤ K2 ≤ 1.0</p>
                 <strong>롱 포지션</strong>
-                <p>1. 돌파 기준 = 현재 시가 + (직전 고가 − 직전 저가) × K</p>
-                <p>2. 현재 고가가 돌파 기준에 닿으면 기준가로 매수합니다.</p>
+                <p>1. 전전봉 종가 &lt; 시가 (음봉)</p>
+                <p>2. 직전봉 종가 &gt; 시가, 현재봉 종가 &gt; 시가 (양봉)</p>
+                <p>3. 직전 저가 &lt; 현재 저가</p>
+                <p>4. 현재 시가 + R×K1 ≤ 현재 종가 ≤ 현재 시가 + R×K2</p>
+                <p>5. 위 조건을 모두 만족한 확정봉 종가에 롱 진입</p>
+                <p>6. 진입 다음 봉부터 종가 ≥ 매수가 + R×K1이면 확정 종가에 전량 청산</p>
+                <p>7. TP = 매수가 + R · 진입 이후 고가가 TP에 닿으면 전량 청산</p>
                 <strong>숏 포지션</strong>
-                <p>1. 돌파 기준 = 현재 시가 − (직전 고가 − 직전 저가) × K</p>
-                <p>2. 현재 저가가 돌파 기준에 닿으면 기준가로 매도합니다.</p>
-                <p>3. 한 캔들에서 양쪽 기준이 모두 닿으면 순서를 알 수 없어 신호를 제외하고, 체결된 포지션은 신호 캔들 종가에 청산합니다.</p>
+                <p>1. 전전봉 종가 &gt; 시가 (양봉)</p>
+                <p>2. 직전봉 종가 &lt; 시가, 현재봉 종가 &lt; 시가 (음봉)</p>
+                <p>3. 직전 고가 &gt; 현재 고가</p>
+                <p>4. 현재 시가 − R×K2 ≤ 현재 종가 ≤ 현재 시가 − R×K1</p>
+                <p>5. 위 조건을 모두 만족한 확정봉 종가에 숏 진입</p>
+                <p>6. 진입 다음 봉부터 종가 ≤ 매수가 − R×K1이면 확정 종가에 전량 청산</p>
+                <p>7. TP = 매수가 − R · 진입 이후 저가가 TP에 닿으면 전량 청산</p>
+                <strong>공통 체결 기준</strong>
+                <p>최소 변동폭 조건을 포함해 모두 충족해야 진입합니다. 변동폭 R은 진입 시 고정하고 매수가에는 진입 슬리피지를 반영합니다. TP 접촉을 먼저 처리한 뒤 미청산 포지션에 종가 조건을 적용합니다.</p>
+                <p>별도 SL·부분 TP·신호봉 즉시 청산은 사용하지 않습니다. 확정 전 캔들 색이나 진입봉의 과거 고저가로 소급 체결하지 않습니다. 기간 말 미청산 포지션은 평가금액에 포함합니다.</p>
               </div>
             )}
           </section>
@@ -630,10 +655,16 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
               <label className="field-label">ROI 손실 청산 (%)<input inputMode="numeric" value={settings.roiClosePercent} onChange={(event) => update('roiClosePercent', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>레버리지 적용 ROI · 1~100</small></label>
             </>
           ) : (
-            <label className="field-label">변동성 K값<input inputMode="decimal" value={settings.volatilityK} onChange={(event) => update('volatilityK', event.target.value.replace(/[^0-9.]/g, '').slice(0, 4))} /><small>0.1~2.0 · 기본 0.5</small></label>
+            <>
+              <label className="field-label">변동폭 최소 (%)<span className="suffix-field"><input inputMode="decimal" value={settings.minVolatilityPercent} onChange={(event) => update('minVolatilityPercent', event.target.value.replace(/[^0-9.]/g, '').slice(0, 5))} /><b>%</b></span><small>0.1~10.0 · 기본 0.5 · 직전 변동폭 ÷ 직전 종가 × 100</small></label>
+              <div className="field-grid two">
+                <label className="field-label">K1<input inputMode="decimal" value={settings.volatilityK1} onChange={(event) => update('volatilityK1', event.target.value.replace(/[^0-9.]/g, '').slice(0, 4))} /><small>0.1~1.0 · 기본 0.5</small></label>
+                <label className="field-label">K2<input inputMode="decimal" value={settings.volatilityK2} onChange={(event) => update('volatilityK2', event.target.value.replace(/[^0-9.]/g, '').slice(0, 4))} /><small>0.1~1.0 · 기본 1.0 · K1 이상</small></label>
+              </div>
+            </>
           )}
           {strategy === 'VOLATILITY' ? (
-            <p className="muted small">선택한 캔들 주기를 하나의 세션으로 보고, 돌파 기준에 체결된 포지션을 해당 캔들 종가에 청산합니다. 부분 TP·SL은 사용하지 않습니다.</p>
+            <p className="muted small">조건을 충족한 확정봉 종가에 진입합니다. 이후 K1 종가 조건 또는 변동폭 1배 TP로 전량 청산하며 별도 SL·부분 TP는 없습니다.</p>
           ) : (
             <>
               <label className="checkbox-row"><input type="checkbox" checked={settings.partialTpEnabled} onChange={(event) => update('partialTpEnabled', event.target.checked)} /><span>부분 TP 50%</span></label>
@@ -646,9 +677,9 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
             <button className="primary-button" type="button" disabled={running || Boolean(activeServer)} onClick={() => run()}>{running || activeServer ? '분석 진행 중' : localJob?.status === 'PAUSED' ? '새 분석 시작' : '분석 시작'}</button>
             {running || activeServer ? <button className="danger-button" type="button" onClick={() => void cancel()}>{running ? '분석 일시정지' : '분석 중지'}</button> : null}
           </div>
-          {!running && !activeServer && localJob?.status === 'PAUSED' && localJob.version === localEngineVersion ? <button className="outline-button" type="button" onClick={() => run(true)}>분석 이어하기</button> : null}
+          {!running && !activeServer && localJob?.status === 'PAUSED' && localJob.version === engineVersionFor(strategy) ? <button className="outline-button" type="button" onClick={() => run(true)}>분석 이어하기</button> : null}
           {localJob && localJob.status !== 'COMPLETED' ? <p className="muted small">화면을 끄거나 탭을 닫으면 분석이 정지될 수 있습니다. 다시 열어 ‘분석 이어하기’를 누르면 저장된 지점부터 계속합니다.</p> : null}
-          {error && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
+          {error && strategy !== 'VOLATILITY' && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
           <button
             className="outline-button history-toggle"
             type="button"

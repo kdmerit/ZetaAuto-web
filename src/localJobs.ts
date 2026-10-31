@@ -8,6 +8,9 @@ import type { BacktestResult, BacktestSettings, Strategy } from './types';
 
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
+export function engineVersionFor(strategy: Strategy): string {
+  return strategy === 'VOLATILITY' ? '2.10.28' : localEngineVersion;
+}
 export interface LocalJob {
   id: string;
   version: string;
@@ -79,7 +82,7 @@ export async function loadLocalJob(strategy: Strategy): Promise<LocalJobView | n
   if (!job) return null;
   const view = jobView(job);
   if (view.status === 'RUNNING') view.status = 'PAUSED';
-  if (view.version !== localEngineVersion && view.status !== 'COMPLETED') view.message = '분석 방식이 변경되었습니다. 새 분석을 시작해 주세요.';
+  if (view.version !== engineVersionFor(strategy) && view.status !== 'COMPLETED') view.message = '분석 방식이 변경되었습니다. 새 분석을 시작해 주세요. 저장된 캔들은 재사용합니다.';
   return view;
 }
 
@@ -129,7 +132,7 @@ async function executeWithLease(
     if (options.resumeId) {
       const saved = await readJob(options.strategy);
       if (!saved || saved.id !== options.resumeId || saved.status === 'COMPLETED') throw new Error('이어갈 분석을 찾지 못했습니다.');
-      if (saved.version !== localEngineVersion) throw new Error('분석 방식이 변경되었습니다. 새 분석을 시작해 주세요.');
+      if (saved.version !== engineVersionFor(options.strategy)) throw new Error('분석 방식이 변경되었습니다. 새 분석을 시작해 주세요. 저장된 캔들은 재사용합니다.');
       job = saved;
       job.status = 'RUNNING';
       job.message = null;
@@ -141,7 +144,7 @@ async function executeWithLease(
       const { start, end } = analysisWindow(settings);
       previousJob = await readValue<SavedJob>('jobs', options.strategy);
       job = {
-        id: crypto.randomUUID(), version: localEngineVersion, strategy: options.strategy, settings,
+        id: crypto.randomUUID(), version: engineVersionFor(options.strategy), strategy: options.strategy, settings,
         status: 'RUNNING', phase: 'UNIVERSE', start, end, blockStart: start, cursor: 0,
         candidates: [], universe: [], excludedCount: 0, updatedAt: Date.now(), message: null,
         state: initialPortfolio(Number(settings.initialCapitalUsdt)), waveStates: {},

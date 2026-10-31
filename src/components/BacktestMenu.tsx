@@ -25,7 +25,7 @@ export function BacktestMenu({ onOpen, onSignOut, email }: BacktestMenuProps) {
       strategy: 'VOLATILITY' as const,
       title: '변동성 돌파 백테스트',
       description:
-        '직전 캔들 변동폭에 K값을 적용한 돌파 기준으로 진입하고, 신호 캔들 마감에 청산합니다.',
+        '3봉 방향·최소 변동폭·K1~K2 종가 구간으로 진입하고, 이후 K1 종가 조건 또는 변동폭 1배 TP로 청산합니다.',
     },
   ];
 
@@ -53,8 +53,7 @@ export function BacktestMenu({ onOpen, onSignOut, email }: BacktestMenuProps) {
         </button>
         {expanded ? (
           <p className="muted menu-description">
-            분석할 전략을 선택해 과거 매매 성적을 확인합니다. 개별 종목은 브라우저에서 바로 계산하고,
-            전체 종목이나 긴 분석은 AWS 분석 서버를 사용합니다.
+            분석할 전략을 선택해 과거 매매 성적을 확인합니다. 개별·전체 종목 모두 저장된 캔들을 우선 사용해 이 기기에서 계산합니다.
           </p>
         ) : null}
 

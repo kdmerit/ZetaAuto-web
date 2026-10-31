@@ -1,5 +1,15 @@
 import type { BacktestSettings } from './types';
 
+export function volatilityParameters(settings: BacktestSettings): { minimum: number; k1: number; k2: number } {
+  const minimum = Number(settings.minVolatilityPercent);
+  const k1 = Number(settings.volatilityK1);
+  const k2 = Number(settings.volatilityK2);
+  if (!Number.isFinite(minimum) || minimum < 0.1 || minimum > 10) throw new Error('최소 변동폭은 0.1~10.0%로 입력해 주세요.');
+  if (![k1, k2].every(value => Number.isFinite(value) && value >= 0.1 && value <= 1)) throw new Error('K1·K2는 0.1~1.0으로 입력해 주세요.');
+  if (k1 > k2) throw new Error('K1은 K2 이하로 입력해 주세요.');
+  return { minimum, k1, k2 };
+}
+
 function koreanDateTime(value: unknown): { date: string; time: string } | null {
   if (typeof value !== 'string') return null;
   const timestamp = Date.parse(value);
@@ -23,7 +33,7 @@ export function serverSettingsSnapshot(
     settings.interval = request.interval;
   }
   if (request.side === 'BOTH' || request.side === 'LONG' || request.side === 'SHORT') settings.side = request.side;
-  for (const key of ['initialCapitalUsdt', 'betAmountUsdt', 'leverage', 'fullTpWavePercent', 'minDisparityPercent', 'roiClosePercent', 'volatilityK'] as const) {
+  for (const key of ['initialCapitalUsdt', 'betAmountUsdt', 'leverage', 'fullTpWavePercent', 'minDisparityPercent', 'roiClosePercent', 'minVolatilityPercent', 'volatilityK1', 'volatilityK2'] as const) {
     const value = request[key];
     if ((typeof value === 'string' && value.trim() !== '' || typeof value === 'number') && Number.isFinite(Number(value))) {
       settings[key] = String(value);

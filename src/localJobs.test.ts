@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cacheCandles, lease, openCacheDatabase, readValue } from './database';
-import { executeLocalJob, loadLocalJob, loadLocalResult, type LocalJobView } from './localJobs';
+import { cacheCandles, lease, openCacheDatabase, readValue, writeValue } from './database';
+import { engineVersionFor, executeLocalJob, loadLocalJob, loadLocalResult, type LocalJobView } from './localJobs';
 import { ensureCandles, instrumentEligibility, listInstruments } from './marketData';
 import type { BacktestSettings, Candle } from './types';
 
@@ -14,7 +14,7 @@ const origin = Date.UTC(2026, 0, 1) / 1000;
 const settings: BacktestSettings = {
   mode: 'ALL', symbol: 'AAA', interval: '1h', startDate: '2026-01-01', startTime: '09:00', endDate: '2026-01-12', endTime: '05:00',
   initialCapitalUsdt: '250', betAmountUsdt: '100', leverage: '2', side: 'BOTH', partialTpEnabled: false,
-  fullTpWavePercent: '100', minDisparityPercent: '1.0', ma20HalfCloseEnabled: false, roiClosePercent: '100', volatilityK: '0.5',
+  fullTpWavePercent: '100', minDisparityPercent: '1.0', ma20HalfCloseEnabled: false, roiClosePercent: '100', minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1.0',
 };
 
 beforeEach(async () => {
@@ -30,8 +30,10 @@ beforeEach(async () => {
   vi.mocked(ensureCandles).mockImplementation(async (_instrument, _interval, from, end) => {
     const rows: Candle[] = [];
     for (let at = from; at < end; at += 3600) {
-      const spike = Math.round((at - origin) / 3600) % 20 === 10;
-      rows.push({ openTime: at, closeTime: at + 3600, open: 100, high: spike ? 103 : 101, low: spike ? 99.5 : 99, close: spike ? 102 : 100, volume: 10 });
+      const phase = ((Math.round((at - origin) / 3600) % 20) + 20) % 20;
+      const prices = phase === 8 ? [101, 102, 99, 100] : phase === 9 ? [100, 102, 99, 101]
+        : phase === 10 ? [101, 104, 100, 103] : phase === 11 ? [103, 108, 102, 106] : [100, 101, 99, 100];
+      rows.push({ openTime: at, closeTime: at + 3600, open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: 10 });
     }
     return rows;
   });
@@ -107,8 +109,8 @@ describe('durable local analysis', () => {
     const cached: Candle[] = [];
     for (let at = first; at < end; at += 3600) cached.push({ openTime: at, closeTime: at + 3600, open: 100, high: 102, low: 99, close: 101, volume: 10 });
     await cacheCandles('CTUSDT', '1h', cached);
-    await executeLocalJob({ strategy: 'VOLATILITY', settings: october }, () => undefined, new AbortController().signal);
-    const paused = (await loadLocalJob('VOLATILITY'))!;
+    await executeLocalJob({ strategy: 'DISPARITY', settings: october }, () => undefined, new AbortController().signal);
+    const paused = (await loadLocalJob('DISPARITY'))!;
     expect(paused.version).toBe('2.10.26');
     expect(paused.status).toBe('PAUSED');
     expect(paused.cursor).toBe(1);
@@ -126,12 +128,32 @@ describe('durable local analysis', () => {
       throw new Error('prepared symbols must not be downloaded again');
     });
     vi.stubGlobal('fetch', fetcher);
-    await executeLocalJob({ strategy: 'VOLATILITY', resumeId: paused.id }, () => undefined, new AbortController().signal);
-    const resumed = (await loadLocalJob('VOLATILITY'))!;
+    await executeLocalJob({ strategy: 'DISPARITY', resumeId: paused.id }, () => undefined, new AbortController().signal);
+    const resumed = (await loadLocalJob('DISPARITY'))!;
     expect(resumed.id).toBe(paused.id);
     expect(resumed.status).toBe('COMPLETED');
     expect(resumed.universeCount).toBe(2);
-    expect(resumed.result?.entryCount).toBeGreaterThan(0);
+    expect(resumed.result?.observedBars).toBeGreaterThan(0);
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('separates changed volatility checkpoints but preserves other strategy versions and old results', async () => {
+    expect(engineVersionFor('PULLBACK')).toBe('2.10.26');
+    expect(engineVersionFor('DISPARITY')).toBe('2.10.26');
+    expect(engineVersionFor('VOLATILITY')).toBe('2.10.28');
+    const controller = new AbortController();
+    await executeLocalJob({ strategy: 'VOLATILITY', settings }, view => {
+      if (view.blockStart > origin) controller.abort();
+    }, controller.signal);
+    const header = (await readValue<Record<string, unknown>>('jobs', 'VOLATILITY'))!;
+    await writeValue('jobs', 'VOLATILITY', { ...header, version: '2.10.26' });
+    const old = (await loadLocalJob('VOLATILITY'))!;
+    expect(old.message).toContain('분석 방식이 변경');
+    await expect(executeLocalJob({ strategy: 'VOLATILITY', resumeId: old.id }, () => undefined, new AbortController().signal)).rejects.toThrow('새 분석');
+    expect((await loadLocalJob('VOLATILITY'))!.id).toBe(old.id);
+    await executeLocalJob({ strategy: 'VOLATILITY', settings }, () => undefined, new AbortController().signal);
+    const completed = (await loadLocalJob('VOLATILITY'))!;
+    expect(completed.id).not.toBe(old.id);
+    expect(await loadLocalResult(completed.id)).not.toBeNull();
   });
 });
