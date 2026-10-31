@@ -5,7 +5,7 @@ export function volatilityParameters(settings: BacktestSettings): { minimum: num
   const k1 = Number(settings.volatilityK1);
   const k2 = Number(settings.volatilityK2);
   if (!Number.isFinite(minimum) || minimum < 0.1 || minimum > 10) throw new Error('최소 변동폭은 0.1~10.0%로 입력해 주세요.');
-  if (![k1, k2].every(value => Number.isFinite(value) && value >= 0.1 && value <= 1)) throw new Error('K1·K2는 0.1~1.0으로 입력해 주세요.');
+  if (![k1, k2].every(value => Number.isFinite(value) && value >= 0.1 && value <= 10)) throw new Error('K1·K2는 0.1~10.0으로 입력해 주세요.');
   if (k1 > k2) throw new Error('K1은 K2 이하로 입력해 주세요.');
   return { minimum, k1, k2 };
 }

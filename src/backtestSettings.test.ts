@@ -53,17 +53,22 @@ describe('volatility v2 parameter validation', () => {
     expect(volatilityParameters({ ...fallback, minVolatilityPercent: minimum }).minimum).toBe(Number(minimum));
   });
   it('accepts inclusive K limits and an equal lower/upper band', () => {
-    expect(volatilityParameters({ ...fallback, volatilityK1: '0.1', volatilityK2: '1.0' })).toMatchObject({ k1: 0.1, k2: 1 });
-    expect(volatilityParameters({ ...fallback, volatilityK1: '1.0', volatilityK2: '1.0' })).toMatchObject({ k1: 1, k2: 1 });
+    expect(volatilityParameters({ ...fallback, volatilityK1: '0.1', volatilityK2: '10.0' })).toMatchObject({ k1: 0.1, k2: 10 });
+    expect(volatilityParameters({ ...fallback, volatilityK1: '10.0', volatilityK2: '10.0' })).toMatchObject({ k1: 10, k2: 10 });
+  });
+  it.each(['1.01', '2.0', '5.5', '9.9'])('accepts expanded K multiplier %s without clamping', value => {
+    expect(volatilityParameters({ ...fallback, volatilityK1: value, volatilityK2: '10.0' }).k1).toBe(Number(value));
+    expect(volatilityParameters({ ...fallback, volatilityK2: value }).k2).toBe(Number(value));
   });
   it.each(['', '0', '0.09', '10.1', 'bad', 'Infinity'])('rejects invalid minimum %s', minimum => {
     expect(() => volatilityParameters({ ...fallback, minVolatilityPercent: minimum })).toThrow('최소 변동폭');
   });
-  it.each(['', '0', '0.09', '1.01', '2.0', 'NaN'])('rejects invalid K %s', value => {
+  it.each(['', '0', '0.09', '10.01', '11', 'NaN', 'Infinity'])('rejects invalid K %s', value => {
     expect(() => volatilityParameters({ ...fallback, volatilityK1: value })).toThrow('K1·K2');
     expect(() => volatilityParameters({ ...fallback, volatilityK2: value })).toThrow('K1·K2');
   });
   it('rejects a reversed band instead of swapping user settings', () => {
     expect(() => volatilityParameters({ ...fallback, volatilityK1: '0.8', volatilityK2: '0.5' })).toThrow('K1은 K2');
+    expect(() => volatilityParameters({ ...fallback, volatilityK1: '10.0', volatilityK2: '9.9' })).toThrow('K1은 K2');
   });
 });

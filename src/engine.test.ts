@@ -19,7 +19,7 @@ function row(index: number, prices: number[]): Candle {
 }
 function candles(short = false, current = [100, 115, 95, 112], tail: number[][] = []): Candle[] {
   const raw = [...Array.from({ length: 20 }, () => [100, 101, 99, 100]),
-    [104, 105, 99, 100], [100, 110, 90, 105], current, ...tail];
+    [104, 105, 99, 100], [100, 125, 90, 120], current, ...tail];
   return raw.map((prices, i) => row(i, short ? [200 - prices[0]!, 200 - prices[2]!, 200 - prices[1]!, 200 - prices[3]!] : prices));
 }
 function minutesFor(parent: Candle, ordered = false, short = false): Candle[] {
@@ -48,6 +48,37 @@ function simulate(short = false, current?: number[], tail: number[][] = [], chan
 }
 
 describe('intrabar volatility signal preparation', () => {
+  it.each([false, true])('uses the previous absolute body, not its longer wick range, short=%s', short => {
+    const signal = prepared(short).bars[0]!.signal!;
+    expect(signal.breakoutRange).toBe(20);
+    expect(signal.breakoutRangePercent).toBeCloseTo(20 / (short ? 80 : 120) * 100, 10);
+    expect(signal.entry).toBe(short ? 90 : 110);
+  });
+  it.each([false, true])('rejects a small previous body even when its wicks exceed the minimum, short=%s', short => {
+    const data = candles(short);
+    data[21] = row(21, short ? [100, 110, 50, 99.8] : [100, 150, 90, 100.2]);
+    const document = prepareSymbolBlock('BTCUSDT', data, settings, 'VOLATILITY', origin + 22 * 3600, data.at(-1)!.closeTime);
+    expect(document.bars[0]!.signal).toBeNull();
+  });
+  it.each([false, true])('keeps the percentage denominator at the previous close and accepts its exact minimum, short=%s', short => {
+    const data = candles(short);
+    data[21] = row(21, short ? [101, 110, 50, 100] : [99, 150, 90, 100]);
+    const prepare = (minimum: string) => prepareSymbolBlock('BTCUSDT', data, { ...settings, minVolatilityPercent: minimum }, 'VOLATILITY', origin + 22 * 3600, data.at(-1)!.closeTime);
+    expect(prepare('1').bars[0]!.signal).toMatchObject({ breakoutRange: 1, breakoutRangePercent: 1, entry: short ? 99.5 : 100.5 });
+    expect(prepare('1.00001').bars[0]!.signal).toBeNull();
+  });
+  it.each([false, true])('uses K above one for both entry and TP instead of clamping it, short=%s', short => {
+    const signal = prepared(short, [100, 132, 95, 130], [], { volatilityK1: '1.5', volatilityK2: '2.0' }).bars[0]!.signal!;
+    expect(signal).toMatchObject({ entry: short ? 70 : 130, target: short ? 40 : 160,
+      volatilityEntryLimit: short ? 60 : 140, volatilityK1: 1.5, volatilityK2: 2 });
+  });
+  it.each([false, true])('supports an inclusive K1/K2=10 band with a positive short target, short=%s', short => {
+    const data = candles(short, [100, 111, 95, 110]);
+    data[21] = row(21, short ? [101, 110, 90, 100] : [99, 110, 90, 100]);
+    const signal = prepareSymbolBlock('BTCUSDT', data, { ...settings, volatilityK1: '10.0', volatilityK2: '10.0' }, 'VOLATILITY', origin + 22 * 3600, data.at(-1)!.closeTime).bars[0]!.signal!;
+    expect(signal).toMatchObject({ entry: short ? 90 : 110, target: short ? 80 : 120,
+      volatilityEntryLimit: short ? 90 : 110, volatilityK1: 10, volatilityK2: 10 });
+  });
   it.each([false, true])('uses two confirmed candle directions and the first K1 touch, short=%s', short => {
     const signal = prepared(short).bars[0]!.signal!;
     expect(signal).toMatchObject({ side: short ? 'SHORT' : 'LONG', entry: short ? 90 : 110,
@@ -79,6 +110,14 @@ describe('intrabar volatility signal preparation', () => {
 });
 
 describe('intrabar execution and frozen running SL', () => {
+  it.each([false, true])('executes an expanded K multiplier against body-based entry and TP, short=%s', short => {
+    const { result } = simulate(short, [100, 132, 95, 130], [[130, 170, 125, 160]], { volatilityK1: '1.5', volatilityK2: '2.0' }, true);
+    expect(result.exitReasons).toEqual({ FULL_TP: 1 });
+    const trade = result.recentTrades[0]!;
+    expect(trade.entryPrice).toBeCloseTo(short ? 70 * 0.9998 : 130 * 1.0002, 10);
+    expect(trade.exitPrice).toBeCloseTo(trade.entryPrice + (short ? -30 : 30), 10);
+    expect(trade.signal.stop).toBe(short ? 105 : 95);
+  });
   it.each([false, true])('enters before close and never uses a later low/high as its entry-time SL, short=%s', short => {
     const { result } = simulate(short);
     expect(result.entryCount).toBe(1);
@@ -103,7 +142,7 @@ describe('intrabar execution and frozen running SL', () => {
   });
   it.each([false, true])('does not retroactively stop on a low/high visited before entry, short=%s', short => {
     const { state, result } = simulate(short, [100, 115, 95, 111], [], { volatilityK1: '0.1' });
-    // R*K1=2: both paths reach TP before any post-entry adverse wick.
+    // Previous body R=20, R*K1=2: TP precedes any post-entry adverse wick.
     expect(result.exitReasons).toEqual({ FULL_TP: 1 });
     expect(state.closed).toBe(1);
   });

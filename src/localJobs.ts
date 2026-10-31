@@ -10,7 +10,7 @@ import type { BacktestResult, BacktestSettings, Strategy } from './types';
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'VOLATILITY' ? '2.10.30' : localEngineVersion;
+  return strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
 }
 export interface LocalJob {
   id: string;

@@ -25,7 +25,7 @@ export function BacktestMenu({ onOpen, onSignOut, email }: BacktestMenuProps) {
       strategy: 'VOLATILITY' as const,
       title: '변동성 돌파 백테스트',
       description:
-        '직전 변동폭과 K1 돌파에 봉 중간 진입하며, 진입 시점 SL·선택형 K1 TP·다음 봉 종가 청산을 분석합니다.',
+        '직전봉 몸통 변동폭과 K1 돌파에 봉 중간 진입하며, 진입 시점 SL·선택형 K1 TP·다음 봉 종가 청산을 분석합니다.',
     },
   ];
 

@@ -582,8 +582,8 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
               </div>
             ) : (
               <div className="condition-copy">
-                <p>R = 직전 고가 − 직전 저가 · 변동폭(%) = R ÷ 직전 종가 × 100</p>
-                <p>변동폭 ≥ {settings.minVolatilityPercent}% · 0.1 ≤ K1 ≤ K2 ≤ 1.0</p>
+                <p>R = |직전 종가 − 직전 시가| (몸통 크기) · 변동폭(%) = R ÷ 직전 종가 × 100</p>
+                <p>변동폭 ≥ {settings.minVolatilityPercent}% · 0.1 ≤ K1 ≤ K2 ≤ 10.0</p>
                 <strong>롱 포지션</strong>
                 <p>1. 전전봉 종가 &lt; 시가 (음봉)</p>
                 <p>2. 직전봉 양봉 · 돌파 순간의 현재가 &gt; 현재 시가</p>
@@ -661,10 +661,10 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
             </>
           ) : (
             <>
-              <label className="field-label">변동폭 최소 (%)<span className="suffix-field"><input inputMode="decimal" value={settings.minVolatilityPercent} onChange={(event) => update('minVolatilityPercent', event.target.value.replace(/[^0-9.]/g, '').slice(0, 5))} /><b>%</b></span><small>0.1~10.0 · 기본 0.5 · 직전 변동폭 ÷ 직전 종가 × 100</small></label>
+              <label className="field-label">변동폭 최소 (%)<span className="suffix-field"><input inputMode="decimal" value={settings.minVolatilityPercent} onChange={(event) => update('minVolatilityPercent', event.target.value.replace(/[^0-9.]/g, '').slice(0, 5))} /><b>%</b></span><small>0.1~10.0 · 기본 0.5 · 직전 몸통 크기 ÷ 직전 종가 × 100</small></label>
               <div className="field-grid two">
-                <label className="field-label">K1<input inputMode="decimal" value={settings.volatilityK1} onChange={(event) => update('volatilityK1', event.target.value.replace(/[^0-9.]/g, '').slice(0, 4))} /><small>0.1~1.0 · 기본 0.5</small></label>
-                <label className="field-label">K2<input inputMode="decimal" value={settings.volatilityK2} onChange={(event) => update('volatilityK2', event.target.value.replace(/[^0-9.]/g, '').slice(0, 4))} /><small>0.1~1.0 · 기본 1.0 · K1 이상</small></label>
+                <label className="field-label">K1<input inputMode="decimal" value={settings.volatilityK1} onChange={(event) => update('volatilityK1', event.target.value.replace(/[^0-9.]/g, '').slice(0, 4))} /><small>0.1~10.0 · 기본 0.5</small></label>
+                <label className="field-label">K2<input inputMode="decimal" value={settings.volatilityK2} onChange={(event) => update('volatilityK2', event.target.value.replace(/[^0-9.]/g, '').slice(0, 4))} /><small>0.1~10.0 · 기본 1.0 · K1 이상</small></label>
               </div>
             </>
           )}

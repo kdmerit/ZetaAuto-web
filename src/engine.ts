@@ -343,7 +343,7 @@ function volatilitySignals(
     const previous = candles[index - 1];
     const older = candles[index - 2];
     if (!candle || !previous || !older || previous.close <= 0) continue;
-    const range = previous.high - previous.low;
+    const range = Math.abs(previous.close - previous.open);
     if (!Number.isFinite(range) || range <= 0) continue;
     const rangePercent = range / previous.close * 100;
     if (rangePercent + 1e-10 < minimum) continue;
@@ -932,7 +932,7 @@ export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'DISPARITY') {
     return 'MA20·MA60 사이 이격, 현재 캔들 절반, 직전 5봉 몸통 돌파와 직전 10봉 MA20 조건을 분석합니다.';
   }
-  return '직전 변동폭·2봉 방향과 K1 돌파로 봉 중간에 진입하고, 진입 시점 SL·선택형 K1 TP·다음 봉 종가 청산을 적용합니다.';
+  return '직전봉 몸통 변동폭·2봉 방향과 K1 돌파로 봉 중간에 진입하고, 진입 시점 SL·선택형 K1 TP·다음 봉 종가 청산을 적용합니다.';
 }
 
 export function estimateBars(settings: BacktestSettings): number {
