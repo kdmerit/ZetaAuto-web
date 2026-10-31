@@ -90,11 +90,12 @@ export async function chartForLocalTrade(
   trade: BacktestTrade,
   settings: BacktestSettings,
   beforeAt?: number,
+  focusAt?: number,
 ): Promise<ChartData> {
   if (!result.localRunId && result.candles.length) return buildLocalChart(result, trade, settings);
   const seconds = intervalSeconds(settings.interval);
   const first = trade.executions.find(execution => execution.kind === 'ENTRY')?.candleOpenAt ?? trade.entryAt - seconds;
-  const end = beforeAt ?? Math.min(Math.floor(Date.now() / 1000 / seconds) * seconds, first + 160 * seconds);
+  const end = beforeAt ?? Math.min(Math.floor(Date.now() / 1000 / seconds) * seconds, (focusAt ?? first) + 160 * seconds);
   const start = end - 300 * seconds;
   const symbol = trade.symbol === 'LOCAL' ? `${settings.symbol.replace(/USDT$/i, '').toUpperCase()}USDT` : trade.symbol;
   const instrument = (await listInstruments(symbol))[0] ?? { symbol, launchAt: 0 };

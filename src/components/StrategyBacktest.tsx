@@ -528,6 +528,35 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     }
   };
 
+  const focusChartCandle = async (openTime: number): Promise<boolean> => {
+    if (!chart || !selectedTrade || olderRequestRef.current) return false;
+    if (chart.candles.some(candle => candle.openTime === openTime)) return true;
+    if (![...chart.markers, ...(chart.executions ?? [])].some(fill =>
+      (fill.kind === 'ENTRY' || fill.kind === 'CLOSE') && fill.openTime === openTime)) return false;
+    const requestId = ++chartRequestRef.current;
+    olderRequestRef.current = true;
+    setLoadingOlder(true);
+    setChartError(null);
+    try {
+      const next = serverJob
+        ? await fetchServerChart(context, selectedTrade.symbol, selectedTrade.side, new Date(selectedTrade.exitAt * 1000).toISOString(), serverJob.jobId, selectedTrade.tradeId, undefined, new Date(openTime * 1000).toISOString())
+        : result ? await chartForLocalTrade(result, selectedTrade, analysisSettingsRef.current, undefined, openTime) : null;
+      if (requestId !== chartRequestRef.current) return false;
+      if (!next?.candles.some(candle => candle.openTime === openTime)) throw new Error('해당 체결 시점의 캔들을 불러오지 못했습니다. 다시 눌러 주세요.');
+      // Distant entry/exit pages are not adjacent candles: switch pages rather
+      // than merging them into a chart with an unmarked gap in its time axis.
+      setChart(next);
+      setHasOlder(true);
+      return true;
+    } catch (failure) {
+      if (requestId === chartRequestRef.current) setChartError(failure instanceof Error ? failure.message : '체결 캔들을 불러오지 못했습니다.');
+      return false;
+    } finally {
+      olderRequestRef.current = false;
+      setLoadingOlder(false);
+    }
+  };
+
   const closeChart = (): void => {
     const hadHistoryEntry = chartHistoryPushed.current;
     chartRequestRef.current += 1;
@@ -717,7 +746,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
         {result ? <ResultCard result={result} onOpenTrade={(trade) => void openTrade(trade)} /> : null}
       </div>
       {chartLoading ? <div className="modal-backdrop"><div className="loading-card">체결 차트를 불러오는 중입니다…</div></div> : null}
-      {chart ? <ChartModal chart={chart} onClose={closeChart} onLoadOlder={selectedTrade && hasOlder ? loadOlder : undefined} loadingOlder={loadingOlder} historyError={chartError} /> : null}
+      {chart ? <ChartModal chart={chart} onClose={closeChart} onLoadOlder={selectedTrade && hasOlder ? loadOlder : undefined} onFocusCandle={focusChartCandle} loadingOlder={loadingOlder} historyError={chartError} /> : null}
     </main>
   );
 }

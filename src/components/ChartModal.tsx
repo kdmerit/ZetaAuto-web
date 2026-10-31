@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 
-import { chartTimestamp, entryCandleIndex, firstEntryTime, movingAverageAngle, visibleCandleRange } from '../chartData';
+import { chartTimestamp, entryCandleIndex, firstEntryTime, movingAverageAngle, tradeChartFills, visibleCandleRange } from '../chartData';
 import { chartMaStorageKey, loadChartMas, saveChartMas } from '../storage';
 import type { ChartData, ChartMarker, EnrichedCandle, PriceLine } from '../types';
 
@@ -8,6 +8,7 @@ interface ChartModalProps {
   chart: ChartData;
   onClose: () => void;
   onLoadOlder?: () => Promise<boolean>;
+  onFocusCandle?: (openTime: number) => Promise<boolean>;
   loadingOlder?: boolean;
   historyError?: string | null;
 }
@@ -15,6 +16,11 @@ interface ChartModalProps {
 interface CrosshairSelection {
   openTime: number;
   price: number;
+}
+
+interface FocusRequest {
+  openTime: number | null;
+  revision: number;
 }
 
 const maDefinitions = [
@@ -84,13 +90,13 @@ function ChartSvg({
   selection: CrosshairSelection | null;
   onSelect: (selection: CrosshairSelection) => void;
   onClear: () => void;
-  focusRequest: number;
+  focusRequest: FocusRequest;
   onLoadOlder?: () => Promise<boolean>;
   loadingOlder?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const gestureRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean; selection: CrosshairSelection | null } | null>(null);
-  const previousViewRef = useRef<{ firstAt: number | undefined; step: number; focusRequest: number } | null>(null);
+  const previousViewRef = useRef<{ firstAt: number | undefined; step: number; focusRequest: FocusRequest | null } | null>(null);
   const requestedBeforeRef = useRef<number | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const pointersRef = useRef(new Map<number, { x: number; y: number }>());
@@ -113,7 +119,7 @@ function ChartSvg({
   const widthForZoom = (factor: number): number => Math.max(viewport.width || 320, Math.min(24_000, baseWidth * factor));
   const width = widthForZoom(zoom.factor);
   const height = Math.max(150, viewport.height);
-  const volumeHeight = 36;
+  const volumeHeight = 72;
   const plotHeight = height - volumeHeight;
   const plotPadding = 24;
   const plotBottomPadding = 6;
@@ -136,17 +142,25 @@ function ChartSvg({
     const host = scrollRef.current;
     if (!host) return;
     const previous = previousViewRef.current;
+    let completedFocus = previous?.focusRequest ?? null;
     if (pendingZoomLeftRef.current !== null) {
       host.scrollLeft = Math.max(0, pendingZoomLeftRef.current);
       pendingZoomLeftRef.current = null;
     } else if (!previous || previous.focusRequest !== focusRequest) {
-      const entryIndex = entryCandleIndex(chart);
-      host.scrollLeft = entryIndex === null ? 0 : Math.max(0, (entryIndex + 0.5) * step - host.clientWidth / 2);
+      const focusIndex = focusRequest.openTime === null
+        ? entryCandleIndex(chart)
+        : chart.candles.findIndex(candle => candle.openTime === focusRequest.openTime);
+      if (focusIndex !== null && focusIndex >= 0) {
+        host.scrollLeft = Math.max(0, (focusIndex + 0.5) * step - host.clientWidth / 2);
+        completedFocus = focusRequest;
+      }
     } else if (previous.firstAt !== chart.candles[0]?.openTime) {
       const prepended = chart.candles.findIndex((candle) => candle.openTime === previous.firstAt);
       if (prepended >= 0) host.scrollLeft = (host.scrollLeft / previous.step + prepended) * step;
     }
-    previousViewRef.current = { firstAt: chart.candles[0]?.openTime, step, focusRequest };
+    // An async page update can land after the focus request; consume it only
+    // once the requested candle is actually present.
+    previousViewRef.current = { firstAt: chart.candles[0]?.openTime, step, focusRequest: completedFocus };
     syncViewport();
   }, [chart, step, focusRequest, syncViewport, zoom]);
   useLayoutEffect(() => {
@@ -169,7 +183,7 @@ function ChartSvg({
       host.removeEventListener('touchmove', preventBrowserPinch);
       if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
     };
-  }, [syncViewport]);
+  }, [syncViewport, focusRequest.revision]);
   const candleWidth = Math.max(3, step * 0.48);
   const markerByIndex = useMemo(() => {
     const map = new Map<number, ChartMarker[]>();
@@ -225,7 +239,9 @@ function ChartSvg({
 
   return (
     <div className="chart-frame">
-    <div ref={scrollRef} className={`chart-scroll${selection === null ? '' : ' crosshair-active'}${pinching ? ' pinching' : ''}`} onScroll={() => {
+    {/* A fresh scroller cancels native fling momentum for explicit fill jumps,
+        while the chart component retains its zoom and loaded candle data. */}
+    <div key={focusRequest.revision} ref={scrollRef} className={`chart-scroll${selection === null ? '' : ' crosshair-active'}${pinching ? ' pinching' : ''}`} onScroll={() => {
       if (scrollFrameRef.current === null) scrollFrameRef.current = requestAnimationFrame(() => {
         scrollFrameRef.current = null;
         syncViewport();
@@ -365,11 +381,30 @@ function ChartSvg({
   );
 }
 
-export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyError }: ChartModalProps) {
+export function ChartModal({ chart, onClose, onLoadOlder, onFocusCandle, loadingOlder, historyError }: ChartModalProps) {
   const backdropPointer = useRef<number | null>(null);
   const [visibleMas, setVisibleMas] = useState(loadChartMas);
   const [selection, setSelection] = useState<CrosshairSelection | null>(null);
-  const [focusRequest, setFocusRequest] = useState(0);
+  const [focusRequest, setFocusRequest] = useState<FocusRequest>({ openTime: null, revision: 0 });
+  const [focusing, setFocusing] = useState(false);
+  const [focusError, setFocusError] = useState<string | null>(null);
+  const fills = useMemo(() => tradeChartFills(chart), [chart]);
+  const focusExecution = async (fill: ChartMarker): Promise<void> => {
+    if (focusing || loadingOlder) return;
+    setFocusing(true);
+    setFocusError(null);
+    try {
+      if (!chart.candles.some(candle => candle.openTime === fill.openTime)) {
+        if (!onFocusCandle || !await onFocusCandle(fill.openTime)) return;
+      }
+      setSelection(null);
+      setFocusRequest(current => ({ openTime: fill.openTime, revision: current.revision + 1 }));
+    } catch {
+      setFocusError('체결 캔들을 불러오지 못했습니다. 다시 눌러 주세요.');
+    } finally {
+      setFocusing(false);
+    }
+  };
   useEffect(() => {
     const refresh = () => setVisibleMas(loadChartMas());
     const onStorage = (event: StorageEvent) => {
@@ -427,32 +462,34 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyE
             ))}
           </div>
         </div>
-        <ChartSvg chart={chart} visibleMas={visibleMas} selection={selection} onSelect={setSelection} onClear={() => setSelection(null)} focusRequest={focusRequest} onLoadOlder={onLoadOlder} loadingOlder={loadingOlder} />
-        {infoCandle ? (
-          <div className={`candle-info${selected ? '' : ' candle-info-hidden'}`} aria-hidden={!selected}>
-            <strong>{formatDate(infoCandle.openTime)}</strong>
-            <span>시가 {formatPrice(infoCandle.open)} · 고가 {formatPrice(infoCandle.high)}</span>
-            <span>저가 {formatPrice(infoCandle.low)} · 종가 {formatPrice(infoCandle.close)}</span>
-            <div className="candle-change-row"><span>몸통 <em className={infoCandle.close >= infoCandle.open ? 'positive' : 'negative'}>{signedPercent(bodyPercent(infoCandle))}</em></span><span>최대 {signedPercent(rangePercent(infoCandle))}</span></div>
-            <span>거래량 {formatPrice(infoCandle.volume)}</span>
-            <div className="candle-ma-grid">
-            {selectedReadings.map((reading) => (
-              <span key={reading.key} style={{ color: reading.color }} title="현재봉·이전 2봉의 고정 각도 · 1봉당 1% 상승=45° · 확대/축소와 무관">{reading.label} {signedPercent(reading.deviation)} <em>({reading.angle === null ? '—' : `${reading.angle >= 0 ? '+' : ''}${reading.angle.toFixed(1)}°`})</em></span>
-            ))}
+        <ChartSvg chart={chart} visibleMas={visibleMas} selection={selection} onSelect={setSelection} onClear={() => setSelection(null)} focusRequest={focusRequest} onLoadOlder={onLoadOlder} loadingOlder={loadingOlder || focusing} />
+        <div className="chart-readout">
+          <div className="candle-info-heading">
+            <strong className={selected ? undefined : 'candle-info-hidden'} aria-hidden={!selected}>{infoCandle ? formatDate(infoCandle.openTime) : ''}</strong>
+            <div className="trade-price-links" role="group" aria-label="체결 가격 이동">
+              {([['entry', '매수가', fills.entry], ['close', '청산가', fills.close]] as const).map(([kind, label, fill]) => (
+                <button className={`trade-price-link ${kind}`} key={kind} type="button" disabled={!fill || focusing || loadingOlder}
+                  aria-label={fill ? `${label} ${formatPrice(fill.price)} · ${kind === 'entry' ? '최초 매수' : '최종 청산'} 지점으로 이동` : `${label} 정보 없음`}
+                  onClick={() => { if (fill) void focusExecution(fill); }}>{label} {fill ? formatPrice(fill.price) : '—'}</button>
+              ))}
             </div>
           </div>
-        ) : null}
-        <div className="price-legend">
-          {chart.priceLines.map((priceLine) => {
-            const style = lineStyles[priceLine.kind];
-            if (priceLine.kind === 'ENTRY' || priceLine.kind === 'FIRST_ENTRY') {
-              return <button className="entry-focus" key={`${priceLine.kind}-${priceLine.price}`} type="button" style={{ color: style.color }} aria-label={`${style.label} ${formatPrice(priceLine.price)} · 최초 매수 지점으로 이동`} onClick={() => { setSelection(null); setFocusRequest((value) => value + 1); }}>{style.label} {formatPrice(priceLine.price)}</button>;
-            }
-            return <span key={`${priceLine.kind}-${priceLine.price}`} style={{ color: style.color }}>{style.label} {formatPrice(priceLine.price)}</span>;
-          })}
+          {infoCandle ? (
+            <div className={`candle-info${selected ? '' : ' candle-info-hidden'}`} aria-hidden={!selected}>
+              <span>시가 {formatPrice(infoCandle.open)} · 고가 {formatPrice(infoCandle.high)}</span>
+              <span>저가 {formatPrice(infoCandle.low)} · 종가 {formatPrice(infoCandle.close)}</span>
+              <div className="candle-change-row"><span>몸통 <em className={infoCandle.close >= infoCandle.open ? 'positive' : 'negative'}>{signedPercent(bodyPercent(infoCandle))}</em></span><span>최대 {signedPercent(rangePercent(infoCandle))}</span></div>
+              <span>거래량 {formatPrice(infoCandle.volume)}</span>
+              <div className="candle-ma-grid">
+                {selectedReadings.map((reading) => (
+                  <span key={reading.key} style={{ color: reading.color }} title="현재봉·이전 2봉의 고정 각도 · 1봉당 1% 상승=45° · 확대/축소와 무관">{reading.label} {signedPercent(reading.deviation)} <em>({reading.angle === null ? '—' : `${reading.angle >= 0 ? '+' : ''}${reading.angle.toFixed(1)}°`})</em></span>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
-        {loadingOlder ? <p className="muted small" role="status">과거 캔들 불러오는 중…</p> : null}
-        {historyError ? <p className="error" role="alert">{historyError}</p> : null}
+        {loadingOlder || focusing ? <p className="muted small" role="status">차트 불러오는 중…</p> : null}
+        {historyError || focusError ? <p className="error" role="alert">{historyError || focusError}</p> : null}
       </section>
     </div>
   );

@@ -53,6 +53,19 @@ export function firstEntryTime(chart: ChartData): number | null {
   return times.length > 0 ? Math.min(...times) : null;
 }
 
+/** Prices and candle times come from actual fills, including off-page events. */
+export function tradeChartFills(chart: ChartData): { entry: ChartMarker | null; close: ChartMarker | null } {
+  const events = new Map([...chart.markers, ...(chart.executions ?? [])].map(event => [event.id, event]));
+  let entry: ChartMarker | null = null;
+  let close: ChartMarker | null = null;
+  for (const event of events.values()) {
+    if (!Number.isFinite(event.openTime) || !Number.isFinite(event.price) || event.price <= 0) continue;
+    if (event.kind === 'ENTRY' && (entry === null || event.openTime < entry.openTime)) entry = event;
+    if (event.kind === 'CLOSE' && (close === null || event.openTime >= close.openTime)) close = event;
+  }
+  return { entry, close };
+}
+
 export function entryCandleIndex(chart: ChartData): number | null {
   const opened = firstEntryTime(chart);
   const entryIndex = opened === null ? -1 : chart.candles.findIndex((candle) => candle.openTime === opened);

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { fetchServerChart, fetchServerEntryChart } from './api';
-import { chartTimestamp, entryCandleIndex, mergeChartPages, movingAverageAngle, visibleCandleRange } from './chartData';
+import { chartTimestamp, entryCandleIndex, mergeChartPages, movingAverageAngle, tradeChartFills, visibleCandleRange } from './chartData';
 import type { ChartData, ChartMarker } from './types';
 
 const opened = Date.parse('2026-10-28T14:00:00Z') / 1000;
@@ -40,6 +40,43 @@ function wireChart(chart: ChartData): unknown {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe('trade price navigation', () => {
+  it('uses the first actual entry and final close, ignoring split entries and partial exits', () => {
+    const chart = chartAt([opened]);
+    const exit = { ...entry(), id: 'close', kind: 'CLOSE' as const, label: 'C' as const, openTime: opened + 1000 * 3600, price: 91 };
+    chart.executions = [exit,
+      { ...entry(), id: 'split', kind: 'SPLIT_ENTRY', openTime: opened + 3600, price: 95 },
+      { ...entry(), id: 'partial', kind: 'PARTIAL_TP', openTime: opened + 7200, price: 97 }, entry()];
+    chart.priceLines.push({ kind: 'SL', price: 110 }, { kind: 'TP', price: 90 });
+    expect(tradeChartFills(chart)).toEqual({ entry: entry(), close: exit });
+    expect(exit.candleIndex).toBe(-1);
+  });
+  it('prefers the full execution ledger over duplicated visible markers', () => {
+    const chart = chartAt([opened]);
+    chart.markers = [{ ...entry(), price: 777 }];
+    chart.executions = [entry()];
+    expect(tradeChartFills(chart).entry?.price).toBe(100);
+  });
+  it('works with old marker-only charts and does not change dates after prepending', () => {
+    const chart = chartAt([opened, opened + 3600]);
+    const exit = { ...entry(), id: 'close', kind: 'CLOSE' as const, label: 'C' as const, openTime: opened + 3600, price: 98 };
+    chart.markers = [{ ...entry(), candleIndex: 0 }, { ...exit, candleIndex: 1 }];
+    const before = tradeChartFills(chart);
+    const after = tradeChartFills(mergeChartPages(chartAt([opened - 3600]), chart));
+    expect(after.entry?.openTime).toBe(before.entry?.openTime);
+    expect(after.close?.price).toBe(98);
+    expect(after.close?.candleIndex).toBe(2);
+  });
+  it('does not label partial TP, a target, or a candle close as an actual final exit', () => {
+    const chart = chartAt([opened]);
+    chart.executions = [entry(), { ...entry(), id: 'partial', kind: 'PARTIAL_TP', price: 95 }];
+    chart.priceLines.push({ kind: 'TP', price: 90 });
+    expect(tradeChartFills(chart).close).toBeNull();
+    chart.executions = [{ ...entry(), price: Number.NaN }];
+    expect(tradeChartFills(chart).entry).toBeNull();
+  });
+});
 
 describe('fixed three-candle MA angle', () => {
   it('uses t−2 to t with positive rising, negative falling and flat zero', () => {
