@@ -12,6 +12,7 @@ describe('web backtest candle utilities', () => {
   it('maps supported intervals to Bybit seconds', () => {
     expect(intervalSeconds('15m')).toBe(900);
     expect(intervalSeconds('1h')).toBe(3600);
+    expect(intervalSeconds('1m')).toBe(60);
     expect(intervalSeconds('4h')).toBe(14_400);
     expect(intervalSeconds('1d')).toBe(86_400);
   });
@@ -48,6 +49,7 @@ describe('web backtest candle utilities', () => {
       ma20HalfCloseEnabled: false,
       roiClosePercent: '100',
       minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1.0',
+      volatilityTpEnabled: true, volatilityNextCloseEnabled: false,
     });
     expect(window.symbol).toBe('BTCUSDT');
     expect(window.end - window.start).toBe(86_400);

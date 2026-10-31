@@ -1,5 +1,6 @@
 export type Strategy = 'PULLBACK' | 'DISPARITY' | 'VOLATILITY';
 export type BacktestInterval = '15m' | '1h' | '4h' | '1d';
+export type CandleInterval = BacktestInterval | '1m';
 export type BacktestMode = 'SINGLE' | 'ALL';
 export type BacktestSide = 'BOTH' | 'LONG' | 'SHORT';
 
@@ -23,6 +24,8 @@ export interface BacktestSettings {
   minVolatilityPercent: string;
   volatilityK1: string;
   volatilityK2: string;
+  volatilityTpEnabled: boolean;
+  volatilityNextCloseEnabled: boolean;
 }
 
 export interface Candle {
@@ -103,6 +106,7 @@ export interface Execution {
   candleOpenAt: number;
   price: number;
   quantity: number;
+  timing?: 'INTRABAR' | 'BAR_CLOSE';
 }
 
 export interface BacktestTrade {
@@ -147,10 +151,14 @@ export interface Signal {
   volatilityK2?: number;
   // Absent in pre-SL volatility histories; do not turn their placeholder into a stop.
   volatilityStopEnabled?: boolean;
+  volatilityPriorExtreme?: number;
+  volatilityEntryLimit?: number;
+  volatilityTpEnabled?: boolean;
+  volatilityNextCloseEnabled?: boolean;
   breakoutRangePercent?: number;
   breakoutRange?: number;
   breakoutLevel?: number;
-  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE';
+  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP';
   waves?: Wave[];
 }
 

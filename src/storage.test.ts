@@ -20,13 +20,14 @@ describe('volatility settings migration and persistence', () => {
     partialTpEnabled: false, fullTpWavePercent: '100', minDisparityPercent: '1.0',
     ma20HalfCloseEnabled: false, roiClosePercent: '100',
     minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1.0',
+    volatilityTpEnabled: true, volatilityNextCloseEnabled: false,
   };
   it('fills the three new fields without reusing the obsolete single K or losing other preferences', () => {
     values.set('zetaauto.web.backtest.settings.VOLATILITY', JSON.stringify({ symbol: 'ETH', leverage: '7', volatilityK: '1.5' }));
     expect(loadSettings('VOLATILITY', defaults)).toMatchObject({ ...defaults, symbol: 'ETH', leverage: '7' });
   });
   it('retains minimum range, K1 and K2 across a settings reload', () => {
-    const saved = { ...defaults, minVolatilityPercent: '1.7', volatilityK1: '0.2', volatilityK2: '0.8' };
+    const saved = { ...defaults, minVolatilityPercent: '1.7', volatilityK1: '0.2', volatilityK2: '0.8', volatilityTpEnabled: false, volatilityNextCloseEnabled: true };
     saveSettings('VOLATILITY', saved);
     expect(loadSettings('VOLATILITY', defaults)).toEqual(saved);
   });

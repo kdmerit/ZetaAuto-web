@@ -1,6 +1,7 @@
 /** Shared virtual account replay, with conservative OHLC paths and resumable JSON state. */
 import type { PreparedBar, PreparedSymbol } from './engine';
 import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, Execution, PriceLine, Signal } from './types';
+import { validateMinuteCandles } from './intrabar';
 
 const feeRate = 0.00055;
 const slippage = 0.0002;
@@ -75,7 +76,7 @@ function priceLines(p: Holding): PriceLine[] {
   if (p.signal.strategy === 'VOLATILITY') return [
     { kind: 'ENTRY', price: p.first },
     ...(p.signal.volatilityStopEnabled === true ? [{ kind: 'SL' as const, price: p.stop }] : []),
-    ...(p.signal.exitMode === 'VOLATILITY_CLOSE' ? [{ kind: 'TP' as const, price: p.target }] : []),
+    ...(p.signal.exitMode === 'VOLATILITY_CLOSE' || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false ? [{ kind: 'TP' as const, price: p.target }] : []),
   ];
   const split = p.signal.strategy === 'PULLBACK';
   const lines: PriceLine[] = [{ kind: split ? 'FIRST_ENTRY' : 'ENTRY', price: p.first }];
@@ -88,8 +89,11 @@ function priceLines(p: Holding): PriceLine[] {
   return lines.filter(line => Number.isFinite(line.price) && line.price > 0);
 }
 
-function recordFill(p: Holding, kind: Execution['kind'], price: number, quantity: number, candle: Candle, opening = false): void {
-  p.executions.push({ kind, price, quantity, at: opening ? candle.openTime : candle.closeTime, candleOpenAt: candle.openTime });
+function recordFill(p: Holding, kind: Execution['kind'], price: number, quantity: number, candle: Candle, opening = false, confirmedClose = false): void {
+  const intrabar = p.signal.exitMode === 'VOLATILITY_TP' && !opening && !confirmedClose;
+  const parentOpenTime = (candle as Candle & { parentOpenTime?: number }).parentOpenTime ?? candle.openTime;
+  p.executions.push({ kind, price, quantity, at: opening || intrabar ? candle.openTime : candle.closeTime, candleOpenAt: parentOpenTime,
+    ...(intrabar ? { timing: 'INTRABAR' as const } : confirmedClose ? { timing: 'BAR_CLOSE' as const } : {}) });
 }
 
 function cancelSecond(state: PortfolioState, p: Holding): void {
@@ -101,7 +105,7 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE'].includes(reason);
+  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'NEXT_CANDLE_CLOSE'].includes(reason);
   const fill = market ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
   const qty = Math.min(p.qty, quantity);
   const profit = gross(p, fill, qty);
@@ -114,11 +118,11 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   p.margin -= released;
   p.qty -= qty;
   state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + 1;
-  recordFill(p, reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE', fill, qty, candle, opening);
+  recordFill(p, reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE', fill, qty, candle, opening, reason === 'NEXT_CANDLE_CLOSE');
   state.trades.push({
     tradeId: `local:${p.symbol}:${p.opened}:${candle.openTime}:${p.executions.length}`,
     symbol: p.symbol, side: p.signal.side, entryAt: p.opened,
-    exitAt: opening ? candle.openTime : candle.closeTime,
+    exitAt: p.executions.at(-1)!.at,
     entryPrice: p.entry, exitPrice: fill, quantity: qty, reason, netProfitUsdt: profit - fee,
     signalIndex: p.signal.index, entryIndex: p.signal.index, exitIndex: -1,
     signal: { ...p.signal, target: p.target, partial: p.partial ?? undefined, second: p.secondFill ?? p.second,
@@ -143,12 +147,14 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   if (state.cash + 1e-10 < bet * (1 + leverage * feeRate)) { state.insufficientFunds += 1; return; }
   const split = signal.strategy === 'PULLBACK';
   const entry = signal.entry * (signal.side === 'LONG' ? 1 + slippage : 1 - slippage);
-  const target = signal.exitMode === 'VOLATILITY_CLOSE' ? entry + (signal.side === 'LONG' ? 1 : -1) * signal.breakoutRange! : signal.target;
-  if (!Number.isFinite(target) || target <= 0) return;
+  const direction = signal.side === 'LONG' ? 1 : -1;
+  const target = signal.exitMode === 'VOLATILITY_TP' ? entry + direction * signal.breakoutRange! * signal.volatilityK1!
+    : signal.exitMode === 'VOLATILITY_CLOSE' ? entry + direction * signal.breakoutRange! : signal.target;
+  if (!Number.isFinite(target) || target <= 0 && (signal.exitMode !== 'VOLATILITY_TP' || signal.volatilityTpEnabled !== false)) return;
   const margin = split ? bet / 2 : bet;
   const fee = margin * leverage * feeRate;
   const p: Holding = {
-    symbol, signal, opened: candle.closeTime, first: entry, entry, qty: margin * leverage / entry,
+    symbol, signal, opened: signal.exitMode === 'VOLATILITY_TP' ? candle.openTime : candle.closeTime, first: entry, entry, qty: margin * leverage / entry,
     margin, reserved: bet - margin, reservedFee: (bet - margin) * leverage * feeRate,
     pending: split, second: split ? (entry + signal.stop) / 2 : entry,
     target,
@@ -203,10 +209,27 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
     if (p.signal.strategy === 'DISPARITY') p.stop = p.first;
     close(state, p, p.partial, p.qty / 2, 'PARTIAL_TP', candle, opening);
   }
-  if (long ? price >= p.target : price <= p.target) {
+  const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' || p.signal.volatilityTpEnabled !== false;
+  if (targetEnabled && (long ? price >= p.target : price <= p.target)) {
     const disparity = p.signal.strategy === 'DISPARITY';
     close(state, p, disparity ? price : p.target, p.qty, disparity ? 'MA60_TOUCH' : 'FULL_TP', candle, opening);
   }
+}
+
+function replaySegment(state: PortfolioState, p: Holding, before: number, after: number, candle: Candle, settings: BacktestSettings): void {
+  const levels = new Set<number>();
+  if (p.signal.exitMode !== 'VOLATILITY_TP' || p.signal.volatilityTpEnabled !== false) levels.add(p.target);
+  if (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true) levels.add(p.stop);
+  if (p.pending) levels.add(p.second);
+  if (p.partial !== null && !p.partialDone) levels.add(p.partial);
+  const roi = roiPrice(p, settings);
+  if (roi !== null) levels.add(roi);
+  const crossed = [...levels].filter(level => level !== before && level >= Math.min(before, after) && level <= Math.max(before, after)).sort((a, b) => after < before ? b - a : a - b);
+  for (const price of crossed) {
+    if (!state.positions[p.symbol]) break;
+    atPrice(state, p.symbol, price, candle, settings);
+  }
+  if (state.positions[p.symbol]) p.mark = after;
 }
 
 function replayPath(position: Holding, bar: PreparedBar, settings: BacktestSettings, lowFirst: boolean): PortfolioState {
@@ -219,14 +242,7 @@ function replayPath(position: Holding, bar: PreparedBar, settings: BacktestSetti
   for (let i = 1; i < path.length && state.positions[p.symbol]; i += 1) {
     const before = path[i - 1]!;
     const after = path[i]!;
-    const levels = new Set([p.target]);
-    if (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true) levels.add(p.stop);
-    if (p.pending) levels.add(p.second);
-    if (p.partial !== null && !p.partialDone) levels.add(p.partial);
-    const roi = roiPrice(p, settings);
-    if (roi !== null) levels.add(roi);
-    const crossed = [...levels].filter(level => level !== before && level >= Math.min(before, after) && level <= Math.max(before, after)).sort((a, b) => after < before ? b - a : a - b);
-    for (const price of crossed) atPrice(state, p.symbol, price, candle, settings);
+    replaySegment(state, p, before, after, candle, settings);
     if (state.positions[p.symbol]) {
       const halfBreak = p.signal.strategy === 'DISPARITY' && settings.ma20HalfCloseEnabled && bar.ma20 !== null
         && (p.signal.side === 'LONG' ? (candle.high + candle.low) / 2 <= bar.ma20 : (candle.high + candle.low) / 2 >= bar.ma20);
@@ -234,12 +250,94 @@ function replayPath(position: Holding, bar: PreparedBar, settings: BacktestSetti
       const closeThreshold = p.first + direction * p.signal.breakoutRange! * p.signal.volatilityK1!;
       const volatilityClose = p.signal.exitMode === 'VOLATILITY_CLOSE'
         && direction * (after - closeThreshold) >= 0;
-      if (i === path.length - 1 && volatilityClose) close(state, p, after, p.qty, 'VOLATILITY_CLOSE', candle);
+      const nextClose = p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityNextCloseEnabled === true
+        && !('parentOpenTime' in candle) && candle.openTime > p.opened;
+      if (i === path.length - 1 && nextClose) close(state, p, after, p.qty, 'NEXT_CANDLE_CLOSE', candle);
+      else if (i === path.length - 1 && volatilityClose) close(state, p, after, p.qty, 'VOLATILITY_CLOSE', candle);
       else if (halfBreak && i === path.length - 1) close(state, p, after, p.qty, 'MA20_HALF_BREAK', candle);
       else p.mark = after;
     }
   }
   return state;
+}
+
+/** Two admissible OHLC paths, with running extrema frozen only at the touch. */
+function intrabarEntryPath(symbol: string, bar: PreparedBar, candle: Candle, settings: BacktestSettings, available: number, lowFirst: boolean, runningLow: number, runningHigh: number): PortfolioState {
+  const state = initialPortfolio(available);
+  const signal = bar.signal!;
+  const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
+  const direction = signal.side === 'LONG' ? 1 : -1;
+  let low = Math.min(runningLow, candle.open);
+  let high = Math.max(runningHigh, candle.open);
+  let attempted = false;
+  const attempt = (price: number): void => {
+    attempted = true;
+    low = Math.min(low, price);
+    high = Math.max(high, price);
+    const stop = direction === 1 ? low : high;
+    const prior = signal.volatilityPriorExtreme!;
+    const limit = signal.volatilityEntryLimit!;
+    const eligible = direction * (price - bar.candle.open) > 0
+      && direction * (stop - prior) > 0 && direction * (limit - price) >= -Math.max(1e-12, Math.abs(limit)) * 1e-12;
+    if (eligible) enter(state, symbol, { ...signal, entry: price, stop, initialStop: stop, activeStop: stop }, candle, settings);
+  };
+  // A jump in the next minute fills at its observed open, not a better trigger.
+  // An opening fill beyond K2 is rejected rather than chased on a later return.
+  if (direction * (candle.open - signal.entry) >= 0) attempt(candle.open);
+  for (let i = 1; i < path.length; i += 1) {
+    let before = path[i - 1]!;
+    const after = path[i]!;
+    if (!attempted && direction * (before - signal.entry) < 0 && direction * (after - signal.entry) >= 0) {
+      attempt(signal.entry);
+      before = signal.entry;
+    }
+    const position = state.positions[symbol];
+    if (position) replaySegment(state, position, before, after, candle, settings);
+    low = Math.min(low, after);
+    high = Math.max(high, after);
+  }
+  return state;
+}
+
+function replayIntrabarEntry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
+  const minutes = bar.intrabarCandles ?? [];
+  validateMinuteCandles(bar.candle, minutes);
+  let state = initialPortfolio(available);
+  let attempted = false;
+  let low = bar.candle.open;
+  let high = bar.candle.open;
+  const direction = bar.signal!.side === 'LONG' ? 1 : -1;
+  for (const minute of minutes) {
+    const executionCandle = { ...minute, parentOpenTime: bar.candle.openTime };
+    const touched = direction === 1 ? minute.high >= bar.signal!.entry : minute.low <= bar.signal!.entry;
+    if (!attempted && touched) {
+      attempted = true;
+      state = worstPath([intrabarEntryPath(symbol, bar, executionCandle, settings, available, true, low, high),
+        intrabarEntryPath(symbol, bar, executionCandle, settings, available, false, low, high)]);
+    } else if (state.positions[symbol]) {
+      const position = state.positions[symbol]!;
+      const next = { ...bar, candle: executionCandle, signal: null };
+      mergePath(state, worstPath([replayPath(position, next, settings, true), replayPath(position, next, settings, false)]), symbol);
+    }
+    low = Math.min(low, minute.low);
+    high = Math.max(high, minute.high);
+    if (attempted && !state.positions[symbol]) break;
+  }
+  return state;
+}
+
+function worstPath(candidates: PortfolioState[]): PortfolioState {
+  const stopped = candidates.filter(candidate => candidate.exitReasons.SL);
+  return (stopped.length ? stopped : candidates).sort((a, b) => portfolioEquity(a) - portfolioEquity(b))[0]!;
+}
+
+function mergePath(state: PortfolioState, selected: PortfolioState, symbol: string, baseline = 0): void {
+  state.cash += selected.cash - baseline;
+  for (const field of ['realized', 'fees', 'closed', 'wins', 'losses', 'breakeven', 'secondFills', 'entries', 'signals', 'insufficientFunds'] as const) state[field] += selected[field];
+  for (const [reason, count] of Object.entries(selected.exitReasons)) state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + count;
+  state.trades = [...state.trades, ...selected.trades].slice(-100);
+  if (selected.positions[symbol]) state.positions[symbol] = selected.positions[symbol];
+  else delete state.positions[symbol];
 }
 
 function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, settings: BacktestSettings): void {
@@ -250,16 +348,10 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
     position.target = bar.ma60Exit;
   }
   const candidates = [replayPath(position, bar, settings, true), replayPath(position, bar, settings, false)];
-  const stopped = candidates.filter(candidate => candidate.exitReasons.SL);
-  const selected = (stopped.length ? stopped : candidates).sort((a, b) => portfolioEquity(a) - portfolioEquity(b))[0]!;
-  for (const field of ['cash', 'realized', 'fees', 'closed', 'wins', 'losses', 'breakeven', 'secondFills'] as const) state[field] += selected[field];
-  for (const [reason, count] of Object.entries(selected.exitReasons)) state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + count;
-  state.trades = [...state.trades, ...selected.trades].slice(-100);
-  if (selected.positions[symbol]) state.positions[symbol] = selected.positions[symbol];
-  else delete state.positions[symbol];
+  mergePath(state, worstPath(candidates), symbol);
 }
 
-/** All exits at a timestamp release funds before any new entries, in deterministic symbol order. */
+/** Close-entry strategies reuse exits; intrabar entries use the opening cash budget only. */
 export function replayPortfolioBlock(state: PortfolioState, documents: PreparedSymbol[], settings: BacktestSettings, start: number, end: number, seconds: number): void {
   const byTime = new Map<number, { symbol: string; bar: PreparedBar }[]>();
   for (const document of [...documents].sort((a, b) => a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0)) {
@@ -274,8 +366,19 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
     const rows = byTime.get(at) ?? [];
     const present = new Set(rows.map(row => row.symbol));
     if (Object.keys(state.positions).some(symbol => !present.has(symbol))) throw new Error('보유 종목의 캔들이 누락되어 계산을 중단했습니다.');
+    const occupiedAtOpen = new Set(Object.keys(state.positions));
+    // A later intrabar/close exit must not finance an earlier breakout touch.
+    // No same-bar profit/margin recycling or exit-then-retroactive re-entry.
+    let intrabarBudget = Math.max(0, state.cash);
     for (const { symbol, bar } of rows) processBar(state, symbol, bar, settings);
-    for (const { symbol, bar } of rows) if (bar.signal) enter(state, symbol, bar.signal, bar.candle, settings);
+    for (const { symbol, bar } of rows) {
+      if (bar.signal?.exitMode !== 'VOLATILITY_TP' || occupiedAtOpen.has(symbol)) continue;
+      const available = Math.max(0, Math.min(intrabarBudget, state.cash));
+      const selected = replayIntrabarEntry(symbol, bar, settings, available);
+      mergePath(state, selected, symbol, available);
+      if (selected.entries) intrabarBudget = Math.max(0, intrabarBudget - Number(settings.betAmountUsdt) * (1 + Number(settings.leverage) * feeRate));
+    }
+    for (const { symbol, bar } of rows) if (bar.signal && bar.signal.exitMode !== 'VOLATILITY_TP') enter(state, symbol, bar.signal, bar.candle, settings);
     if (!rows.length) continue;
     state.observedBars += 1;
     state.dataStartAt ??= at;

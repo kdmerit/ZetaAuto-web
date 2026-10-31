@@ -65,6 +65,8 @@ function defaultSettings(): BacktestSettings {
     minVolatilityPercent: '0.5',
     volatilityK1: '0.5',
     volatilityK2: '1.0',
+    volatilityTpEnabled: true,
+    volatilityNextCloseEnabled: false,
   };
 }
 
@@ -111,6 +113,7 @@ const reasonLabels: Record<string, string> = {
   ROI_LOSS: 'ROI 손실 청산',
   SESSION_CLOSE: '신호 캔들 마감 청산',
   VOLATILITY_CLOSE: '변동폭 K1 종가 청산',
+  NEXT_CANDLE_CLOSE: '매수 다음 캔들 종가 청산',
 };
 
 function defaultRequest(settings: BacktestSettings, strategy: Strategy): BacktestRequestBody {
@@ -466,7 +469,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     setChart(null);
     setSelectedTrade(null);
     setError(null);
-    setNotice(strategy === 'VOLATILITY' && (entry.serverJobId || !entry.settings.volatilityK1)
+    setNotice(strategy === 'VOLATILITY' && (entry.serverJobId || typeof entry.settings.volatilityTpEnabled !== 'boolean')
       ? '이전 변동성 돌파 조건의 이력입니다. 새 분석을 시작하면 변경된 조건으로 계산합니다.'
       : '저장된 분석 이력을 불러왔습니다.');
   };
@@ -583,25 +586,25 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
                 <p>변동폭 ≥ {settings.minVolatilityPercent}% · 0.1 ≤ K1 ≤ K2 ≤ 1.0</p>
                 <strong>롱 포지션</strong>
                 <p>1. 전전봉 종가 &lt; 시가 (음봉)</p>
-                <p>2. 직전봉 종가 &gt; 시가, 현재봉 종가 &gt; 시가 (양봉)</p>
-                <p>3. 직전 저가 &lt; 현재 저가</p>
-                <p>4. 현재 시가 + R×K1 ≤ 현재 종가 ≤ 현재 시가 + R×K2</p>
-                <p>5. 위 조건을 모두 만족한 확정봉 종가에 롱 진입</p>
-                <p>6. 진입 다음 봉부터 종가 ≥ 매수가 + R×K1이면 확정 종가에 전량 청산</p>
-                <p>7. TP = 매수가 + R · 진입 이후 고가가 TP에 닿으면 전량 청산</p>
-                <p>8. SL = 매수 신호봉 저가 · 이후 저가가 SL 이하이면 전량 손절</p>
+                <p>2. 직전봉 양봉 · 돌파 순간의 현재가 &gt; 현재 시가</p>
+                <p>3. 직전 저가 &lt; 진입 시점까지의 현재봉 저가</p>
+                <p>4. 현재가가 현재 시가 + R×K1에 처음 닿으면 롱 진입 · 진입 허용 상한은 현재 시가 + R×K2</p>
+                <p>5. TP 켜짐: 매수가 + R×K1 접촉 시 전량 청산 · 종가 확정 대기 없음</p>
+                <p>6. SL = 진입 시점까지의 현재봉 저가로 고정 · 진입 직후부터 접촉 시 전량 손절</p>
+                <p>7. 다음 캔들 종가 청산 켜짐: 진입봉의 바로 다음 봉이 마감되면 전량 시장가 청산</p>
                 <strong>숏 포지션</strong>
                 <p>1. 전전봉 종가 &gt; 시가 (양봉)</p>
-                <p>2. 직전봉 종가 &lt; 시가, 현재봉 종가 &lt; 시가 (음봉)</p>
-                <p>3. 직전 고가 &gt; 현재 고가</p>
-                <p>4. 현재 시가 − R×K2 ≤ 현재 종가 ≤ 현재 시가 − R×K1</p>
-                <p>5. 위 조건을 모두 만족한 확정봉 종가에 숏 진입</p>
-                <p>6. 진입 다음 봉부터 종가 ≤ 매수가 − R×K1이면 확정 종가에 전량 청산</p>
-                <p>7. TP = 매수가 − R · 진입 이후 저가가 TP에 닿으면 전량 청산</p>
-                <p>8. SL = 매수 신호봉 고가 · 이후 고가가 SL 이상이면 전량 손절</p>
+                <p>2. 직전봉 음봉 · 돌파 순간의 현재가 &lt; 현재 시가</p>
+                <p>3. 직전 고가 &gt; 진입 시점까지의 현재봉 고가</p>
+                <p>4. 현재가가 현재 시가 − R×K1에 처음 닿으면 숏 진입 · 진입 허용 하한은 현재 시가 − R×K2</p>
+                <p>5. TP 켜짐: 매수가 − R×K1 접촉 시 전량 청산 · 종가 확정 대기 없음</p>
+                <p>6. SL = 진입 시점까지의 현재봉 고가로 고정 · 진입 직후부터 접촉 시 전량 손절</p>
+                <p>7. 다음 캔들 종가 청산 켜짐: 진입봉의 바로 다음 봉이 마감되면 전량 시장가 청산</p>
                 <strong>공통 체결 기준</strong>
-                <p>최소 변동폭 조건을 포함해 모두 충족해야 진입합니다. 변동폭 R과 신호봉 SL은 진입 시 고정하고 매수가에는 진입 슬리피지를 반영합니다. 같은 봉에서 SL·TP에 모두 닿으면 SL 우선이며, 미청산 포지션에 종가 조건을 적용합니다.</p>
-                <p>부분 TP·신호봉 즉시 청산은 사용하지 않습니다. SL도 진입 다음 봉부터 적용하며, SL을 넘겨 갭이 나면 해당 봉 시가에 손절합니다. 확정 전 캔들 색이나 진입봉의 과거 고저가로 소급 체결하지 않습니다. 기간 말 미청산 포지션은 평가금액에 포함합니다.</p>
+                <p>최소 변동폭 조건을 포함해 모두 충족해야 진입합니다. R·진입 시점 SL은 고정하며 실제 매수가는 시장가 슬리피지 0.02%를 반영합니다. 연속 가격에서는 K1 가격에 진입하며, 1분봉 시가 갭이 나면 관측된 시가가 K2 범위 안일 때만 진입합니다.</p>
+                <p>TP와 다음 봉 종가 청산은 독립 옵션이며 먼저 충족한 조건으로 청산합니다. SL은 항상 적용합니다. 둘 다 끄면 SL로만 청산하며 기간 말 미청산분은 평가액에 포함합니다. 진입봉 안의 TP·SL도 적용하되, 진입 이전 움직임으로 소급 청산하지 않습니다.</p>
+                <p>신호봉의 1분봉을 시간순으로 사용해 진입 시점 SL을 계산하며, 분봉 안에서는 두 OHLC 경로 중 불리한 결과를 사용합니다. 진입·신호봉 내 청산 시각은 1분봉 시작의 추정치이고, 이후 보유 봉 TP/SL은 선택 주기 봉 시작의 추정치입니다. 다음 봉 종가 청산은 실제 마감 시각이며 정확한 틱 재현은 아닙니다.</p>
+                <p>한 종목은 봉당 최대 한 번 진입하며 봉 시작에 보유했다면 그 봉 재진입은 제외합니다. 전체종목은 종목명 순서·봉 시작의 가용자금만 진입에 사용해 같은 봉의 미래 청산 자금을 재사용하지 않습니다. SL 갭은 시가에 손절합니다.</p>
               </div>
             )}
           </section>
@@ -666,7 +669,11 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
             </>
           )}
           {strategy === 'VOLATILITY' ? (
-            <p className="muted small">조건을 충족한 확정봉 종가에 진입합니다. SL은 매수 신호봉 저가(롱)·고가(숏)이며, 이후 SL·K1 종가 조건·변동폭 1배 TP로 전량 청산합니다. 부분 TP는 없습니다.</p>
+            <>
+              <label className="checkbox-row"><input type="checkbox" checked={settings.volatilityTpEnabled} onChange={(event) => update('volatilityTpEnabled', event.target.checked)} /><span>TP (변동폭 × K1)</span></label>
+              <label className="checkbox-row"><input type="checkbox" checked={settings.volatilityNextCloseEnabled} onChange={(event) => update('volatilityNextCloseEnabled', event.target.checked)} /><span>매수 다음 캔들 종가 청산</span></label>
+              <p className="muted small">봉 중간 K1 돌파에 진입하며 SL은 진입 시점까지의 저가(롱)·고가(숏)로 고정합니다. 두 옵션은 먼저 충족한 조건으로 청산하며, 모두 끄면 SL만 적용합니다. 신호봉의 1분봉은 필요한 구간만 조회·캐시하며 1분봉 내부 경로는 보수적으로 추정합니다.</p>
+            </>
           ) : (
             <>
               <label className="checkbox-row"><input type="checkbox" checked={settings.partialTpEnabled} onChange={(event) => update('partialTpEnabled', event.target.checked)} /><span>부분 TP 50%</span></label>
@@ -766,8 +773,8 @@ function ResultCard({ result, onOpenTrade }: { result: BacktestResult; onOpenTra
           {[...result.recentTrades].reverse().slice(0, 100).map((trade) => (
             <button className="trade-row" type="button" key={trade.tradeId} onClick={() => onOpenTrade(trade)}>
               <strong>{trade.symbol} · {trade.side === 'LONG' ? '롱' : '숏'} · {reasonLabels[trade.reason] ?? trade.reason}</strong>
-              <span>{new Date(trade.entryAt * 1000).toLocaleString('ko-KR')} 진입</span>
-              <span>{new Date(trade.exitAt * 1000).toLocaleString('ko-KR')} 청산</span>
+              <span>{new Date(trade.entryAt * 1000).toLocaleString('ko-KR')} {trade.executions.find(fill => fill.kind === 'ENTRY')?.timing === 'INTRABAR' ? '진입봉 (봉 중간 체결 추정)' : '진입'}</span>
+              <span>{new Date(trade.exitAt * 1000).toLocaleString('ko-KR')} {trade.executions.at(-1)?.timing === 'INTRABAR' ? '청산봉 (봉 중간 체결 추정)' : '청산'}</span>
               <em className={trade.netProfitUsdt >= 0 ? 'positive' : 'negative'}>청산 손익 {money(trade.netProfitUsdt)} USDT · 체결 차트 보기 ›</em>
             </button>
           ))}

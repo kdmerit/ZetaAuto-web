@@ -2,6 +2,7 @@ import { chartTimestamp, firstEntryTime } from './chartData';
 import type {
   ApiEnvelope,
   BacktestInterval,
+  CandleInterval,
   BacktestSettings,
   BacktestTrade,
   Candle,
@@ -412,8 +413,8 @@ export async function fetchBybitCandlesRange(
   return candles;
 }
 
-export function intervalSeconds(interval: BacktestSettings['interval']): number {
-  return interval === '15m'
+export function intervalSeconds(interval: CandleInterval): number {
+  return interval === '1m' ? 60 : interval === '15m'
     ? 900
     : interval === '1h'
       ? 3600

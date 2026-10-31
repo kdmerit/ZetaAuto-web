@@ -17,6 +17,22 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('public market data and reuse', () => {
+  it('requests only missing 1-minute candles and never confuses them with cached hourly bars', async () => {
+    const minutes = Array.from({ length: 60 }, (_, i) => ({ ...row(0), openTime: origin + i * 60, closeTime: origin + (i + 1) * 60 }));
+    await cacheCandles('MINUTEUSDT', '1h', [row(0)]);
+    await cacheCandles('MINUTEUSDT', '1m', minutes.slice(0, 20));
+    const fetcher = vi.fn(async (input: URL | RequestInfo) => {
+      const url = new URL(String(input));
+      expect(url.searchParams.get('interval')).toBe('1');
+      expect(Number(url.searchParams.get('start'))).toBe((origin + 20 * 60) * 1000);
+      return new Response(JSON.stringify({ retCode: 0, result: { list: minutes.slice(20).reverse().map(candle => [candle.openTime * 1000, candle.open, candle.high, candle.low, candle.close, candle.volume].map(String)) } }));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const instrument = { symbol: 'MINUTEUSDT', launchAt: origin };
+    expect(await ensureCandles(instrument, '1m', origin, origin + 3600)).toEqual(minutes);
+    expect(await ensureCandles(instrument, '1m', origin, origin + 3600)).toEqual(minutes);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
   it('downloads only missing candles, then reuses them without a network request', async () => {
     await cacheCandles('BTCUSDT', '1h', [row(0), row(1)]);
     const fetcher = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {

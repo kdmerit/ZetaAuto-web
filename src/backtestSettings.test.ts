@@ -9,6 +9,7 @@ const fallback: BacktestSettings = {
   initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '1',
   fullTpWavePercent: '100', minDisparityPercent: '1', roiClosePercent: '100', minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1.0',
   partialTpEnabled: true, ma20HalfCloseEnabled: true,
+  volatilityTpEnabled: true, volatilityNextCloseEnabled: false,
 };
 
 describe('settings snapshots for server histories', () => {
@@ -33,6 +34,10 @@ describe('settings snapshots for server histories', () => {
   it('keeps local snapshots for older records without a server request', () => {
     expect(serverSettingsSnapshot({}, fallback)).toEqual(fallback);
     expect(serverSettingsSnapshot({ symbol: 'ETHUSDT' }, fallback).symbol).toBe('ETH');
+  });
+  it('restores both independent volatility checkboxes, including explicitly disabled TP', () => {
+    expect(serverSettingsSnapshot({ volatilityTpEnabled: false, volatilityNextCloseEnabled: true }, fallback))
+      .toMatchObject({ volatilityTpEnabled: false, volatilityNextCloseEnabled: true });
   });
 
   it('does not replace usable defaults with malformed request fields', () => {

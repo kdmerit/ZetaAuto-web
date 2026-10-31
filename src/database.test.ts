@@ -34,6 +34,13 @@ describe('partitioned candle database', () => {
     expect(spy.mock.calls.every(call => call[0] instanceof IDBKeyRange)).toBe(true);
     spy.mockRestore();
   });
+  it('stores 1-minute pages separately and reuses overlapping minute ranges', async () => {
+    const minutes = Array.from({ length: 1100 }, (_, i) => ({ ...row(0), openTime: origin + i * 60, closeTime: origin + (i + 1) * 60 }));
+    await cacheCandles('MINUTEUSDT', '1m', minutes);
+    await cacheCandles('MINUTEUSDT', '1h', [row(0)]);
+    expect(await readCandlePages('MINUTEUSDT', '1m', origin + 990 * 60, origin + 1010 * 60)).toEqual(minutes.slice(990, 1010));
+    expect(await readCandlePages('MINUTEUSDT', '1h', origin, origin + 3600)).toEqual([row(0)]);
+  });
 
   it('merges overlaps, keeps chronological order, and never caches an unfinished candle', async () => {
     await cacheCandles('ETHUSDT', '1h', [row(2), row(0), row(1)]);

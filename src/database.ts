@@ -1,5 +1,5 @@
 /** IndexedDB shared by pages and workers. Only public candles and simulation data are stored. */
-import type { BacktestInterval, Candle } from './types';
+import type { CandleInterval, Candle } from './types';
 
 const databaseName = 'zetaauto-web-cache';
 const databaseVersion = 2;
@@ -104,7 +104,7 @@ export async function lease(owner: string, release = false): Promise<boolean> {
 }
 
 function seconds(interval: string): number {
-  return interval === '15m' ? 900 : interval === '1h' ? 3600 : interval === '4h' ? 14_400 : 86_400;
+  return interval === '1m' ? 60 : interval === '15m' ? 900 : interval === '1h' ? 3600 : interval === '4h' ? 14_400 : 86_400;
 }
 
 export async function readCandlePages(symbol: string, interval: string, start: number, end: number): Promise<Candle[]> {
@@ -203,7 +203,7 @@ export async function maintainCache(force = false): Promise<void> {
   await done;
 }
 
-export async function cacheCandles(symbol: string, interval: BacktestInterval, candles: Candle[]): Promise<void> {
+export async function cacheCandles(symbol: string, interval: CandleInterval, candles: Candle[]): Promise<void> {
   try {
     await writeCandlePages(symbol, interval, candles);
   } catch (error) {

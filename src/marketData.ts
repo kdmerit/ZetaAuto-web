@@ -1,14 +1,14 @@
 /** Public Bybit data only: bounded requests, retries, and incremental closed-candle caching. */
 import { intervalSeconds } from './api';
 import { cacheCandles, readCandlePages, readValue, writeValue } from './database';
-import type { BacktestInterval, BacktestSettings, Candle } from './types';
+import type { CandleInterval, BacktestSettings, Candle } from './types';
 
 export interface Instrument { symbol: string; launchAt: number }
 export interface EligibleInstrument extends Instrument { LONG: boolean; SHORT: boolean }
 interface PublicSnapshot<T> { expiresAt: number; data: T }
 interface ListingPrefix { emptyUntil: number; firstAt?: number }
 interface BybitEnvelope<T> { retCode: number; result: T }
-const intervals = { '15m': '15', '1h': '60', '4h': '240', '1d': 'D' };
+const intervals = { '1m': '1', '15m': '15', '1h': '60', '4h': '240', '1d': 'D' };
 let nextRequestAt = 0;
 
 export async function delay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -133,7 +133,7 @@ export function analysisWindow(settings: BacktestSettings): { start: number; end
   return { start, end };
 }
 
-async function download(symbol: string, interval: BacktestInterval, start: number, end: number, signal?: AbortSignal): Promise<Candle[]> {
+async function download(symbol: string, interval: CandleInterval, start: number, end: number, signal?: AbortSignal): Promise<Candle[]> {
   const seconds = intervalSeconds(interval);
   const result = await publicRequest<{ list: string[][] }>('kline', {
     symbol, interval: intervals[interval], limit: '1000', start: String(start * 1000), end: String(end * 1000 - 1),
@@ -153,7 +153,7 @@ async function download(symbol: string, interval: BacktestInterval, start: numbe
 }
 
 /** Read only the needed series pages. Each missing request fills up to 1,000 bars for later blocks. */
-export async function ensureCandles(instrument: Instrument, interval: BacktestInterval, from: number, end: number, prefetchEnd = end, signal?: AbortSignal): Promise<Candle[]> {
+export async function ensureCandles(instrument: Instrument, interval: CandleInterval, from: number, end: number, prefetchEnd = end, signal?: AbortSignal): Promise<Candle[]> {
   const seconds = intervalSeconds(interval);
   const listingBucket = Math.floor(instrument.launchAt / seconds) * seconds;
   const prefixKey = `listing-prefix:v1:${instrument.symbol}:${interval}:${instrument.launchAt}`;

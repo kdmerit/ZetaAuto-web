@@ -9,6 +9,7 @@ export const testSettings: BacktestSettings = {
   mode: 'ALL', symbol: 'AAA', interval: '15m', startDate: '2026-01-01', startTime: '09:00', endDate: '2026-01-04', endTime: '09:00',
   initialCapitalUsdt: '250', betAmountUsdt: '100', leverage: '3', side: 'BOTH', partialTpEnabled: false,
   fullTpWavePercent: '100', minDisparityPercent: '1.0', ma20HalfCloseEnabled: false, roiClosePercent: '100', minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1.0',
+  volatilityTpEnabled: true, volatilityNextCloseEnabled: false,
 };
 
 function candle(index: number, row = [100, 101, 99, 100]): Candle {
@@ -71,7 +72,7 @@ describe('local shared portfolio', () => {
   });
 });
 
-describe('volatility shared-account exits with signal candle SL', () => {
+describe('legacy confirmed-close volatility replay compatibility', () => {
   const settings = { ...testSettings, leverage: '1', partialTpEnabled: true };
   function document(short: boolean, tail: number[][]): PreparedSymbol {
     const data = [
@@ -79,7 +80,13 @@ describe('volatility shared-account exits with signal candle SL', () => {
       [104, 105, 99, 100], [100, 110, 90, 105], [100, 140, 95, 115], ...tail,
     ];
     const rows = data.map((row, i) => candle(i, short ? [200 - row[0]!, 200 - row[2]!, 200 - row[1]!, 200 - row[3]!] : row));
-    return prepareSymbolBlock('AAAUSDT', rows, settings, 'VOLATILITY', origin + 22 * 900, rows.at(-1)!.closeTime);
+    // Saved v2.10.29 signal snapshots must remain readable. New signal
+    // preparation no longer creates these confirmed-close orders.
+    const entry = rows[22]!;
+    const signal: Signal = { strategy: 'VOLATILITY', side: short ? 'SHORT' : 'LONG', index: 22,
+      entry: entry.close, stop: short ? entry.high : entry.low, target: short ? 65 : 135, initialTarget: short ? 65 : 135,
+      breakoutRange: 20, volatilityK1: 0.5, volatilityK2: 1, volatilityStopEnabled: true, exitMode: 'VOLATILITY_CLOSE' };
+    return { symbol: 'AAAUSDT', bars: rows.slice(22).map((candle, i) => ({ candle, signal: i === 0 ? signal : null, ma20: null, ma60Exit: null })) };
   }
   const start = origin + 22 * 900;
 

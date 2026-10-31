@@ -1,5 +1,6 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { volatilityParameters } from './backtestSettings';
+import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import type {
   BacktestResult,
   BacktestSettings,
@@ -346,30 +347,32 @@ function volatilitySignals(
     if (!Number.isFinite(range) || range <= 0) continue;
     const rangePercent = range / previous.close * 100;
     if (rangePercent + 1e-10 < minimum) continue;
-    const long = older.close < older.open && previous.close > previous.open && candle.close > candle.open
-      && previous.low < candle.low;
-    const short = older.close > older.open && previous.close < previous.open && candle.close < candle.open
-      && previous.high > candle.high;
+    // Only the two preceding bars are confirmed. Direction and running wick
+    // extrema of the current bar are checked at the touch, never at final close.
+    const long = older.close < older.open && previous.close > previous.open && previous.low < candle.open;
+    const short = older.close > older.open && previous.close < previous.open && previous.high > candle.open;
     if (!long && !short) continue;
     const side = long ? 'LONG' : 'SHORT';
     if (settings.side !== 'BOTH' && settings.side !== side) continue;
     const direction = long ? 1 : -1;
-    const offset = direction * (candle.close - candle.open);
-    const tolerance = Math.max(candle.open, range) * 1e-12;
-    if (offset < range * k1 - tolerance || offset > range * k2 + tolerance) continue;
-    // Candle colour and its extreme are only known at close. Never enter earlier
-    // in this same bar using the now-known OHLC, or exit against its past high/low.
-    const entry = candle.close;
-    const target = entry + direction * range;
+    const entry = candle.open + direction * range * k1;
+    if (long ? candle.high < entry : candle.low > entry) continue;
+    const target = entry + direction * range * k1;
     if (!Number.isFinite(entry) || entry <= 0) continue;
-    if (!Number.isFinite(target) || target <= 0) continue;
+    if (!Number.isFinite(target) || target <= 0 && settings.volatilityTpEnabled !== false) continue;
     signals.push({
       strategy: 'VOLATILITY',
       side,
       index,
       entry,
-      stop: long ? candle.low : candle.high,
+      // Initial placeholder is the only current-bar extreme known at open.
+      // Replay replaces it with the running low/high at the actual path touch.
+      stop: candle.open,
       volatilityStopEnabled: true,
+      volatilityPriorExtreme: long ? previous.low : previous.high,
+      volatilityEntryLimit: candle.open + direction * range * k2,
+      volatilityTpEnabled: settings.volatilityTpEnabled !== false,
+      volatilityNextCloseEnabled: settings.volatilityNextCloseEnabled === true,
       target,
       initialTarget: target,
       volatilityK1: k1,
@@ -377,7 +380,7 @@ function volatilitySignals(
       breakoutRange: range,
       breakoutRangePercent: rangePercent,
       breakoutLevel: entry,
-      exitMode: 'VOLATILITY_CLOSE',
+      exitMode: 'VOLATILITY_TP',
     });
   }
   return signals;
@@ -388,6 +391,7 @@ export interface PreparedBar {
   signal: Signal | null;
   ma20: number | null;
   ma60Exit: number | null;
+  intrabarCandles?: Candle[];
 }
 
 export interface PreparedSymbol {
@@ -405,11 +409,19 @@ export function prepareSymbolBlock(
   start: number,
   end: number,
   previousWaveState?: WaveState,
+  minuteCandles?: Candle[],
 ): PreparedSymbol {
   const waveState = strategy === 'PULLBACK' ? structuredClone(previousWaveState ?? initialWaveState()) : undefined;
   const signals = strategy === 'PULLBACK' ? pullbackSignals(candles, settings, waveState)
     : strategy === 'DISPARITY' ? disparitySignals(candles, settings) : volatilitySignals(candles, settings);
   const seconds = intervalSeconds(settings.interval);
+  const minuteGroups = new Map<number, Candle[]>();
+  for (const minute of minuteCandles ?? []) {
+    const at = Math.floor(minute.openTime / seconds) * seconds;
+    const rows = minuteGroups.get(at) ?? [];
+    rows.push(minute);
+    minuteGroups.set(at, rows);
+  }
   const byTime = new Map(signals.flatMap(signal => {
     const time = candles[signal.index]?.openTime;
     return time === undefined ? [] : [[time, {
@@ -425,6 +437,8 @@ export function prepareSymbolBlock(
       ma20: candle.ma20,
       // The intrabar MA60 touch equals the previous 59 closes' mean, independent of the final close.
       ma60Exit: candle.ma60 === null ? null : (candle.ma60 * 60 - candle.close) / 59,
+      ...(byTime.get(candle.openTime)?.exitMode === 'VOLATILITY_TP' && minuteGroups.has(candle.openTime)
+        ? { intrabarCandles: minuteGroups.get(candle.openTime) } : {}),
     })),
     waveState,
   };
@@ -773,8 +787,26 @@ export function runBacktest(
   settings: BacktestSettings,
   strategy: Strategy,
   onProgress?: ProgressCallback,
+  minuteCandles?: Candle[],
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
+  if (strategy === 'VOLATILITY') {
+    const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
+    const start = candles[0]!.openTime;
+    const end = candles.at(-1)!.closeTime;
+    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles);
+    const state = initialPortfolio(Number(settings.initialCapitalUsdt));
+    replayPortfolioBlock(state, [prepared], settings, start, end, intervalSeconds(settings.interval));
+    const result = portfolioResult(state, settings);
+    const indices = new Map(candles.map((candle, index) => [candle.openTime, index]));
+    onProgress?.(candles.length, candles.length);
+    return { ...result, candles, recentTrades: result.recentTrades.map(trade => {
+      const index = indices.get(trade.executions.find(fill => fill.kind === 'ENTRY')!.candleOpenAt) ?? -1;
+      return { ...trade, entryIndex: index, signalIndex: index,
+        exitIndex: indices.get(trade.executions.at(-1)!.candleOpenAt) ?? -1,
+        signal: { ...trade.signal, index } };
+    }) };
+  }
   const signals = strategy === 'PULLBACK'
     ? pullbackSignals(candles, settings)
     : strategy === 'DISPARITY'
@@ -869,7 +901,7 @@ export function buildLocalChart(
   } else {
     lines.push(line('ENTRY', trade.entryPrice));
     if (signal.volatilityStopEnabled === true) lines.push(line('SL', signal.activeStop ?? signal.stop));
-    if (signal.exitMode === 'VOLATILITY_CLOSE') lines.push(line('TP', signal.target));
+    if (signal.exitMode === 'VOLATILITY_CLOSE' || signal.exitMode === 'VOLATILITY_TP' && signal.volatilityTpEnabled !== false) lines.push(line('TP', signal.target));
   }
   const waves = (signal.waves ?? []).flatMap((wave) => {
     const visibleStart = Math.max(start, wave.startIndex);
@@ -900,7 +932,7 @@ export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'DISPARITY') {
     return 'MA20·MA60 사이 이격, 현재 캔들 절반, 직전 5봉 몸통 돌파와 직전 10봉 MA20 조건을 분석합니다.';
   }
-  return '직전 변동폭·3봉 방향·K1~K2 종가 구간으로 진입하고, 이후 K1 종가 조건 또는 1배 변동폭 TP로 청산합니다.';
+  return '직전 변동폭·2봉 방향과 K1 돌파로 봉 중간에 진입하고, 진입 시점 SL·선택형 K1 TP·다음 봉 종가 청산을 적용합니다.';
 }
 
 export function estimateBars(settings: BacktestSettings): number {

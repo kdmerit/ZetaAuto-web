@@ -4,12 +4,13 @@ import { deletePrefix, deleteValue, lease, maintainCache, readValue, writeValue 
 import { prepareSymbolBlock, type PreparedSymbol, type WaveState } from './engine';
 import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
+import { validateMinuteCandles } from './intrabar';
 import type { BacktestResult, BacktestSettings, Strategy } from './types';
 
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'VOLATILITY' ? '2.10.29' : localEngineVersion;
+  return strategy === 'VOLATILITY' ? '2.10.30' : localEngineVersion;
 }
 export interface LocalJob {
   id: string;
@@ -74,6 +75,10 @@ export function jobView(job: LocalJob): LocalJobView {
 }
 
 function blockSize(job: LocalJob): number {
+  if (job.strategy === 'VOLATILITY') {
+    const minutes = intervalSeconds(job.settings.interval) / 60;
+    return Math.max(1, Math.min(128, Math.floor(64_000 / Math.max(1, job.universe.length * minutes))));
+  }
   return Math.max(16, Math.min(128, Math.floor(64_000 / Math.max(1, job.universe.length))));
 }
 
@@ -187,6 +192,11 @@ async function executeWithLease(
         const candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - 200 * seconds, blockEnd, job.end, signal);
         const prepared = prepareSymbolBlock(instrument.symbol, candles, job.settings, job.strategy, job.blockStart, blockEnd, job.waveStates[instrument.symbol]);
         for (const bar of prepared.bars) if (bar.signal && !instrument[bar.signal.side]) bar.signal = null;
+        for (const bar of prepared.bars) {
+          if (bar.signal?.exitMode !== 'VOLATILITY_TP') continue;
+          bar.intrabarCandles = await ensureCandles(instrument, '1m', bar.candle.openTime, bar.candle.closeTime, bar.candle.closeTime, signal);
+          validateMinuteCandles(bar.candle, bar.intrabarCandles);
+        }
         await writeValue('prepared', prefix + instrument.symbol, prepared);
         job.cursor += 1;
         if (job.cursor % 4 === 0 || job.cursor === job.universe.length) await checkpoint();

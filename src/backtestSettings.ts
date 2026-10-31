@@ -39,7 +39,7 @@ export function serverSettingsSnapshot(
       settings[key] = String(value);
     }
   }
-  for (const key of ['partialTpEnabled', 'ma20HalfCloseEnabled'] as const) {
+  for (const key of ['partialTpEnabled', 'ma20HalfCloseEnabled', 'volatilityTpEnabled', 'volatilityNextCloseEnabled'] as const) {
     if (typeof request[key] === 'boolean') settings[key] = request[key];
   }
   const start = koreanDateTime(request.startAt);
