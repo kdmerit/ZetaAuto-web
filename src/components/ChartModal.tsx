@@ -98,12 +98,12 @@ function ChartSvg({
   const pendingZoomLeftRef = useRef<number | null>(null);
   const [zoom, setZoom] = useState({ factor: 1 });
   const [pinching, setPinching] = useState(false);
-  const [viewport, setViewport] = useState({ left: 0, width: 0, height: window.innerHeight });
+  const [viewport, setViewport] = useState({ left: 0, width: 0, height: 0 });
   const plotClipId = useId();
   const syncViewport = useCallback(() => {
     const host = scrollRef.current;
     if (!host) return;
-    const height = window.visualViewport?.height ?? window.innerHeight;
+    const height = host.clientHeight;
     setViewport((current) => current.left === host.scrollLeft && current.width === host.clientWidth && current.height === height
       ? current
       : { left: host.scrollLeft, width: host.clientWidth, height });
@@ -112,7 +112,7 @@ function ChartSvg({
   const baseWidth = Math.max(760, Math.min(12_000, chart.candles.length * 14));
   const widthForZoom = (factor: number): number => Math.max(viewport.width || 320, Math.min(24_000, baseWidth * factor));
   const width = widthForZoom(zoom.factor);
-  const height = Math.round(Math.max(150, Math.min(300, viewport.height - 420)));
+  const height = Math.max(150, viewport.height);
   const volumeHeight = 36;
   const plotHeight = height - volumeHeight;
   const plotPadding = 24;
@@ -384,12 +384,15 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyE
   }, []);
   const selectedIndex = selection === null ? -1 : chart.candles.findIndex((candle) => candle.openTime === selection.openTime);
   const selected = chart.candles[selectedIndex] ?? null;
-  const selectedReadings = !selected
+  // Keep the readout's space while hidden so tapping never resizes the plot.
+  const infoIndex = selectedIndex >= 0 ? selectedIndex : entryCandleIndex(chart) ?? 0;
+  const infoCandle = chart.candles[infoIndex] ?? null;
+  const selectedReadings = !infoCandle
     ? []
     : maDefinitions.filter((definition) => visibleMas[definition.key]).map((definition) => {
-        const value = selected[definition.key];
-        const deviation = typeof value === 'number' && value !== 0 ? (selected.close - value) / value * 100 : null;
-        return { ...definition, value, deviation, angle: movingAverageAngle(chart.candles, selectedIndex, definition.key) };
+        const value = infoCandle[definition.key];
+        const deviation = typeof value === 'number' && value !== 0 ? (infoCandle.close - value) / value * 100 : null;
+        return { ...definition, value, deviation, angle: movingAverageAngle(chart.candles, infoIndex, definition.key) };
       });
   return (
     <div className="modal-backdrop" role="presentation"
@@ -425,13 +428,13 @@ export function ChartModal({ chart, onClose, onLoadOlder, loadingOlder, historyE
           </div>
         </div>
         <ChartSvg chart={chart} visibleMas={visibleMas} selection={selection} onSelect={setSelection} onClear={() => setSelection(null)} focusRequest={focusRequest} onLoadOlder={onLoadOlder} loadingOlder={loadingOlder} />
-        {selected ? (
-          <div className="candle-info">
-            <strong>{formatDate(selected.openTime)}</strong>
-            <span>시가 {formatPrice(selected.open)} · 고가 {formatPrice(selected.high)}</span>
-            <span>저가 {formatPrice(selected.low)} · 종가 {formatPrice(selected.close)}</span>
-            <div className="candle-change-row"><span>몸통 <em className={selected.close >= selected.open ? 'positive' : 'negative'}>{signedPercent(bodyPercent(selected))}</em></span><span>최대 {signedPercent(rangePercent(selected))}</span></div>
-            <span>거래량 {formatPrice(selected.volume)}</span>
+        {infoCandle ? (
+          <div className={`candle-info${selected ? '' : ' candle-info-hidden'}`} aria-hidden={!selected}>
+            <strong>{formatDate(infoCandle.openTime)}</strong>
+            <span>시가 {formatPrice(infoCandle.open)} · 고가 {formatPrice(infoCandle.high)}</span>
+            <span>저가 {formatPrice(infoCandle.low)} · 종가 {formatPrice(infoCandle.close)}</span>
+            <div className="candle-change-row"><span>몸통 <em className={infoCandle.close >= infoCandle.open ? 'positive' : 'negative'}>{signedPercent(bodyPercent(infoCandle))}</em></span><span>최대 {signedPercent(rangePercent(infoCandle))}</span></div>
+            <span>거래량 {formatPrice(infoCandle.volume)}</span>
             <div className="candle-ma-grid">
             {selectedReadings.map((reading) => (
               <span key={reading.key} style={{ color: reading.color }} title="현재봉·이전 2봉의 고정 각도 · 1봉당 1% 상승=45° · 확대/축소와 무관">{reading.label} {signedPercent(reading.deviation)} <em>({reading.angle === null ? '—' : `${reading.angle >= 0 ? '+' : ''}${reading.angle.toFixed(1)}°`})</em></span>
