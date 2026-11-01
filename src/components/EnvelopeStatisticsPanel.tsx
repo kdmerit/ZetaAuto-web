@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { envelopeExitLabels, envelopeExitModes, envelopePeriods } from '../envelope';
-import { canResumeEnvelopeStatistics, isFixedEnvelopeStatisticsVersion, selectedStatisticsIntervals, statisticsIntervalLabel, statisticsIntervals, statisticsProgress, statisticsTotalFor, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow } from '../envelopeStatistics';
+import { canResumeEnvelopeStatistics, isDirectionalStatisticsVersion, isFixedEnvelopeStatisticsVersion, selectedStatisticsIntervals, selectedStatisticsSides, settingsForStatisticsRow, statisticsIntervalLabel, statisticsIntervals, statisticsProgress, statisticsSideLabel, statisticsTotalFor, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from '../envelopeStatistics';
 import { isEnvelopeStatisticsRunning, pauseEnvelopeStatistics, restoreEnvelopeStatistics, startEnvelopeStatistics, subscribeEnvelopeStatistics } from '../envelopeStatisticsClient';
 import type { BacktestSettings, EnvelopeExitMode } from '../types';
 import { loadEnvelopeStatisticsHistory, loadEnvelopeStatisticsReport, type EnvelopeStatisticsHistoryEntry } from '../envelopeStatisticsHistory';
@@ -18,9 +18,21 @@ export function EnvelopeStatisticsStatus({ job }: { job: EnvelopeStatisticsJob }
       ? '이전 자동 레버리지 탐색 결과입니다. 새 통계는 입력한 레버리지를 고정 적용합니다.'
       : '이전 버전의 고정 레버리지 통계입니다. 저장된 결과는 당시 기준으로 표시합니다.'
       : `적용 레버리지 ${job.settings.leverage}배 고정 · 최대 한도·위험한도를 조회하지 않습니다.`}</p>
-    {job.status !== 'COMPLETED' ? <ProgressBar completed={statisticsProgress(job)} total={statisticsTotalFor(job.settings)} label={job.status === 'PAUSED' ? '개별통계 일시정지' : job.message} /> : <p className="notice">{job.message}</p>}
+    {!isDirectionalStatisticsVersion(job.version) && job.settings.side === 'BOTH' ? <p className="notice small">이전 롱·숏 합산 결과입니다. 방향별 최고 세팅은 새 통계를 실행해 확인해 주세요.</p> : null}
+    {job.status !== 'COMPLETED' ? <ProgressBar completed={statisticsProgress(job)} total={statisticsTotalFor(job.settings, job.version)} label={job.status === 'PAUSED' ? '개별통계 일시정지' : job.message} /> : <p className="notice">{job.message}</p>}
     {job.status === 'PAUSED' ? <p className="notice" role="status">{job.message}</p> : null}
   </>;
+}
+
+export function EnvelopeBestSettings({ job, disabled, onChoose }: { job: EnvelopeStatisticsJob; disabled: boolean; onChoose: (settings: BacktestSettings) => void }) {
+  const directional = isDirectionalStatisticsVersion(job.version);
+  const choices = directional ? selectedStatisticsSides(job.settings).map(side => ({ side, row: job.bestBySide?.[side] }))
+    : [{ side: job.settings.side === 'BOTH' ? undefined : job.settings.side, row: job.best ?? [...job.rows].filter(row => row.entryCount > 0).sort((a, b) => b.returnPercent - a.returnPercent)[0] }];
+  return <div className="envelope-best-settings" aria-label="방향별 최고 수익률">{choices.map(({ side, row }) => <button type="button" className="envelope-best" key={side ?? 'combined'} disabled={disabled || !row}
+    onClick={() => { if (row) onChoose(settingsForStatisticsRow(job.settings, row, isFixedEnvelopeStatisticsVersion(job.version) ? undefined : job.risk)); }}>
+    <strong>{side ? statisticsSideLabel(side) : '이전 롱 + 숏 합산'} {job.status === 'COMPLETED' ? '해당 기간' : '현재까지'} 최고 수익률 {row ? `${number(row.returnPercent)}%` : '—'}</strong>
+    {row ? <><span>{row.interval} · SMA{row.maPeriod} · 이격 {row.deviationPercent.toFixed(1)}% · {row.leverage ?? job.settings.leverage}배 · {envelopeExitLabels[row.exitMode]}</span><span>순손익 {number(row.profitUsdt)} USDT · 승률 {number(row.winRatePercent)}%</span><small>이 방향의 세팅 불러오기 ›</small></> : <span>{job.status === 'COMPLETED' ? '기간 내 진입 가능한 세팅이 없습니다.' : '이 방향의 체결 결과가 아직 없습니다.'}</span>}
+  </button>)}</div>;
 }
 
 function ComparisonGraph({ rows, metric }: { rows: EnvelopeStatisticsRow[]; metric: Metric }) {
@@ -74,6 +86,7 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
   const [period, setPeriod] = useState(20);
   const [exit, setExit] = useState<EnvelopeExitMode>('CENTER');
   const [limit, setLimit] = useState(30);
+  const [resultSide, setResultSide] = useState<StatisticsSide>('LONG');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyEntries, setHistoryEntries] = useState<EnvelopeStatisticsHistoryEntry[]>([]);
@@ -99,8 +112,10 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
   useEffect(() => { onBusyChange(running || historyLoading); }, [running, historyLoading, onBusyChange]);
   useEffect(() => { historyRequest.current += 1; setHistoryOpen(false); setHistoryEntries([]); setHistoryLoading(false); }, [settings.mode, historySymbol]);
   const rows = useMemo(() => [...(job?.rows ?? [])].map(row => ({ ...row, leverage: row.leverage ?? Number(job!.settings.leverage) })).sort((a, b) => Number(b.entryCount > 0) - Number(a.entryCount > 0) || b.returnPercent - a.returnPercent || a.maxDrawdownPercent - b.maxDrawdownPercent), [job]);
-  const graphRows = useMemo(() => rows.filter(row => row.maPeriod === period && row.exitMode === exit), [rows, period, exit]);
-  const best = rows.find(row => row.entryCount > 0);
+  const directional = !!job && isDirectionalStatisticsVersion(job.version);
+  const activeSide = job?.settings.side === 'SHORT' ? 'SHORT' : job?.settings.side === 'LONG' ? 'LONG' : resultSide;
+  const shownRows = useMemo(() => directional ? rows.filter(row => row.side === activeSide) : rows, [rows, directional, activeSide]);
+  const graphRows = useMemo(() => shownRows.filter(row => row.maPeriod === period && row.exitMode === exit), [shownRows, period, exit]);
   const start = (resume = false): void => {
     try {
       if (!resume) validate();
@@ -142,7 +157,7 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
     <button className="outline-button full-width" type="button" disabled={disabled || running || historyLoading} aria-expanded={historyOpen} onClick={() => { void toggleHistory(); }}>{historyLoading ? '개별통계 이력 불러오는 중' : historyOpen ? '개별통계 이력 닫기' : `${settings.mode === 'SINGLE' ? `${historySymbol || '해당 종목'} ` : ''}개별통계 이력보기`}</button>
     {historyOpen ? <div className="history-list envelope-stat-history" aria-label="개별통계 이력">
       {historyEntries.length ? historyEntries.map(entry => <button type="button" className="history-card" key={entry.id} disabled={historyLoading || running || disabled} onClick={() => { void openHistory(entry); }}>
-        <span className="history-card-heading"><strong>{entry.settings.symbol.toUpperCase().replace(/USDT$/, '')} 개별통계</strong><em className={entry.bestReturnPercent !== null && entry.bestReturnPercent < 0 ? 'negative' : 'positive'}>최고 {entry.bestReturnPercent === null ? '—' : `${number(entry.bestReturnPercent)}%`}</em></span>
+        <span className="history-card-heading"><strong>{entry.settings.symbol.toUpperCase().replace(/USDT$/, '')} 개별통계</strong>{entry.bestBySide ? Object.entries(entry.bestBySide).map(([side, value]) => <em key={side} className={value !== null && value < 0 ? 'negative' : 'positive'}>{statisticsSideLabel(side as StatisticsSide)} 최고 {value == null ? '—' : `${number(value)}%`}</em>) : <em>이전 {entry.settings.side === 'BOTH' ? '롱 + 숏 합산' : entry.settings.side === 'LONG' ? '롱' : '숏'} 최고 {entry.bestReturnPercent === null ? '—' : `${number(entry.bestReturnPercent)}%`}</em>}</span>
         <span>{entry.settings.startDate} {entry.settings.startTime} ~ {entry.settings.endDate || '현재'} {entry.settings.endDate ? entry.settings.endTime : ''}</span>
         <small>{statisticsIntervalLabel(entry.settings)} · {entry.comparedCount.toLocaleString()}개 조건 비교 · 저장 {new Date(entry.savedAt).toLocaleString('ko-KR')}</small>
       </button>) : <p className="muted history-empty">{settings.mode === 'SINGLE' ? `${historySymbol || '해당 종목'} ` : ''}개별통계 이력이 없습니다.</p>}
@@ -150,12 +165,14 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
     {error && error !== job?.message ? <p className="error" role="alert">{error}</p> : null}
     {job ? <>
       <h3>{job.settings.symbol} 개별통계 {job.status === 'COMPLETED' ? '결과' : job.status === 'PAUSED' ? '일시정지' : '진행 중'}</h3>
-      <p className="muted small">{job.settings.startDate} {job.settings.startTime} ~ {job.settings.endDate} {job.settings.endTime} (한국시간)<br />{statisticsIntervalLabel(job.settings)} · {selectedStatisticsIntervals(job.settings).length}개 주기 × 8개 SMA × 0.1~20.0% × 3개 청산 방식 · 입력 레버리지 고정</p>
+      <p className="muted small">{job.settings.startDate} {job.settings.startTime} ~ {job.settings.endDate} {job.settings.endTime} (한국시간)<br />{statisticsIntervalLabel(job.settings)} · {selectedStatisticsIntervals(job.settings).length}개 주기 × 8개 SMA × 0.1~20.0% × 3개 청산 방식{directional ? ` × ${selectedStatisticsSides(job.settings).length}개 방향` : ''} · 입력 레버리지 고정</p>
       <EnvelopeStatisticsStatus job={job} />
+      {directional ? <p className="muted small">롱·숏은 각각 같은 초기자금·고정 배율의 독립 계좌로 비교합니다. 두 최고 수익률은 합산 수익률이 아닙니다. 중앙선 터치시 SL 변경: {job.settings.envelopeMoveSlOnCenter ? '사용' : '사용 안 함'}</p> : null}
       <p className="muted small">밴드 접촉이 없는 이격 이후의 조합은 건너뜁니다. 완료한 조건은 기기에 저장되며 화면을 닫아 중단되면 이어갈 수 있습니다.</p>
       {Object.entries(job.skippedIntervals).map(([interval, message]) => <p key={interval} className="notice small">{interval} 제외: {message}</p>)}
-      {best ? <div className="envelope-best"><strong>{job.status === 'COMPLETED' ? '해당 기간' : '현재까지'} 최고 수익률 {number(best.returnPercent)}%</strong><span>{best.interval} · SMA{best.maPeriod} · 이격 {best.deviationPercent.toFixed(1)}% · {best.leverage}배 · {envelopeExitLabels[best.exitMode]}</span></div> : null}
+      <EnvelopeBestSettings job={job} disabled={running || historyLoading || disabled} onChoose={onChoose} />
       {rows.length ? <>
+        {directional && job.settings.side === 'BOTH' ? <div className="segmented" role="group" aria-label="통계 결과 방향">{(['LONG', 'SHORT'] as const).map(side => <button type="button" key={side} aria-pressed={activeSide === side} className={activeSide === side ? 'selected' : ''} onClick={() => { setResultSide(side); setLimit(30); }}>{statisticsSideLabel(side)} 결과</button>)}</div> : null}
         <div className="field-grid two">
           <label className="field-label">비교 지표<select value={metric} onChange={event => setMetric(event.target.value as Metric)}>{Object.entries(metrics).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
           <label className="field-label">그래프 중심선<select value={period} onChange={event => setPeriod(Number(event.target.value))}>{envelopePeriods.map(value => <option value={value} key={value}>SMA{value}</option>)}</select></label>
@@ -163,15 +180,15 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
         <label className="field-label">그래프 청산 방식<select value={exit} onChange={event => setExit(event.target.value as EnvelopeExitMode)}>{envelopeExitModes.map(value => <option value={value} key={value}>{envelopeExitLabels[value]}</option>)}</select></label>
         {graphRows.length ? <ComparisonGraph rows={graphRows} metric={metric} /> : <p className="muted small">선택한 SMA·청산 방식의 비교 결과가 아직 없습니다.</p>}
         <p className="muted small">과거 기간 내 비교이며 미래 수익을 보장하지 않습니다. 수익률·순손익은 수수료와 미청산 평가손익을 포함하며 수익횟수·승률은 완료된 포지션 기준입니다.</p>
-        <h3>세부 결과 · 수익률 순 {rows.length.toLocaleString()}건</h3>
-        <div className="envelope-stat-rows">{rows.slice(0, limit).map(row => <button className="envelope-stat-row" type="button" key={`${row.interval}:${row.maPeriod}:${row.deviationPercent}:${row.exitMode}`} disabled={running || historyLoading || disabled} onClick={() => onChoose({ ...job.settings, interval: row.interval, envelopeMaPeriod: String(row.maPeriod), envelopeDeviationPercent: row.deviationPercent.toFixed(1), envelopeExitMode: row.exitMode, leverage: String(row.leverage), envelopeRisk: job.risk })}>
-          <strong>{row.interval} · SMA{row.maPeriod} · {row.deviationPercent.toFixed(1)}% <span className={row.returnPercent >= 0 ? 'long-text' : 'short-text'}>{number(row.returnPercent)}%</span></strong>
+        <h3>{directional ? `${statisticsSideLabel(activeSide)} ` : ''}세부 결과 · 수익률 순 {shownRows.length.toLocaleString()}건</h3>
+        <div className="envelope-stat-rows">{shownRows.slice(0, limit).map(row => <button className="envelope-stat-row" type="button" key={`${row.side ?? 'combined'}:${row.interval}:${row.maPeriod}:${row.deviationPercent}:${row.exitMode}`} disabled={running || historyLoading || disabled} onClick={() => onChoose(settingsForStatisticsRow(job.settings, row, isFixedEnvelopeStatisticsVersion(job.version) ? undefined : job.risk))}>
+          <strong>{row.side ? `${statisticsSideLabel(row.side)} · ` : ''}{row.interval} · SMA{row.maPeriod} · {row.deviationPercent.toFixed(1)}% <span className={row.returnPercent >= 0 ? 'long-text' : 'short-text'}>{number(row.returnPercent)}%</span></strong>
           <span>적용 {row.leverage}배 · {envelopeExitLabels[row.exitMode]}</span>
           <span>순손익 {number(row.profitUsdt)} USDT · 수익 {row.winCount}회 · 승률 {number(row.winRatePercent)}%</span>
           <span>진입 {row.entryCount} · 청산 {row.closedTradeCount} · 미청산 {row.openPositionCount} · 최대낙폭 {number(row.maxDrawdownPercent)}%</span>
           <small>터치하여 이 조건 불러오기 ›</small>
         </button>)}</div>
-        {rows.length > limit ? <button type="button" className="outline-button full-width" onClick={() => setLimit(value => value + 30)}>결과 더 보기 ({Math.min(limit, rows.length)} / {rows.length})</button> : null}
+        {shownRows.length > limit ? <button type="button" className="outline-button full-width" onClick={() => setLimit(value => value + 30)}>결과 더 보기 ({Math.min(limit, shownRows.length)} / {shownRows.length})</button> : null}
       </> : job.status === 'COMPLETED' ? <p className="muted">선택한 기간·방향에서 엔벨로프 밴드에 접촉한 조건이 없습니다.</p> : null}
     </> : null}
   </section>;

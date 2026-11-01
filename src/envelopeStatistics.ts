@@ -10,10 +10,15 @@ import { fixedEnvelopeSettings, replayFixedEnvelope } from './envelopeReplay';
 
 export const statisticsIntervals: BacktestInterval[] = ['15m', '1h', '4h', '1d'];
 const jobKey = 'ENVELOPE_STATISTICS';
-export const envelopeOptimizerVersion = '2.10.41';
+export const envelopeOptimizerVersion = '2.10.42';
 const version = envelopeOptimizerVersion;
 
-export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => value === '2.10.40' || value === version;
+export type StatisticsSide = 'LONG' | 'SHORT';
+export type DirectionalBests = Partial<Record<StatisticsSide, EnvelopeStatisticsRow | null>>;
+export const statisticsSideLabel = (side: StatisticsSide): string => side === 'LONG' ? '롱' : '숏';
+export const selectedStatisticsSides = (settings: Pick<BacktestSettings, 'side'>): StatisticsSide[] => settings.side === 'LONG' ? ['LONG'] : settings.side === 'SHORT' ? ['SHORT'] : ['LONG', 'SHORT'];
+export const isDirectionalStatisticsVersion = (value: string | undefined): boolean => value === version;
+export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.40', '2.10.41', version].includes(value ?? '');
 export function selectedStatisticsIntervals(settings: Pick<BacktestSettings, 'envelopeStatisticsInterval'>): BacktestInterval[] {
   const selected = settings.envelopeStatisticsInterval ?? 'ALL';
   if (selected === 'ALL') return [...statisticsIntervals];
@@ -30,6 +35,7 @@ export function statisticsAnalysisWindow(settings: BacktestSettings): { start: n
 }
 
 export interface EnvelopeStatisticsRow {
+  side?: StatisticsSide;
   interval: BacktestInterval;
   maPeriod: number;
   deviationPercent: number;
@@ -47,6 +53,11 @@ export interface EnvelopeStatisticsRow {
   openPositionCount: number;
   leverage?: number;
 }
+export function settingsForStatisticsRow(settings: BacktestSettings, row: EnvelopeStatisticsRow, risk?: ContractRisk): BacktestSettings {
+  return { ...settings, mode: 'SINGLE', side: row.side ?? settings.side, interval: row.interval,
+    envelopeMaPeriod: String(row.maPeriod), envelopeDeviationPercent: row.deviationPercent.toFixed(1), envelopeExitMode: row.exitMode,
+    leverage: String(row.leverage ?? settings.leverage), envelopeRisk: risk };
+}
 
 export interface EnvelopeStatisticsJob {
   id: string;
@@ -57,6 +68,7 @@ export interface EnvelopeStatisticsJob {
   periodIndex: number;
   step: number;
   exitIndex: number;
+  sideIndex?: number;
   updatedAt: number;
   message: string;
   rows: EnvelopeStatisticsRow[];
@@ -65,25 +77,47 @@ export interface EnvelopeStatisticsJob {
   instrument?: EligibleInstrument;
   risk?: ContractRisk;
   best?: EnvelopeStatisticsRow | null;
+  bestBySide?: DirectionalBests;
   keepRows?: boolean;
 }
 
 export const statisticsTotal = 4 * envelopePeriods.length * 200 * 3;
-export const statisticsTotalFor = (settings: Pick<BacktestSettings, 'envelopeStatisticsInterval'>): number => selectedStatisticsIntervals(settings).length * envelopePeriods.length * 200 * 3;
-export const statisticsProgress = (job: EnvelopeStatisticsJob): number => job.status === 'COMPLETED' ? statisticsTotalFor(job.settings)
-  : Math.min(statisticsTotalFor(job.settings), (job.intervalIndex * envelopePeriods.length + job.periodIndex) * 600 + (job.step - 1) * 3 + job.exitIndex);
+export const statisticsTotalFor = (settings: Pick<BacktestSettings, 'envelopeStatisticsInterval' | 'side'>, calculationVersion = version): number => selectedStatisticsIntervals(settings).length * envelopePeriods.length * 200 * 3 * (isDirectionalStatisticsVersion(calculationVersion) ? selectedStatisticsSides(settings).length : 1);
+export const statisticsProgress = (job: EnvelopeStatisticsJob): number => {
+  const total = statisticsTotalFor(job.settings, job.version);
+  const sides = isDirectionalStatisticsVersion(job.version) ? selectedStatisticsSides(job.settings).length : 1;
+  return job.status === 'COMPLETED' ? total : Math.min(total, ((job.intervalIndex * envelopePeriods.length + job.periodIndex) * sides + (job.sideIndex ?? 0)) * 600 + (job.step - 1) * 3 + job.exitIndex);
+};
 
 export function canResumeEnvelopeStatistics(job: EnvelopeStatisticsJob): boolean {
-  return job.version === version || job.version === '2.10.40' && (job.settings.envelopeStatisticsInterval ?? 'ALL') === 'ALL'
-    || ['2.10.36', '2.10.38'].includes(job.version) && !job.rows.length && !job.best;
+  return job.version === version || isFixedEnvelopeStatisticsVersion(job.version) && job.settings.side !== 'BOTH'
+    || ['2.10.36', '2.10.38', '2.10.40', '2.10.41'].includes(job.version) && !job.rows.length && !job.best;
+}
+
+/** Never relabel combined-direction returns as independently optimized long/short returns. */
+export function upgradeEnvelopeStatistics(job: EnvelopeStatisticsJob, input?: BacktestSettings): EnvelopeStatisticsJob {
+  if (job.version === version) return job;
+  const fixed = isFixedEnvelopeStatisticsVersion(job.version);
+  const settings = fixedEnvelopeSettings({ ...job.settings,
+    leverage: fixed ? job.settings.leverage : input?.leverage ?? job.settings.leverage,
+    envelopeStatisticsInterval: fixed ? job.settings.envelopeStatisticsInterval ?? 'ALL' : input?.envelopeStatisticsInterval ?? 'ALL' });
+  if (fixed && settings.side !== 'BOTH') {
+    const side = settings.side;
+    const rows = job.rows.map(row => ({ ...row, side }));
+    const best = job.best ? { ...job.best, side } : rows.reduce<EnvelopeStatisticsRow | null>((best, row) => betterEnvelopeSetting(row, best) ? row : best, null);
+    return { ...job, version, settings, rows, best, bestBySide: { [side]: best }, sideIndex: 0,
+      maxSteps: Object.fromEntries(Object.entries(job.maxSteps).map(([key, value]) => [`${key}:${side}`, value])), risk: undefined };
+  }
+  return { ...job, version, settings, intervalIndex: 0, periodIndex: 0, sideIndex: 0, step: 1, exitIndex: 0,
+    rows: [], best: null, bestBySide: {}, maxSteps: {}, skippedIntervals: {}, risk: undefined };
 }
 
 export async function loadEnvelopeStatistics(): Promise<EnvelopeStatisticsJob | null> {
   const job = await readValue<EnvelopeStatisticsJob>('jobs', jobKey);
   if (!job || Date.now() - job.updatedAt > retentionMs) return null;
   if (job.version !== version && job.status !== 'COMPLETED') return { ...job, status: 'PAUSED', message: canResumeEnvelopeStatistics(job)
-    ? job.version === '2.10.40' ? '저장된 전체 주기·고정 배율을 유지해 이어갑니다.' : '입력한 레버리지·주기로 이어가면 고정 배율 통계로 전환합니다. 기존 이력은 보존됩니다.'
-    : '고정 레버리지 방식으로 변경되었습니다. 새 개별통계를 시작해 주세요. 기존 이력은 보존됩니다.' };
+    ? '저장한 설정으로 롱·숏 분리 통계를 이어갑니다. 기존 이력은 보존됩니다.'
+    : '롱·숏 분리 전 작업입니다. 새 개별통계를 시작해 주세요. 기존 이력은 보존됩니다.' };
   return { ...job, status: job.status === 'RUNNING' ? 'PAUSED' : job.status };
 }
 
@@ -119,6 +153,9 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
   job.settings = fixedEnvelopeSettings(job.settings);
   delete job.risk;
   const intervals = selectedStatisticsIntervals(job.settings);
+  const sides = selectedStatisticsSides(job.settings);
+  job.sideIndex ??= 0; job.bestBySide ??= {};
+  for (const side of sides) job.bestBySide[side] ??= null;
   while (job.intervalIndex < intervals.length) {
     signal.throwIfAborted();
     const interval = intervals[job.intervalIndex]!;
@@ -126,31 +163,38 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
     let window: { start: number; end: number };
     try { window = analysisWindow(settings); } catch (error) {
       job.skippedIntervals[interval] = error instanceof Error ? error.message : '분석 기간이 부족합니다.';
-      job.intervalIndex += 1; job.periodIndex = 0; job.step = 1; job.exitIndex = 0; await checkpoint(true); continue;
+      job.intervalIndex += 1; job.periodIndex = 0; job.sideIndex = 0; job.step = 1; job.exitIndex = 0; await checkpoint(true); continue;
     }
     const { start, end } = window; const seconds = intervalSeconds(interval);
     job.message = `${interval} 캔들 확인`; await checkpoint(true);
     const candles = await ensureCandles(job.instrument, interval, start - 200 * seconds, end, end, signal);
     while (job.periodIndex < envelopePeriods.length) {
       const maPeriod = envelopePeriods[job.periodIndex]!;
-      const document = prepareSymbolBlock(job.instrument.symbol, candles, { ...settings, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: '0.1' }, 'ENVELOPE', start, end);
-      for (const bar of document.bars) if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }
-      const key = `${interval}:${maPeriod}`;
-      const maximum = job.maxSteps[key] ?? maximumTouchedStep(document); job.maxSteps[key] = maximum;
-      while (job.step <= maximum) {
-        for (const bar of document.bars) if (bar.envelope) { bar.envelope.upper = bar.envelope.center * (1 + job.step / 1000); bar.envelope.lower = bar.envelope.center * (1 - job.step / 1000); }
-        for (; job.exitIndex < envelopeExitModes.length; job.exitIndex += 1) {
-          signal.throwIfAborted();
-          const exit = envelopeExitModes[job.exitIndex]!;
-          const parameters = { ...settings, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: (job.step / 10).toFixed(1), envelopeExitMode: exit };
-          const label = `${interval} · SMA${maPeriod} · ${(job.step / 10).toFixed(1)}% · ${job.exitIndex + 1}/3 청산`;
-          const result = await replayFixedEnvelope(document, parameters, seconds, signal, async phase => { job.message = `${label} · ${phase}`; await checkpoint(); });
-          const row = { ...resultRow(result, interval, maPeriod, job.step, exit), leverage: Number(parameters.leverage) };
-          if (job.keepRows !== false) job.rows.push(row);
-          if (betterEnvelopeSetting(row, job.best)) job.best = row;
+      while (job.sideIndex < sides.length) {
+        const side: StatisticsSide = sides[job.sideIndex]!;
+        const directional = { ...settings, side };
+        const document = prepareSymbolBlock(job.instrument.symbol, candles, { ...directional, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: '0.1' }, 'ENVELOPE', start, end);
+        for (const bar of document.bars) if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }
+        const key = `${interval}:${maPeriod}:${side}`;
+        const maximum = job.maxSteps[key] ?? maximumTouchedStep(document); job.maxSteps[key] = maximum;
+        while (job.step <= maximum) {
+          for (const bar of document.bars) if (bar.envelope) { bar.envelope.upper = bar.envelope.center * (1 + job.step / 1000); bar.envelope.lower = bar.envelope.center * (1 - job.step / 1000); }
+          for (; job.exitIndex < envelopeExitModes.length; job.exitIndex += 1) {
+            signal.throwIfAborted();
+            const exit = envelopeExitModes[job.exitIndex]!;
+            const parameters = { ...directional, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: (job.step / 10).toFixed(1), envelopeExitMode: exit };
+            const label = `${statisticsSideLabel(side)} · ${interval} · SMA${maPeriod} · ${(job.step / 10).toFixed(1)}% · ${job.exitIndex + 1}/3 청산`;
+            const result = await replayFixedEnvelope(document, parameters, seconds, signal, async phase => { job.message = `${label} · ${phase}`; await checkpoint(); });
+            const row = { ...resultRow(result, interval, maPeriod, job.step, exit), side, leverage: Number(parameters.leverage) };
+            if (job.keepRows !== false) job.rows.push(row);
+            if (betterEnvelopeSetting(row, job.best)) job.best = row;
+            if (betterEnvelopeSetting(row, job.bestBySide[side])) job.bestBySide[side] = row;
+          }
+          job.exitIndex = 0; job.step += 1; await checkpoint();
         }
-        job.exitIndex = 0; job.step += 1; await checkpoint();
+        job.sideIndex += 1; job.step = 1; job.exitIndex = 0; await checkpoint(true);
       }
+      job.sideIndex = 0;
       job.periodIndex += 1; job.step = 1; job.exitIndex = 0; await checkpoint(true);
     }
     job.intervalIndex += 1; job.periodIndex = 0; await checkpoint(true);
@@ -186,13 +230,7 @@ async function execute(
     if (options.resumeId) {
       job = await loadEnvelopeStatistics();
       if (!job || job.id !== options.resumeId || job.status === 'COMPLETED' || !canResumeEnvelopeStatistics(job)) throw new Error('이어갈 개별통계가 없습니다. 이전 방식은 새 개별통계를 시작해 주세요.');
-      if (job.version !== version) {
-        if (job.version === '2.10.40') {
-          job = { ...job, version, settings: fixedEnvelopeSettings({ ...job.settings, envelopeStatisticsInterval: 'ALL' }) };
-        } else job = { ...job, version, settings: fixedEnvelopeSettings({ ...job.settings, leverage: options.settings?.leverage ?? job.settings.leverage,
-          envelopeStatisticsInterval: options.settings?.envelopeStatisticsInterval ?? 'ALL' }), intervalIndex: 0, periodIndex: 0, step: 1, exitIndex: 0, maxSteps: {}, skippedIntervals: {} };
-        delete job.risk;
-      }
+      job = upgradeEnvelopeStatistics(job, options.settings);
       job.status = 'RUNNING';
     } else {
       if (!options.settings || options.settings.mode !== 'SINGLE') throw new Error('개별통계는 개별종목에서만 가능합니다.');

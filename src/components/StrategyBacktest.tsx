@@ -10,7 +10,7 @@ import {
   type BacktestRequestBody,
 } from '../api';
 import { chartForLocalTrade, isLocalBacktestRunning, pauseLocalBacktest, restoreLocalBacktest, startLocalBacktest, subscribeLocalBacktest } from '../localBacktest';
-import { loadLocalResult, engineVersionFor, type LocalJobView } from '../localJobs';
+import { loadLocalResult, engineVersionFor, canResumeLocalJob, type LocalJobView } from '../localJobs';
 import { estimateBars } from '../engine';
 import {
   loadBacktestHistory,
@@ -79,6 +79,7 @@ export function defaultSettings(): BacktestSettings {
     envelopeDeviationPercent: '0.5',
     envelopeMaPeriod: '20',
     envelopeExitMode: 'CENTER',
+    envelopeMoveSlOnCenter: false,
   };
 }
 
@@ -679,11 +680,11 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <strong>숏 포지션</strong>
                 <p>상단 접촉 시 진입 · SL = 실제 매수가 × (1 + 이격%/100)</p>
                 <p>① 중심선 전량 ② 하단 전량 ③ 중심선 50% + 하단 나머지 전량 중 선택합니다.</p>
-                <p>보유 중 중심선·밴드는 매 봉 시작에 갱신하고 SL은 실제 진입가 기준으로 고정합니다. 절반 청산 후에도 SL은 그대로입니다. SL 갭은 시가에 손절하며 진입·손절 시장가에 0.02% 슬리피지, 편도 0.055% 수수료를 반영합니다.</p>
+                <p>보유 중 중심선·밴드는 매 봉 시작에 갱신합니다. ‘중앙선 터치시 SL 변경’을 켜면 진입 후 유리한 방향으로 중앙선에 처음 닿을 때 SL을 (실제 매수가 + 접촉 당시 중앙선) ÷ 2로 한 번 이동합니다. 롱은 올리고 숏은 낮추며 기존 SL을 불리하게 되돌리지 않습니다. 절반 청산은 남은 수량에 적용하고 중심선 전량 청산은 그대로 전량 청산합니다. 끄면 SL은 실제 진입가 기준 고정입니다. SL 갭은 시가에 손절하며 진입·손절 시장가에 0.02% 슬리피지, 편도 0.055% 수수료를 반영합니다.</p>
                 <p>선택 봉의 시가→고가→저가→종가와 시가→저가→고가→종가 두 경로 중 보수적인 결과를 사용합니다. 양쪽 밴드가 모두 닿는 봉은 진입 방향도 경로에 따라 비교합니다. 봉 중간 체결 시각은 봉 시작 시각의 추정치이며 정확한 틱 재현은 아닙니다.</p>
                 <p>한 종목은 봉당 한 번만 진입하고 봉 시작에 보유했다면 같은 봉에 재진입하지 않습니다. 전체종목은 종목명 순서·봉 시작 가용자금 한도로 배분하며 미래 청산 자금을 재사용하지 않습니다. 기간 말 미청산분은 평가액에 포함합니다.</p>
-                <p>개별통계·전체통계는 15m·1h·4h·1d·전체 중 선택한 주기만 분석합니다. 기본은 전체이며 한 주기는 최대 4,800조합, 전체는 최대 19,200조합입니다. 입력한 레버리지를 고정해 8개 SMA·이격 0.1~20.0%(0.1 단위)·3개 청산 방식을 같은 자금·방향·기간으로 비교합니다. 자동 레버리지 탐색·최대 한도·위험한도 조회는 하지 않습니다. 밴드 접촉이 없는 이격부터 더 넓은 이격은 건너뜁니다.</p>
-                <p>전체통계는 슬리피지 필터 없이 모든 활성 USDT 종목의 최적 세팅을 하나씩 저장합니다. 가상매매는 완료된 전체통계 결과를 선택해 15분봉·한 계좌의 공유 자금으로 같은 기간을 재검증합니다. 과거 최적값의 사후 분석이며 미래 성과를 보장하지 않습니다.</p>
+                <p>개별통계·전체통계는 15m·1h·4h·1d·전체 중 선택한 주기만 분석합니다. 기본은 전체이며 방향당 한 주기 최대 4,800조합, 전체 주기 최대 19,200조합입니다. 롱 + 숏은 두 방향을 독립 계산하고 최고 수익률 세팅을 각각 저장합니다. 입력 레버리지와 중앙선 SL 변경 체크 상태를 고정해 8개 SMA·이격 0.1~20.0%(0.1 단위)·3개 청산 방식을 같은 자금·기간으로 비교합니다. 자동 레버리지 탐색·최대 한도·위험한도 조회는 하지 않습니다. 밴드 접촉이 없는 이격부터 더 넓은 이격은 방향별로 건너뜁니다.</p>
+                <p>전체통계는 슬리피지 필터 없이 모든 활성 USDT 종목의 롱·숏 최적 세팅을 각각 저장합니다. 가상매매는 두 방향의 세팅을 함께 사용해 15분봉·한 계좌의 공유 자금으로 같은 기간을 재검증합니다. 종목당 한 포지션을 유지하며 진입 방향의 원주기·중심선·이격·청산 방식으로 관리합니다. 과거 최적값의 사후 분석이며 미래 성과를 보장하지 않습니다.</p>
                 {settings.envelopeRisk ? <p className="notice">통계에서 불러온 세팅은 현재 공개 위험한도에 따른 격리 LIQ 예상치를 사용합니다. 시가 갭이 SL과 LIQ를 모두 넘으면 남은 포지션 증거금을 소진하는 추정 청산으로 처리합니다. 실제 계좌·과거 거래소 청산가와 다를 수 있습니다.</p> : null}
               </div>
             ) : (
@@ -771,6 +772,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
               <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '0.5'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용 · SL도 같은 비율</small></label>
               <label className="field-label">청산 방식<select value={settings.envelopeExitMode ?? 'CENTER'} onChange={event => update('envelopeExitMode', event.target.value as BacktestSettings['envelopeExitMode'])}>{envelopeExitModes.map(mode => <option value={mode} key={mode}>{envelopeExitLabels[mode]}</option>)}</select></label>
+              <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeMoveSlOnCenter === true} onChange={event => update('envelopeMoveSlOnCenter', event.target.checked)} /><span>중앙선 터치시 SL 변경</span></label>
+              <p className="muted small">진입 후 유리한 방향으로 중앙선에 처음 닿으면 매수가와 접촉 당시 중앙선의 중간값으로 SL을 한 번 이동합니다. 중심선 전량 청산에서는 전량 청산이 우선입니다.</p>
             </>
           ) : (
             <>
@@ -799,7 +802,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             <button className="primary-button" type="button" disabled={running || statisticsRunning || anyAnalysisBusy || Boolean(activeServer)} onClick={() => run()}>{running || activeServer ? '분석 진행 중' : localJob?.status === 'PAUSED' ? '새 분석 시작' : '분석 시작'}</button>
             {running || activeServer ? <button className="danger-button" type="button" onClick={() => void cancel()}>{running ? '분석 일시정지' : '분석 중지'}</button> : null}
           </div>
-          {!running && !statisticsRunning && !activeServer && localJob?.status === 'PAUSED' && localJob.version === engineVersionFor(strategy) ? <button className="outline-button" type="button" onClick={() => run(true)}>분석 이어하기</button> : null}
+          {!running && !statisticsRunning && !activeServer && localJob?.status === 'PAUSED' && canResumeLocalJob(localJob) ? <button className="outline-button" type="button" onClick={() => run(true)}>분석 이어하기</button> : null}
           {localJob && localJob.status !== 'COMPLETED' ? <p className="muted small">화면을 끄거나 탭을 닫으면 분석이 정지될 수 있습니다. 다시 열어 ‘분석 이어하기’를 누르면 저장된 지점부터 계속합니다.</p> : null}
           {error && strategy !== 'VOLATILITY' && strategy !== 'ENVELOPE' && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
           <button

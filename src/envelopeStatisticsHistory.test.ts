@@ -68,4 +68,15 @@ describe('statistics history browsing', () => {
     expect(await loadEnvelopeStatisticsHistory()).toEqual([]); expect(await loadEnvelopeStatisticsReport('missing')).toBeNull();
     expect(await loadEnvelopeStatisticsReport('old')).toBeNull();
   });
+  it('keeps independent long/short bests in history, including a negative best and ignoring no-trade rows', async () => {
+    const done = report('directional'); done.version = '2.10.42'; done.settings.envelopeMoveSlOnCenter = true;
+    const base = done.rows[0]!;
+    done.rows = [{ ...base, side: 'LONG', returnPercent: -4.5 }, { ...base, side: 'SHORT', maPeriod: 60, returnPercent: 18 },
+      { ...base, side: 'LONG', returnPercent: 999, entryCount: 0 }];
+    done.bestBySide = { LONG: done.rows[0], SHORT: done.rows[1] };
+    await saveEnvelopeStatisticsHistory(done);
+    const cards = await loadEnvelopeStatisticsHistory('BTC');
+    expect(cards[0]).toMatchObject({ version: '2.10.42', bestBySide: { LONG: -4.5, SHORT: 18 } });
+    expect(cards[0]!.settings.envelopeMoveSlOnCenter).toBe(true); expect(await loadEnvelopeStatisticsReport(done.id)).toEqual(done);
+  });
 });

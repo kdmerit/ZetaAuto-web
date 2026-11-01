@@ -18,7 +18,10 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'ENVELOPE' ? '2.10.36' : strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
+  return strategy === 'ENVELOPE' ? '2.10.42' : strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
+}
+export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
+  return job.version === engineVersionFor(job.strategy) || job.strategy === 'ENVELOPE' && job.version === '2.10.36' && job.settings.envelopeMoveSlOnCenter !== true;
 }
 export interface LocalJob {
   id: string;
@@ -98,7 +101,7 @@ export async function loadLocalJob(strategy: Strategy): Promise<LocalJobView | n
   if (!job) return null;
   const view = jobView(job);
   if (view.status === 'RUNNING') view.status = 'PAUSED';
-  if (view.version !== engineVersionFor(strategy) && view.status !== 'COMPLETED') view.message = '분석 방식이 변경되었습니다. 새 분석을 시작해 주세요. 저장된 캔들은 재사용합니다.';
+  if (!canResumeLocalJob(view) && view.status !== 'COMPLETED') view.message = '분석 방식이 변경되었습니다. 새 분석을 시작해 주세요. 저장된 캔들은 재사용합니다.';
   return view;
 }
 
@@ -149,8 +152,9 @@ async function executeWithLease(
     if (options.resumeId) {
       const saved = await readJob(options.strategy);
       if (!saved || saved.id !== options.resumeId || saved.status === 'COMPLETED') throw new Error('이어갈 분석을 찾지 못했습니다.');
-      if (saved.version !== engineVersionFor(options.strategy)) throw new Error('분석 방식이 변경되었습니다. 새 분석을 시작해 주세요. 저장된 캔들은 재사용합니다.');
+      if (!canResumeLocalJob(saved)) throw new Error('분석 방식이 변경되었습니다. 새 분석을 시작해 주세요. 저장된 캔들은 재사용합니다.');
       job = saved;
+      job.version = engineVersionFor(options.strategy);
       job.status = 'RUNNING';
       job.message = null;
       savedState = job.state;

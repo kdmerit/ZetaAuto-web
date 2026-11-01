@@ -1,18 +1,18 @@
 /** All-symbol optimization and a separate, cash-constrained 15-minute portfolio revalidation. */
 import { intervalSeconds } from './api';
 import { deleteValue, lease, maintainCache, readValue, retentionMs, writeValue } from './database';
-import { envelopeOptimizerVersion, isFixedEnvelopeStatisticsVersion, searchEnvelopeInstrument, statisticsAnalysisWindow, statisticsProgress, statisticsTotalFor, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow } from './envelopeStatistics';
+import { envelopeOptimizerVersion, isFixedEnvelopeStatisticsVersion, searchEnvelopeInstrument, statisticsAnalysisWindow, statisticsProgress, statisticsTotalFor, upgradeEnvelopeStatistics, type DirectionalBests, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from './envelopeStatistics';
 import { projectEnvelopeBands } from './envelope';
 import { ensureCandles, listInstruments, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { fixedEnvelopeSettings, yieldAnalysis } from './envelopeReplay';
-import type { PreparedSymbol } from './engine';
+import type { PreparedEnvelope, PreparedSymbol } from './engine';
 import type { BacktestResult, BacktestSettings, ContractRisk } from './types';
 
 export type EnvelopeBatchKind = 'ALL_STATS' | 'VIRTUAL';
 export interface OptimizedSymbol {
   symbol: string; launchAt: number; status: 'OK' | 'NO_TRADES' | 'UNSUPPORTED';
-  best: EnvelopeStatisticsRow | null; risk?: ContractRisk; message?: string;
+  best: EnvelopeStatisticsRow | null; bestBySide?: DirectionalBests; risk?: ContractRisk; message?: string;
 }
 export interface EnvelopeBatchJob {
   id: string; version: string; kind: EnvelopeBatchKind; status: 'RUNNING' | 'PAUSED' | 'COMPLETED';
@@ -24,14 +24,14 @@ export interface EnvelopeBatchView extends Omit<EnvelopeBatchJob, 'state' | 'uni
   rows: Omit<OptimizedSymbol, 'risk'>[]; candidateCount: number; completed: number; total: number;
 }
 interface SavedBatch extends Omit<EnvelopeBatchJob, 'rows' | 'state'> { rowsKey: string; stateKey?: string }
-export interface BatchHistoryEntry { id: string; at: number; kind: EnvelopeBatchKind; version?: string; settings: BacktestSettings; symbols: number; optimized: number; returnPercent?: number; sourceId?: string }
+export interface BatchHistoryEntry { id: string; at: number; kind: EnvelopeBatchKind; version?: string; settings: BacktestSettings; symbols: number; optimized: number; longOptimized?: number; shortOptimized?: number; returnPercent?: number; sourceId?: string }
 const key = (kind: EnvelopeBatchKind): string => `ENVELOPE_BATCH:${kind}`;
 const archiveKey = (id: string): string => `envelope-batch:${id}`;
 const historyKey = 'envelope-batch-history';
 
 export function envelopeBatchView(job: EnvelopeBatchJob): EnvelopeBatchView {
   const { state: _state, universe, activeSearch, rows, ...view } = job;
-  const perSymbolTotal = statisticsTotalFor(job.settings);
+  const perSymbolTotal = statisticsTotalFor(job.settings, job.version);
   const total = job.kind === 'ALL_STATS' ? Math.max(1, universe.length) * perSymbolTotal : Math.max(1, ((job.end ?? 0) - (job.start ?? 0)) / 900);
   const completed = job.status === 'COMPLETED' ? total : job.kind === 'ALL_STATS'
     ? job.cursor * perSymbolTotal + (activeSearch ? statisticsProgress(activeSearch) : 0) : Math.max(0, ((job.blockStart ?? 0) - (job.start ?? 0)) / 900);
@@ -49,13 +49,15 @@ export async function loadEnvelopeBatch(kind: EnvelopeBatchKind): Promise<Envelo
   const job = await readJob(kind);
   if (!job) return null;
   if (job.version !== envelopeOptimizerVersion && job.status !== 'COMPLETED') job.message = canResumeEnvelopeBatch(job)
-    ? job.version === '2.10.40' ? '저장된 전체 주기·고정 배율을 유지해 이어갑니다.' : '입력한 레버리지·주기로 이어가면 고정 배율 전체통계로 전환합니다.'
-    : '고정 레버리지 방식으로 변경되었습니다. 새 분석을 시작해 주세요. 기존 이력은 보존됩니다.';
+    ? '저장한 설정으로 분석을 이어갑니다. 기존 이력은 보존됩니다.'
+    : '롱·숏 분리 전 작업입니다. 새 전체통계를 시작해 주세요. 기존 이력은 보존됩니다.';
   return envelopeBatchView({ ...job, status: job.status === 'RUNNING' ? 'PAUSED' : job.status });
 }
-export function canResumeEnvelopeBatch(job: Pick<EnvelopeBatchJob, 'version' | 'kind' | 'cursor' | 'rows' | 'settings'>): boolean {
-  return job.version === envelopeOptimizerVersion || job.version === '2.10.40' && (job.settings.envelopeStatisticsInterval ?? 'ALL') === 'ALL'
-    || job.kind === 'ALL_STATS' && job.version === '2.10.38' && !job.cursor && !job.rows.length;
+export function canResumeEnvelopeBatch(job: Pick<EnvelopeBatchJob, 'version' | 'kind' | 'cursor' | 'rows' | 'settings'> & { activeSearch?: EnvelopeStatisticsJob; completed?: number }): boolean {
+  if (job.version === envelopeOptimizerVersion) return true;
+  if (isFixedEnvelopeStatisticsVersion(job.version)) return job.kind === 'VIRTUAL' || job.settings.side !== 'BOTH'
+    || !job.cursor && !job.rows.length && !job.completed && (!job.activeSearch || !statisticsProgress(job.activeSearch));
+  return job.kind === 'ALL_STATS' && job.version === '2.10.38' && !job.cursor && !job.rows.length;
 }
 export async function loadEnvelopeBatchReport(id: string): Promise<EnvelopeBatchJob | null> {
   const value = await readValue<EnvelopeBatchJob>('results', archiveKey(id));
@@ -68,7 +70,9 @@ export async function loadEnvelopeBatchHistory(kind: EnvelopeBatchKind): Promise
 async function saveReport(job: EnvelopeBatchJob): Promise<void> {
   const previous = await readValue<BatchHistoryEntry[]>('publicData', historyKey) ?? [];
   const entry: BatchHistoryEntry = { id: job.id, at: job.updatedAt, kind: job.kind, version: job.version, settings: job.settings, symbols: job.universe.length,
-    optimized: job.rows.filter(row => row.status === 'OK').length, ...(job.result ? { returnPercent: job.result.returnPercent } : {}), ...(job.sourceId ? { sourceId: job.sourceId } : {}) };
+    optimized: job.rows.filter(row => row.status === 'OK').length,
+    ...(job.rows.some(row => row.bestBySide) ? { longOptimized: job.rows.filter(row => row.bestBySide?.LONG).length, shortOptimized: job.rows.filter(row => row.bestBySide?.SHORT).length } : {}),
+    ...(job.result ? { returnPercent: job.result.returnPercent } : {}), ...(job.sourceId ? { sourceId: job.sourceId } : {}) };
   const recent = [entry, ...previous.filter(item => item.id !== job.id)].filter(item => Date.now() - item.at <= retentionMs);
   const keep = recent.filter((item, index) => recent.slice(0, index).filter(other => other.kind === item.kind).length < 20);
   await writeValue('results', archiveKey(job.id), job); await writeValue('publicData', historyKey, keep);
@@ -109,12 +113,13 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
       if (!job || job.id !== options.resumeId || !canResumeEnvelopeBatch(job) || job.status === 'COMPLETED') throw new Error('이어갈 분석이 없습니다. 새 분석을 시작해 주세요.');
       const header = await readValue<SavedBatch>('jobs', key(options.kind)); oldRowsKey = header!.rowsKey; oldStateKey = header!.stateKey; savedRows = job.rows; savedState = job.state;
       if (job.version !== envelopeOptimizerVersion) {
-        if (job.version === '2.10.40') {
-          job.settings = fixedEnvelopeSettings({ ...job.settings, envelopeStatisticsInterval: 'ALL' });
-          if (job.activeSearch) {
-            job.activeSearch.version = envelopeOptimizerVersion;
-            job.activeSearch.settings = { ...job.activeSearch.settings, envelopeStatisticsInterval: 'ALL' };
-          }
+        if (isFixedEnvelopeStatisticsVersion(job.version)) {
+          job.settings = fixedEnvelopeSettings({ ...job.settings, envelopeStatisticsInterval: job.settings.envelopeStatisticsInterval ?? 'ALL' });
+          if (job.kind === 'ALL_STATS' && job.settings.side !== 'BOTH') {
+            const side = job.settings.side;
+            job.rows = job.rows.map(row => { const best = row.best ? { ...row.best, side } : null; return { ...row, best, bestBySide: { [side]: best } }; });
+            if (job.activeSearch) job.activeSearch = upgradeEnvelopeStatistics(job.activeSearch);
+          } else if (job.kind === 'ALL_STATS') delete job.activeSearch;
         } else {
           job.settings = fixedEnvelopeSettings({ ...job.settings, leverage: options.settings?.leverage ?? job.settings.leverage,
             envelopeStatisticsInterval: options.settings?.envelopeStatisticsInterval ?? 'ALL' });
@@ -146,18 +151,45 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
           instrument: { ...instrument, LONG: true, SHORT: true } };
         await searchEnvelopeInstrument(job.activeSearch, async force => { job!.message = `${job!.cursor + 1}/${job!.universe.length} · ${instrument.symbol} · ${job!.activeSearch!.message}`; await checkpoint(force); }, signal);
         const search = job.activeSearch;
-        job.rows = [...job.rows, { ...instrument, status: search.best ? 'OK' : 'NO_TRADES', best: search.best ?? null }];
+        job.rows = [...job.rows, { ...instrument, status: search.best ? 'OK' : 'NO_TRADES', best: search.best ?? null, bestBySide: search.bestBySide }];
         job.cursor += 1; delete job.activeSearch; await checkpoint(true); await yieldAnalysis();
       }
     } else {
       const parameters: Record<string, BacktestSettings> = {};
-      for (const row of job.rows) parameters[row.symbol] = { ...fixedEnvelopeSettings(job.settings), interval: row.best!.interval, symbol: row.symbol.replace(/USDT$/, ''), envelopeMaPeriod: String(row.best!.maPeriod), envelopeDeviationPercent: String(row.best!.deviationPercent), envelopeExitMode: row.best!.exitMode };
-      const size = Math.max(1, Math.min(128, Math.floor(64000 / job.rows.length)));
+      const parametersBySide: Record<string, Partial<Record<StatisticsSide, BacktestSettings>>> = {};
+      const settingFor = (row: OptimizedSymbol, best: EnvelopeStatisticsRow, side = job!.settings.side): BacktestSettings => ({ ...fixedEnvelopeSettings(job!.settings), side,
+        interval: best.interval, symbol: row.symbol.replace(/USDT$/, ''), envelopeMaPeriod: String(best.maPeriod), envelopeDeviationPercent: String(best.deviationPercent), envelopeExitMode: best.exitMode });
+      for (const row of job.rows) {
+        parameters[row.symbol] = settingFor(row, row.best!);
+        if (row.bestBySide) {
+          const directional: Partial<Record<StatisticsSide, BacktestSettings>> = {};
+          for (const side of ['LONG', 'SHORT'] as const) if (row.bestBySide[side]) directional[side] = settingFor(row, row.bestBySide[side]!, side);
+          parametersBySide[row.symbol] = directional;
+        }
+      }
+      const size = Math.max(1, Math.min(128, Math.floor(64000 / (job.rows.length * 2))));
       while (job.blockStart! < job.end!) {
         signal.throwIfAborted(); const start = job.blockStart!; const end = Math.min(job.end!, start + size * 900); const documents: PreparedSymbol[] = [];
         for (const row of job.rows) {
           signal.throwIfAborted(); const p = parameters[row.symbol]!; const seconds = intervalSeconds(p.interval); const period = row.best!.maPeriod;
           const candles = await ensureCandles(row, '15m', start, end, job.end, signal);
+          if (parametersBySide[row.symbol]) {
+            const maps: Partial<Record<StatisticsSide, Map<number, PreparedEnvelope>>> = {};
+            for (const side of ['LONG', 'SHORT'] as const) {
+              const directional = parametersBySide[row.symbol]![side]; const best = row.bestBySide![side];
+              if (!directional || !best) continue;
+              const seconds = intervalSeconds(directional.interval);
+              const parentStart = Math.floor(start / seconds) * seconds - best.maPeriod * seconds;
+              const parentEnd = Math.floor((end - 900) / seconds) * seconds;
+              const parents = await ensureCandles(row, directional.interval, parentStart, parentEnd, parentEnd, signal);
+              const projected = projectEnvelopeBands(parents, candles, { interval: directional.interval, period: best.maPeriod, deviationPercent: best.deviationPercent });
+              maps[side] = new Map(projected.bands.map(band => [band.openTime, { ...band, long: side === 'LONG', short: side === 'SHORT',
+                parentOpenTime: Math.floor(band.openTime / seconds) * seconds, sourceInterval: directional.interval }]));
+            }
+            documents.push({ symbol: row.symbol, bars: candles.map(candle => ({ candle, signal: null, ma20: null, ma60Exit: null,
+              envelopeBySide: Object.fromEntries((['LONG', 'SHORT'] as const).flatMap(side => { const band = maps[side]?.get(candle.openTime); return band ? [[side, band]] : []; })) })) });
+            job.message = `롱·숏 최적 세팅 가상매매 ${row.symbol}`; await checkpoint(); continue;
+          }
           const parentStart = Math.floor(start / seconds) * seconds - period * seconds;
           const parentEnd = Math.floor((end - 900) / seconds) * seconds;
           const parents = await ensureCandles(row, p.interval, parentStart, parentEnd, parentEnd, signal);
@@ -170,7 +202,7 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
           job.message = `가상매매 캔들 확인 ${row.symbol} · ${new Date(start * 1000).toLocaleDateString('ko-KR')}`; await checkpoint();
         }
         const next = structuredClone(job.state!);
-        replayPortfolioBlock(next, documents, job.settings, start, end, 900, { settingsForSymbol: parameters });
+        replayPortfolioBlock(next, documents, job.settings, start, end, 900, { settingsForSymbol: parameters, settingsForSymbolSide: parametersBySide });
         job.state = next; job.blockStart = end; job.result = { ...portfolioResult(next, job.settings), universeCount: job.rows.length };
         job.message = `공유 계좌 가상매매 · ${new Date(end * 1000).toLocaleString('ko-KR')}`; await checkpoint(true); await yieldAnalysis();
       }

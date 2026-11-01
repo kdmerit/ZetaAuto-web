@@ -47,6 +47,7 @@ export interface BacktestSettings {
   envelopeMaPeriod?: string;
   envelopeRisk?: ContractRisk;
   envelopeStatisticsInterval?: EnvelopeStatisticsInterval;
+  envelopeMoveSlOnCenter?: boolean;
 }
 
 export interface Candle {
@@ -195,6 +196,8 @@ export interface Signal {
   envelopeExitMode?: EnvelopeExitMode;
   envelopeMaPeriod?: number;
   envelopeSourceInterval?: BacktestInterval;
+  envelopeCenter?: number;
+  envelopeMoveSlOnCenter?: boolean;
   waves?: Wave[];
 }
 

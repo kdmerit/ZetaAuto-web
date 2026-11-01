@@ -389,13 +389,15 @@ function volatilitySignals(
   return signals;
 }
 
+export interface PreparedEnvelope extends EnvelopeBand { long: boolean; short: boolean; parentOpenTime?: number; sourceInterval?: BacktestInterval }
 export interface PreparedBar {
   candle: Candle;
   signal: Signal | null;
   ma20: number | null;
   ma60Exit: number | null;
   intrabarCandles?: Candle[];
-  envelope?: EnvelopeBand & { long: boolean; short: boolean; parentOpenTime?: number; sourceInterval?: BacktestInterval };
+  envelope?: PreparedEnvelope;
+  envelopeBySide?: Partial<Record<'LONG' | 'SHORT', PreparedEnvelope>>;
 }
 
 export interface PreparedSymbol {

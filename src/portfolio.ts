@@ -29,6 +29,8 @@ interface Holding {
   net: number;
   executions: Execution[];
   risk?: ContractRisk;
+  envelopeCenter?: number;
+  centerStopMoved?: boolean;
 }
 
 export interface PortfolioState {
@@ -77,7 +79,8 @@ export function portfolioEquity(state: PortfolioState): number {
 }
 
 function priceLines(p: Holding): PriceLine[] {
-  if (p.signal.strategy === 'ENVELOPE') return [{ kind: 'ENTRY', price: p.first }, { kind: 'SL', price: p.stop }];
+  if (p.signal.strategy === 'ENVELOPE') return [{ kind: 'ENTRY', price: p.first }, { kind: 'SL', price: p.stop },
+    ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
   if (p.signal.strategy === 'VOLATILITY') return [
     { kind: 'ENTRY', price: p.first },
     ...(p.signal.volatilityStopEnabled === true ? [{ kind: 'SL' as const, price: p.stop }] : []),
@@ -169,6 +172,7 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   };
   if (signal.strategy === 'ENVELOPE') {
     p.signal = { ...signal, stop: p.stop, initialStop: p.stop };
+    p.envelopeCenter = signal.envelopeCenter;
     if (signal.envelopeExitMode === 'HALF') p.partial = signal.partial ?? null;
   }
   state.positions[symbol] = p;
@@ -222,6 +226,12 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
   if (stopped) { close(state, p, opening ? price : p.stop, p.qty, 'SL', candle, opening); return; }
   const roi = roiPrice(p, settings);
   if (roi !== null && (long ? price <= roi : price >= roi)) { close(state, p, opening ? price : roi, p.qty, 'ROI_LOSS', candle, opening); return; }
+  if (p.signal.envelopeMoveSlOnCenter === true && !p.centerStopMoved && p.envelopeCenter !== undefined
+    && (long ? p.envelopeCenter > p.entry && price >= p.envelopeCenter : p.envelopeCenter < p.entry && price <= p.envelopeCenter)) {
+    const next = (p.entry + p.envelopeCenter) / 2;
+    p.stop = long ? Math.max(p.stop, next) : Math.min(p.stop, next);
+    p.centerStopMoved = true;
+  }
   if (p.partial !== null && !p.partialDone && (long ? price >= p.partial : price <= p.partial)) {
     p.partialDone = true;
     if (p.signal.strategy === 'DISPARITY') p.stop = p.first;
@@ -246,6 +256,7 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
   if (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true) levels.add(p.stop);
   if (p.pending) levels.add(p.second);
   if (p.partial !== null && !p.partialDone) levels.add(p.partial);
+  if (p.signal.envelopeMoveSlOnCenter === true && !p.centerStopMoved && p.envelopeCenter !== undefined) levels.add(p.envelopeCenter);
   const roi = roiPrice(p, settings);
   if (roi !== null) levels.add(roi);
   const crossed = [...levels].filter(level => level !== before && level >= Math.min(before, after) && level <= Math.max(before, after)).sort((a, b) => after < before ? b - a : a - b);
@@ -357,35 +368,50 @@ function worstPath(candidates: PortfolioState[]): PortfolioState {
 }
 
 /** One entry at the first eligible band touch on each admissible path; no retrospective fills. */
-function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, lowFirst: boolean): PortfolioState {
+function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, lowFirst: boolean,
+  settingsBySide?: Partial<Record<'LONG' | 'SHORT', BacktestSettings>>, openingPriority: 'LONG' | 'SHORT' = 'LONG'): PortfolioState {
   const state = initialPortfolio(available);
-  const band = bar.envelope!;
-  const { percent, exit, period } = envelopeParameters(settings);
+  const definition = (side: 'LONG' | 'SHORT') => ({ band: bar.envelopeBySide ? bar.envelopeBySide[side] : bar.envelope,
+    parameters: settingsBySide?.[side] ?? settings });
+  const eligible = (side: 'LONG' | 'SHORT'): boolean => {
+    const { band, parameters } = definition(side);
+    return !!band && (side === 'LONG' ? band.long : band.short) && (parameters.side === 'BOTH' || parameters.side === side);
+  };
   const candle = bar.candle;
   const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
   let attempted = false;
+  let enteredSettings = settings;
   const attempt = (side: 'LONG' | 'SHORT', price: number): void => {
     attempted = true;
+    const { band, parameters } = definition(side);
+    if (!band) return;
+    enteredSettings = parameters;
+    const { percent, exit, period } = envelopeParameters(parameters);
     const direction = side === 'LONG' ? 1 : -1;
     const target = exit === 'CENTER' ? band.center : side === 'LONG' ? band.upper : band.lower;
     enter(state, symbol, { strategy: 'ENVELOPE', side, index: candle.openTime,
       entry: price, stop: price * (1 - direction * percent / 100), target, initialTarget: target,
       partial: exit === 'HALF' ? band.center : undefined,
       exitMode: 'ENVELOPE_TOUCH', envelopeDeviationPercent: percent, envelopeExitMode: exit, envelopeMaPeriod: period,
+      envelopeCenter: band.center, envelopeMoveSlOnCenter: parameters.envelopeMoveSlOnCenter === true,
       ...(band.sourceInterval ? { envelopeSourceInterval: band.sourceInterval } : {}),
-    }, candle, settings);
+    }, candle, parameters);
   };
-  if (band.long && candle.open <= band.lower) attempt('LONG', candle.open);
-  else if (band.short && candle.open >= band.upper) attempt('SHORT', candle.open);
+  const openingSides = openingPriority === 'LONG' ? ['LONG', 'SHORT'] as const : ['SHORT', 'LONG'] as const;
+  for (const side of openingSides) if (!attempted && eligible(side)) {
+    const band = definition(side).band!;
+    if (side === 'LONG' ? candle.open <= band.lower : candle.open >= band.upper) attempt(side, candle.open);
+  }
   for (let index = 1; index < path.length; index += 1) {
     let before = path[index - 1]!;
     const after = path[index]!;
     if (!attempted) {
-      if (band.long && before > band.lower && after <= band.lower) { attempt('LONG', band.lower); before = band.lower; }
-      else if (band.short && before < band.upper && after >= band.upper) { attempt('SHORT', band.upper); before = band.upper; }
+      const long = definition('LONG').band; const short = definition('SHORT').band;
+      if (eligible('LONG') && long && before > long.lower && after <= long.lower) { attempt('LONG', long.lower); before = long.lower; }
+      else if (eligible('SHORT') && short && before < short.upper && after >= short.upper) { attempt('SHORT', short.upper); before = short.upper; }
     }
     const position = state.positions[symbol];
-    if (position) replaySegment(state, position, before, after, candle, settings);
+    if (position) replaySegment(state, position, before, after, candle, enteredSettings);
   }
   return state;
 }
@@ -411,6 +437,7 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
     position.target = position.signal.envelopeExitMode === 'CENTER' ? bar.envelope.center
       : position.signal.side === 'LONG' ? bar.envelope.upper : bar.envelope.lower;
     position.partial = position.signal.envelopeExitMode === 'HALF' && !position.partialDone ? bar.envelope.center : null;
+    position.envelopeCenter = bar.envelope.center;
   }
   const candidates = [replayPath(position, bar, settings, true), replayPath(position, bar, settings, false)];
   mergePath(state, worstPath(candidates), symbol);
@@ -419,6 +446,7 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
 /** Close-entry strategies reuse exits; intrabar entries use the opening cash budget only. */
 export interface ReplayOptions {
   settingsForSymbol?: Record<string, BacktestSettings>;
+  settingsForSymbolSide?: Record<string, Partial<Record<'LONG' | 'SHORT', BacktestSettings>>>;
 }
 
 export function replayPortfolioBlock(state: PortfolioState, documents: PreparedSymbol[], settings: BacktestSettings, start: number, end: number, seconds: number, options: ReplayOptions = {}): void {
@@ -441,23 +469,44 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
       const previous = state.envelopeParents[symbol];
       if (!previous || previous.openTime !== bar.envelope.parentOpenTime) state.envelopeParents[symbol] = { openTime: bar.envelope.parentOpenTime, blocked: occupiedAtOpen.has(symbol) };
     }
+    for (const { symbol, bar } of rows) for (const side of ['LONG', 'SHORT'] as const) {
+      const band = bar.envelopeBySide?.[side];
+      if (band?.parentOpenTime === undefined) continue;
+      state.envelopeParents ??= {};
+      const key = `${symbol}:${side}`; const previous = state.envelopeParents[key];
+      if (!previous || previous.openTime !== band.parentOpenTime) state.envelopeParents[key] = { openTime: band.parentOpenTime, blocked: occupiedAtOpen.has(symbol) };
+    }
     // A later intrabar/close exit must not finance an earlier breakout touch.
     // No same-bar profit/margin recycling or exit-then-retroactive re-entry.
     let intrabarBudget = Math.max(0, state.cash);
-    for (const { symbol, bar } of rows) processBar(state, symbol, bar, options.settingsForSymbol?.[symbol] ?? settings);
+    for (const { symbol, bar } of rows) {
+      const side = state.positions[symbol]?.signal.side;
+      const parameters = side && options.settingsForSymbolSide?.[symbol]?.[side] || options.settingsForSymbol?.[symbol] || settings;
+      processBar(state, symbol, side && bar.envelopeBySide ? { ...bar, envelope: bar.envelopeBySide[side] } : bar, parameters);
+    }
     for (const { symbol, bar } of rows) {
       const parameters = options.settingsForSymbol?.[symbol] ?? settings;
-      if (occupiedAtOpen.has(symbol) || bar.signal?.exitMode !== 'VOLATILITY_TP' && !bar.envelope) continue;
+      const hasEnvelope = !!(bar.envelope || bar.envelopeBySide);
+      if (occupiedAtOpen.has(symbol) || bar.signal?.exitMode !== 'VOLATILITY_TP' && !hasEnvelope) continue;
       if (bar.envelope?.parentOpenTime !== undefined && state.envelopeParents?.[symbol]?.blocked) continue;
       if (bar.envelope && !(bar.envelope.long && bar.candle.low <= bar.envelope.lower)
         && !(bar.envelope.short && bar.candle.high >= bar.envelope.upper)) continue;
       const available = Math.max(0, Math.min(intrabarBudget, state.cash));
-      const selected = bar.envelope
-        ? worstPath([envelopeEntryPath(symbol, bar, parameters, available, true), envelopeEntryPath(symbol, bar, parameters, available, false)])
+      const entryBar = bar.envelopeBySide ? { ...bar, envelopeBySide: Object.fromEntries(Object.entries(bar.envelopeBySide).map(([side, band]) => {
+        const blocked = state.envelopeParents?.[`${symbol}:${side}`]?.blocked;
+        return [side, { ...band, long: band.long && !blocked, short: band.short && !blocked }];
+      })) } : bar;
+      const selected = hasEnvelope
+        ? worstPath([true, false].flatMap(lowFirst => (bar.envelopeBySide ? ['LONG', 'SHORT'] as const : ['LONG'] as const)
+          .map(priority => envelopeEntryPath(symbol, entryBar, parameters, available, lowFirst, options.settingsForSymbolSide?.[symbol], priority))))
         : replayIntrabarEntry(symbol, bar, parameters, available);
       mergePath(state, selected, symbol, available);
       if (selected.entries) {
         if (bar.envelope?.parentOpenTime !== undefined) state.envelopeParents![symbol]!.blocked = true;
+        if (bar.envelopeBySide) {
+          const side = selected.positions[symbol]?.signal.side ?? selected.trades[0]?.side;
+          if (side && state.envelopeParents?.[`${symbol}:${side}`]) state.envelopeParents[`${symbol}:${side}`]!.blocked = true;
+        }
         intrabarBudget = Math.max(0, intrabarBudget - Number(parameters.betAmountUsdt) * (1 + Number(parameters.leverage) * feeRate));
       }
     }

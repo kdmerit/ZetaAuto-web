@@ -13,15 +13,20 @@ export interface EnvelopeStatisticsHistoryEntry {
   settings: BacktestSettings;
   comparedCount: number;
   bestReturnPercent: number | null;
+  version?: string;
+  bestBySide?: Partial<Record<'LONG' | 'SHORT', number | null>>;
 }
 interface IndexEntry { id: string; at: number; summary?: EnvelopeStatisticsHistoryEntry }
 
 function summaryFor(job: EnvelopeStatisticsJob): EnvelopeStatisticsHistoryEntry {
   let best: number | null = null;
+  const bestBySide: EnvelopeStatisticsHistoryEntry['bestBySide'] = job.bestBySide ? Object.fromEntries(Object.keys(job.bestBySide).map(side => [side, null])) : {};
   for (const row of job.rows) if (row.entryCount > 0 && Number.isFinite(row.returnPercent)) {
     best = best === null ? row.returnPercent : Math.max(best, row.returnPercent);
+    if (row.side) bestBySide[row.side] = bestBySide[row.side] == null ? row.returnPercent : Math.max(bestBySide[row.side]!, row.returnPercent);
   }
-  return { id: job.id, savedAt: job.updatedAt, settings: job.settings, comparedCount: job.rows.length, bestReturnPercent: best };
+  return { id: job.id, version: job.version, savedAt: job.updatedAt, settings: job.settings, comparedCount: job.rows.length, bestReturnPercent: best,
+    ...(Object.keys(bestBySide).length ? { bestBySide } : {}) };
 }
 
 export async function loadEnvelopeStatisticsReport(id: string): Promise<EnvelopeStatisticsJob | null> {
