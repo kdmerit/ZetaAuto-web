@@ -418,9 +418,7 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
 
 /** Close-entry strategies reuse exits; intrabar entries use the opening cash budget only. */
 export interface ReplayOptions {
-  fundingCheck?: boolean;
   settingsForSymbol?: Record<string, BacktestSettings>;
-  onFrame?: (state: PortfolioState, at: number, bars: { symbol: string; bar: PreparedBar }[]) => void;
 }
 
 export function replayPortfolioBlock(state: PortfolioState, documents: PreparedSymbol[], settings: BacktestSettings, start: number, end: number, seconds: number, options: ReplayOptions = {}): void {
@@ -453,14 +451,14 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
       if (bar.envelope?.parentOpenTime !== undefined && state.envelopeParents?.[symbol]?.blocked) continue;
       if (bar.envelope && !(bar.envelope.long && bar.candle.low <= bar.envelope.lower)
         && !(bar.envelope.short && bar.candle.high >= bar.envelope.upper)) continue;
-      const available = options.fundingCheck === false ? Number(parameters.betAmountUsdt) * (1 + Number(parameters.leverage) * feeRate) : Math.max(0, Math.min(intrabarBudget, state.cash));
+      const available = Math.max(0, Math.min(intrabarBudget, state.cash));
       const selected = bar.envelope
         ? worstPath([envelopeEntryPath(symbol, bar, parameters, available, true), envelopeEntryPath(symbol, bar, parameters, available, false)])
         : replayIntrabarEntry(symbol, bar, parameters, available);
       mergePath(state, selected, symbol, available);
       if (selected.entries) {
         if (bar.envelope?.parentOpenTime !== undefined) state.envelopeParents![symbol]!.blocked = true;
-        if (options.fundingCheck !== false) intrabarBudget = Math.max(0, intrabarBudget - Number(parameters.betAmountUsdt) * (1 + Number(parameters.leverage) * feeRate));
+        intrabarBudget = Math.max(0, intrabarBudget - Number(parameters.betAmountUsdt) * (1 + Number(parameters.leverage) * feeRate));
       }
     }
     for (const { symbol, bar } of rows) if (bar.signal && bar.signal.exitMode !== 'VOLATILITY_TP') enter(state, symbol, bar.signal, bar.candle, options.settingsForSymbol?.[symbol] ?? settings);
@@ -473,7 +471,6 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
     if (state.peak > 0) state.maxDrawdown = Math.max(state.maxDrawdown, (state.peak - equity) / state.peak * 100);
     state.equityCurve.push({ at: at + seconds, equityUsdt: equity });
     if (state.equityCurve.length > 600) state.equityCurve = state.equityCurve.filter((_, index) => index % 2 === 0 || index === state.equityCurve.length - 1);
-    options.onFrame?.(state, at, rows);
   }
 }
 

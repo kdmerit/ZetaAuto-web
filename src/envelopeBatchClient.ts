@@ -10,10 +10,10 @@ export function subscribeEnvelopeBatch(kind: EnvelopeBatchKind, listener: (event
 export const restoreEnvelopeBatch = async (kind: EnvelopeBatchKind): Promise<EnvelopeBatchView | null> => isEnvelopeBatchRunning(kind) ? views.get(kind) ?? loadEnvelopeBatch(kind) : loadEnvelopeBatch(kind);
 function saveLocal(view: EnvelopeBatchView): void {
   try {
-    if (view.kind === 'ALL_STATS') localStorage.setItem('zetaauto.web.envelope.allStatistics.latest', JSON.stringify({ id: view.id, settings: view.settings, updatedAt: view.updatedAt, rows: view.rows }));
+    if (view.kind === 'ALL_STATS') localStorage.setItem('zetaauto.web.envelope.allStatistics.latest', JSON.stringify({ id: view.id, version: view.version, settings: view.settings, updatedAt: view.updatedAt, rows: view.rows }));
     const storageKey = `zetaauto.web.envelope.${view.kind}.history`;
     const previous = JSON.parse(localStorage.getItem(storageKey) ?? '[]') as { id: string; at: number }[];
-    localStorage.setItem(storageKey, JSON.stringify([{ id: view.id, at: view.updatedAt, settings: view.settings, sourceId: view.sourceId, returnPercent: view.result?.returnPercent }, ...previous.filter(item => item.id !== view.id && Date.now() - item.at <= 30 * 86400000)].slice(0, 20)));
+    localStorage.setItem(storageKey, JSON.stringify([{ id: view.id, at: view.updatedAt, version: view.version, settings: view.settings, sourceId: view.sourceId, returnPercent: view.result?.returnPercent }, ...previous.filter(item => item.id !== view.id && Date.now() - item.at <= 30 * 86400000)].slice(0, 20)));
   } catch { /* Full reports also remain in IndexedDB. */ }
 }
 export function startEnvelopeBatch(kind: EnvelopeBatchKind, settings?: BacktestSettings, resumeId?: string, sourceId?: string): void {

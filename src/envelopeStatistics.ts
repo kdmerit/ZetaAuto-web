@@ -6,12 +6,11 @@ import { prepareSymbolBlock } from './engine';
 import { envelopeExitModes, envelopePeriods } from './envelope';
 import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, type EligibleInstrument } from './marketData';
 import type { BacktestInterval, BacktestResult, BacktestSettings, ContractRisk, EnvelopeExitMode } from './types';
-import { loadContractRisk } from './contractRisk';
-import { bestEnvelopeLeverage } from './envelopeLeverage';
+import { fixedEnvelopeSettings, replayFixedEnvelope } from './envelopeReplay';
 
 export const statisticsIntervals: BacktestInterval[] = ['15m', '1h', '4h', '1d'];
 const jobKey = 'ENVELOPE_STATISTICS';
-export const envelopeOptimizerVersion = '2.10.38';
+export const envelopeOptimizerVersion = '2.10.40';
 const version = envelopeOptimizerVersion;
 
 export interface EnvelopeStatisticsRow {
@@ -31,7 +30,6 @@ export interface EnvelopeStatisticsRow {
   maxDrawdownPercent: number;
   openPositionCount: number;
   leverage?: number;
-  safeMaximumLeverage?: number;
 }
 
 export interface EnvelopeStatisticsJob {
@@ -51,7 +49,6 @@ export interface EnvelopeStatisticsJob {
   instrument?: EligibleInstrument;
   risk?: ContractRisk;
   best?: EnvelopeStatisticsRow | null;
-  testedLeverages?: number;
   keepRows?: boolean;
 }
 
@@ -59,10 +56,16 @@ export const statisticsTotal = 4 * envelopePeriods.length * 200 * 3;
 export const statisticsProgress = (job: EnvelopeStatisticsJob): number => job.status === 'COMPLETED' ? statisticsTotal
   : Math.min(statisticsTotal, (job.intervalIndex * envelopePeriods.length + job.periodIndex) * 600 + (job.step - 1) * 3 + job.exitIndex);
 
+export function canResumeEnvelopeStatistics(job: EnvelopeStatisticsJob): boolean {
+  return job.version === version || ['2.10.36', '2.10.38'].includes(job.version) && !job.rows.length && !job.best;
+}
+
 export async function loadEnvelopeStatistics(): Promise<EnvelopeStatisticsJob | null> {
   const job = await readValue<EnvelopeStatisticsJob>('jobs', jobKey);
   if (!job || Date.now() - job.updatedAt > retentionMs) return null;
-  if (job.version !== version && job.status !== 'COMPLETED') return { ...job, status: 'PAUSED', message: '레버리지 최적화 방식이 변경되었습니다. 새 개별통계를 시작해 주세요. 기존 이력은 보존됩니다.' };
+  if (job.version !== version && job.status !== 'COMPLETED') return { ...job, status: 'PAUSED', message: canResumeEnvelopeStatistics(job)
+    ? '입력한 레버리지로 이어가면 고정 배율 통계로 전환합니다. 기존 이력은 보존됩니다.'
+    : '고정 레버리지 방식으로 변경되었습니다. 새 개별통계를 시작해 주세요. 기존 이력은 보존됩니다.' };
   return { ...job, status: job.status === 'RUNNING' ? 'PAUSED' : job.status };
 }
 
@@ -89,16 +92,14 @@ export function maximumTouchedStep(document: ReturnType<typeof prepareSymbolBloc
 
 export function betterEnvelopeSetting(row: EnvelopeStatisticsRow, previous?: EnvelopeStatisticsRow | null): boolean {
   return row.entryCount > 0 && (!previous || row.returnPercent > previous.returnPercent + 1e-9
-    || Math.abs(row.returnPercent - previous.returnPercent) <= 1e-9 && (row.maxDrawdownPercent < previous.maxDrawdownPercent
-      || row.maxDrawdownPercent === previous.maxDrawdownPercent && (row.leverage ?? 1) < (previous.leverage ?? 1)));
+    || Math.abs(row.returnPercent - previous.returnPercent) <= 1e-9 && row.maxDrawdownPercent < previous.maxDrawdownPercent);
 }
 
 /** Shared search for one symbol; ALL callers keep only best, not every parameter row. */
 export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, checkpoint: (force?: boolean) => Promise<void>, signal: AbortSignal): Promise<void> {
   if (!job.instrument) throw new Error('통계 종목 정보가 없습니다.');
-  job.message = '최대 레버리지·유지증거금 확인'; await checkpoint(true);
-  job.risk ??= await loadContractRisk(job.instrument.symbol, signal);
-  await checkpoint(true);
+  job.settings = fixedEnvelopeSettings(job.settings);
+  delete job.risk;
   while (job.intervalIndex < statisticsIntervals.length) {
     signal.throwIfAborted();
     const interval = statisticsIntervals[job.intervalIndex]!;
@@ -124,11 +125,10 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
           const exit = envelopeExitModes[job.exitIndex]!;
           const parameters = { ...settings, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: (job.step / 10).toFixed(1), envelopeExitMode: exit };
           const label = `${interval} · SMA${maPeriod} · ${(job.step / 10).toFixed(1)}% · ${job.exitIndex + 1}/3 청산`;
-          const optimized = await bestEnvelopeLeverage(document, parameters, job.risk, seconds, signal, async phase => { job.message = `${label} · ${phase}`; await checkpoint(); });
-          const row = { ...resultRow(optimized.result, interval, maPeriod, job.step, exit), leverage: optimized.leverage, safeMaximumLeverage: optimized.safeMaximum };
+          const result = await replayFixedEnvelope(document, parameters, seconds, signal, async phase => { job.message = `${label} · ${phase}`; await checkpoint(); });
+          const row = { ...resultRow(result, interval, maPeriod, job.step, exit), leverage: Number(parameters.leverage) };
           if (job.keepRows !== false) job.rows.push(row);
           if (betterEnvelopeSetting(row, job.best)) job.best = row;
-          job.testedLeverages = (job.testedLeverages ?? 0) + optimized.tested;
         }
         job.exitIndex = 0; job.step += 1; await checkpoint();
       }
@@ -166,12 +166,17 @@ async function execute(
     await maintainCache();
     if (options.resumeId) {
       job = await loadEnvelopeStatistics();
-      if (!job || job.id !== options.resumeId || job.status === 'COMPLETED' || job.version !== version) throw new Error('이어갈 개별통계가 없습니다. 이전 방식은 새 분석을 시작해 주세요.');
+      if (!job || job.id !== options.resumeId || job.status === 'COMPLETED' || !canResumeEnvelopeStatistics(job)) throw new Error('이어갈 개별통계가 없습니다. 이전 방식은 새 개별통계를 시작해 주세요.');
+      if (job.version !== version) {
+        job = { ...job, version, settings: fixedEnvelopeSettings({ ...job.settings, leverage: options.settings?.leverage ?? job.settings.leverage }),
+          intervalIndex: 0, periodIndex: 0, step: 1, exitIndex: 0, maxSteps: {}, skippedIntervals: {} };
+        delete job.risk;
+      }
       job.status = 'RUNNING';
     } else {
       if (!options.settings || options.settings.mode !== 'SINGLE') throw new Error('개별통계는 개별종목에서만 가능합니다.');
       // Freeze "now" once, so every case uses the same requested end time.
-      const settings = structuredClone(options.settings);
+      const settings = fixedEnvelopeSettings(structuredClone(options.settings));
       if (!settings.endDate) {
         const end = new Date(Date.now() + 9 * 3600_000).toISOString();
         settings.endDate = end.slice(0, 10); settings.endTime = end.slice(11, 16);

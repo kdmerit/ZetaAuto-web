@@ -1,25 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { envelopeExitLabels, envelopeExitModes, envelopePeriods } from '../envelope';
-import { envelopeOptimizerVersion, statisticsIntervals, statisticsProgress, statisticsTotal, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow } from '../envelopeStatistics';
+import { canResumeEnvelopeStatistics, envelopeOptimizerVersion, statisticsIntervals, statisticsProgress, statisticsTotal, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow } from '../envelopeStatistics';
 import { isEnvelopeStatisticsRunning, pauseEnvelopeStatistics, restoreEnvelopeStatistics, startEnvelopeStatistics, subscribeEnvelopeStatistics } from '../envelopeStatisticsClient';
 import type { BacktestSettings, EnvelopeExitMode } from '../types';
 import { loadEnvelopeStatisticsHistory, loadEnvelopeStatisticsReport, type EnvelopeStatisticsHistoryEntry } from '../envelopeStatisticsHistory';
 import { ProgressBar } from './ProgressBar';
 
-type Metric = 'returnPercent' | 'profitUsdt' | 'winCount' | 'winRatePercent' | 'entryCount' | 'leverage';
-const metrics: Record<Metric, string> = { returnPercent: '수익률', profitUsdt: '순손익', winCount: '수익횟수', winRatePercent: '승률', entryCount: '진입횟수', leverage: '최적 레버리지' };
+type Metric = 'returnPercent' | 'profitUsdt' | 'winCount' | 'winRatePercent' | 'entryCount';
+const metrics: Record<Metric, string> = { returnPercent: '수익률', profitUsdt: '순손익', winCount: '수익횟수', winRatePercent: '승률', entryCount: '진입횟수' };
 const colors = ['#88aaff', '#51d4a3', '#eea757', '#cf9bff'];
 const number = (value: number | null | undefined): string => value == null ? '—' : value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
 
 export function EnvelopeStatisticsStatus({ job }: { job: EnvelopeStatisticsJob }) {
   const legacy = job.version !== envelopeOptimizerVersion;
   return <>
-    {legacy ? <p className="notice small">이전 고정 레버리지 통계입니다. 새 개별통계부터 레버리지를 최적화합니다.</p>
-      : job.risk ? <p className="notice small">종목 최대 {job.risk.maxLeverage}배 · 1배씩 비교 · LIQ 안전 여유 0.3% · 추가 증거금 없는 격리마진 예상치 · 현재 공개 위험한도 기준</p>
-        : <p className="notice small">{job.status === 'RUNNING' ? '최대 레버리지와 위험한도 자료를 확인하는 중입니다.'
-          : job.status === 'PAUSED' ? '위험한도 자료를 아직 확인하지 못했습니다. 이어하기를 누르면 다시 조회합니다.'
-            : '이 보고서의 위험한도 자료를 확인하지 못했습니다.'}</p>}
-    {job.status !== 'COMPLETED' ? <ProgressBar completed={statisticsProgress(job)} total={statisticsTotal} label={job.status === 'PAUSED' ? job.risk ? '개별통계 일시정지' : '위험한도 확인 대기' : job.message} /> : <p className="notice">{job.message}</p>}
+    <p className="notice small">{legacy ? job.version === '2.10.38'
+      ? '이전 자동 레버리지 탐색 결과입니다. 새 통계는 입력한 레버리지를 고정 적용합니다.'
+      : '이전 버전의 고정 레버리지 통계입니다. 저장된 결과는 당시 기준으로 표시합니다.'
+      : `적용 레버리지 ${job.settings.leverage}배 고정 · 최대 한도·위험한도를 조회하지 않습니다.`}</p>
+    {job.status !== 'COMPLETED' ? <ProgressBar completed={statisticsProgress(job)} total={statisticsTotal} label={job.status === 'PAUSED' ? '개별통계 일시정지' : job.message} /> : <p className="notice">{job.message}</p>}
     {job.status === 'PAUSED' ? <p className="notice" role="status">{job.message}</p> : null}
   </>;
 }
@@ -136,7 +135,7 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
   return <section className="envelope-statistics" aria-label="엔벨로프 개별통계">
     <button className="primary-button full-width" type="button" disabled={disabled || running || historyLoading || settings.mode !== 'SINGLE'} onClick={() => start()}>{running ? '개별통계 진행 중' : '개별통계 분석 시작'}</button>
     {running ? <button className="danger-button full-width" type="button" onClick={pauseEnvelopeStatistics}>개별통계 일시정지</button> : null}
-    {!running && latestJob?.status === 'PAUSED' ? <button className="outline-button full-width" type="button" disabled={disabled || historyLoading || settings.mode !== 'SINGLE' || latestJob.version !== envelopeOptimizerVersion} onClick={() => start(true)}>개별통계 이어하기 · {latestJob.settings.symbol}</button> : null}
+    {!running && latestJob?.status === 'PAUSED' ? <button className="outline-button full-width" type="button" disabled={disabled || historyLoading || settings.mode !== 'SINGLE' || !canResumeEnvelopeStatistics(latestJob)} onClick={() => start(true)}>개별통계 이어하기 · {latestJob.settings.symbol}</button> : null}
     <button className="outline-button full-width" type="button" disabled={disabled || running || historyLoading} aria-expanded={historyOpen} onClick={() => { void toggleHistory(); }}>{historyLoading ? '개별통계 이력 불러오는 중' : historyOpen ? '개별통계 이력 닫기' : `${settings.mode === 'SINGLE' ? `${historySymbol || '해당 종목'} ` : ''}개별통계 이력보기`}</button>
     {historyOpen ? <div className="history-list envelope-stat-history" aria-label="개별통계 이력">
       {historyEntries.length ? historyEntries.map(entry => <button type="button" className="history-card" key={entry.id} disabled={historyLoading || running || disabled} onClick={() => { void openHistory(entry); }}>
@@ -148,7 +147,7 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
     {error && error !== job?.message ? <p className="error" role="alert">{error}</p> : null}
     {job ? <>
       <h3>{job.settings.symbol} 개별통계 {job.status === 'COMPLETED' ? '결과' : job.status === 'PAUSED' ? '일시정지' : '진행 중'}</h3>
-      <p className="muted small">{job.settings.startDate} {job.settings.startTime} ~ {job.settings.endDate} {job.settings.endTime} (한국시간)<br />4개 주기 × 8개 SMA × 0.1~20.0% × 3개 청산 방식 × 안전 범위 내 정수 레버리지</p>
+      <p className="muted small">{job.settings.startDate} {job.settings.startTime} ~ {job.settings.endDate} {job.settings.endTime} (한국시간)<br />4개 주기 × 8개 SMA × 0.1~20.0% × 3개 청산 방식 · 입력 레버리지 고정</p>
       <EnvelopeStatisticsStatus job={job} />
       <p className="muted small">밴드 접촉이 없는 이격 이후의 조합은 건너뜁니다. 완료한 조건은 기기에 저장되며 화면을 닫아 중단되면 이어갈 수 있습니다.</p>
       {Object.entries(job.skippedIntervals).map(([interval, message]) => <p key={interval} className="notice small">{interval} 제외: {message}</p>)}
@@ -164,7 +163,7 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
         <h3>세부 결과 · 수익률 순 {rows.length.toLocaleString()}건</h3>
         <div className="envelope-stat-rows">{rows.slice(0, limit).map(row => <button className="envelope-stat-row" type="button" key={`${row.interval}:${row.maPeriod}:${row.deviationPercent}:${row.exitMode}`} disabled={running || historyLoading || disabled} onClick={() => onChoose({ ...job.settings, interval: row.interval, envelopeMaPeriod: String(row.maPeriod), envelopeDeviationPercent: row.deviationPercent.toFixed(1), envelopeExitMode: row.exitMode, leverage: String(row.leverage), envelopeRisk: job.risk })}>
           <strong>{row.interval} · SMA{row.maPeriod} · {row.deviationPercent.toFixed(1)}% <span className={row.returnPercent >= 0 ? 'long-text' : 'short-text'}>{number(row.returnPercent)}%</span></strong>
-          <span>{row.leverage}배 · {envelopeExitLabels[row.exitMode]}</span>
+          <span>적용 {row.leverage}배 · {envelopeExitLabels[row.exitMode]}</span>
           <span>순손익 {number(row.profitUsdt)} USDT · 수익 {row.winCount}회 · 승률 {number(row.winRatePercent)}%</span>
           <span>진입 {row.entryCount} · 청산 {row.closedTradeCount} · 미청산 {row.openPositionCount} · 최대낙폭 {number(row.maxDrawdownPercent)}%</span>
           <small>터치하여 이 조건 불러오기 ›</small>
