@@ -11,6 +11,19 @@ const metrics: Record<Metric, string> = { returnPercent: '수익률', profitUsdt
 const colors = ['#88aaff', '#51d4a3', '#eea757', '#cf9bff'];
 const number = (value: number | null | undefined): string => value == null ? '—' : value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
 
+export function EnvelopeStatisticsStatus({ job }: { job: EnvelopeStatisticsJob }) {
+  const legacy = job.version !== envelopeOptimizerVersion;
+  return <>
+    {legacy ? <p className="notice small">이전 고정 레버리지 통계입니다. 새 개별통계부터 레버리지를 최적화합니다.</p>
+      : job.risk ? <p className="notice small">종목 최대 {job.risk.maxLeverage}배 · 1배씩 비교 · LIQ 안전 여유 0.3% · 추가 증거금 없는 격리마진 예상치 · 현재 공개 위험한도 기준</p>
+        : <p className="notice small">{job.status === 'RUNNING' ? '최대 레버리지와 위험한도 자료를 확인하는 중입니다.'
+          : job.status === 'PAUSED' ? '위험한도 자료를 아직 확인하지 못했습니다. 이어하기를 누르면 다시 조회합니다.'
+            : '이 보고서의 위험한도 자료를 확인하지 못했습니다.'}</p>}
+    {job.status !== 'COMPLETED' ? <ProgressBar completed={statisticsProgress(job)} total={statisticsTotal} label={job.status === 'PAUSED' ? job.risk ? '개별통계 일시정지' : '위험한도 확인 대기' : job.message} /> : <p className="notice">{job.message}</p>}
+    {job.status === 'PAUSED' ? <p className="notice" role="status">{job.message}</p> : null}
+  </>;
+}
+
 function ComparisonGraph({ rows, metric }: { rows: EnvelopeStatisticsRow[]; metric: Metric }) {
   const [point, setPoint] = useState<number | null>(null);
   const values = rows.flatMap(row => row[metric] === null ? [] : [row[metric]!]);
@@ -132,13 +145,11 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
         <small>{entry.comparedCount.toLocaleString()}개 조건 비교 · 저장 {new Date(entry.savedAt).toLocaleString('ko-KR')}</small>
       </button>) : <p className="muted history-empty">{settings.mode === 'SINGLE' ? `${historySymbol || '해당 종목'} ` : ''}개별통계 이력이 없습니다.</p>}
     </div> : null}
-    {error ? <p className="error" role="alert">{error}</p> : null}
+    {error && error !== job?.message ? <p className="error" role="alert">{error}</p> : null}
     {job ? <>
       <h3>{job.settings.symbol} 개별통계 {job.status === 'COMPLETED' ? '결과' : job.status === 'PAUSED' ? '일시정지' : '진행 중'}</h3>
       <p className="muted small">{job.settings.startDate} {job.settings.startTime} ~ {job.settings.endDate} {job.settings.endTime} (한국시간)<br />4개 주기 × 8개 SMA × 0.1~20.0% × 3개 청산 방식 × 안전 범위 내 정수 레버리지</p>
-      {job.risk ? <p className="notice small">종목 최대 {job.risk.maxLeverage}배 · 1배씩 비교 · LIQ 안전 여유 0.3% · 추가 증거금 없는 격리마진 예상치 · 현재 공개 위험한도 기준</p> : <p className="notice small">이전 고정 레버리지 통계입니다. 새 개별통계부터 레버리지를 최적화합니다.</p>}
-      {job.status !== 'COMPLETED' ? <ProgressBar completed={statisticsProgress(job)} total={statisticsTotal} label={job.message} /> : <p className="notice">{job.message}</p>}
-      {job.status === 'PAUSED' ? <p className="notice">{job.message}</p> : null}
+      <EnvelopeStatisticsStatus job={job} />
       <p className="muted small">밴드 접촉이 없는 이격 이후의 조합은 건너뜁니다. 완료한 조건은 기기에 저장되며 화면을 닫아 중단되면 이어갈 수 있습니다.</p>
       {Object.entries(job.skippedIntervals).map(([interval, message]) => <p key={interval} className="notice small">{interval} 제외: {message}</p>)}
       {best ? <div className="envelope-best"><strong>{job.status === 'COMPLETED' ? '해당 기간' : '현재까지'} 최고 수익률 {number(best.returnPercent)}%</strong><span>{best.interval} · SMA{best.maPeriod} · 이격 {best.deviationPercent.toFixed(1)}% · {best.leverage}배 · {envelopeExitLabels[best.exitMode]}</span></div> : null}

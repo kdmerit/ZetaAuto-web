@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { intervalSeconds } from './api';
-import { cacheCandles, openCacheDatabase, readValue, writeValue } from './database';
+import { cacheCandles, deleteValue, openCacheDatabase, readValue, writeValue } from './database';
 import { prepareSymbolBlock } from './engine';
 import { envelopePeriods } from './envelope';
 import { executeEnvelopeStatistics, loadEnvelopeStatistics, statisticsIntervals, statisticsProgress, statisticsTotal, type EnvelopeStatisticsJob } from './envelopeStatistics';
@@ -88,4 +88,19 @@ describe('persisted envelope parameter search', () => {
     expect(job?.status).toBe('PAUSED'); expect(job?.rows).toEqual([]);
     expect(job?.settings.symbol).toBe('BTC'); expect(fetch).not.toHaveBeenCalled();
   });
+  it('resumes a v2.10.38 zero-percent job through raw string-flag risk replies without clearing history or changing the job id', async () => {
+    const controller = new AbortController(); controller.abort();
+    await executeEnvelopeStatistics({ settings }, () => undefined, controller.signal);
+    const paused = (await loadEnvelopeStatistics())!;
+    await writeValue('jobs', 'ENVELOPE_STATISTICS', { ...paused, message: 'BTCUSDT의 유지증거금·위험한도 자료가 부족합니다. 임의의 LIQ로 계산하지 않습니다.' });
+    await deleteValue('publicData', 'contract-risk:v1:BTCUSDT');
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify({ retCode: 0, result: String(input).includes('instruments-info')
+      ? { list: [{ symbol: 'BTCUSDT', leverageFilter: { maxLeverage: '3' } }] }
+      : { list: [{ symbol: 'BTCUSDT', riskLimitValue: '1000000', maintenanceMargin: '0.005', initialMargin: '0.333333333333', maxLeverage: '3', mmDeduction: '', isLowestRisk: '1' }] } }))));
+    await executeEnvelopeStatistics({ resumeId: paused.id }, () => undefined, new AbortController().signal);
+    const done = (await loadEnvelopeStatistics())!;
+    expect(done.id).toBe(paused.id); expect(done.version).toBe('2.10.38'); expect(done.status).toBe('COMPLETED');
+    expect(done.risk?.tiers[0]!.deduction).toBe(0); expect(done.rows).toHaveLength(96);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  }, 30000);
 });
