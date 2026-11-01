@@ -4,6 +4,7 @@ import { cacheCandles, openCacheDatabase, readValue, writeValue } from './databa
 import { executeEnvelopeBatch, loadEnvelopeBatch, loadEnvelopeBatchHistory, loadEnvelopeBatchReport, type EnvelopeBatchJob } from './envelopeBatch';
 import { intervalSeconds } from './api';
 import { analysisWindow } from './marketData';
+import { statisticsAnalysisWindow } from './envelopeStatistics';
 import type { BacktestSettings } from './types';
 
 const settings: BacktestSettings = { mode: 'ALL', symbol: 'AAA', interval: '15m', side: 'BOTH', startDate: '2026-02-01', startTime: '09:00', endDate: '2026-02-11', endTime: '09:00',
@@ -46,7 +47,7 @@ describe('all-symbol envelope statistics and virtual account', () => {
     expect(done.rows.some(row => row.symbol === 'BBBUSDT')).toBe(true);
     expect((await loadEnvelopeBatchHistory('ALL_STATS'))[0]!.optimized).toBe(2);
     expect((await loadEnvelopeBatchReport(done.id))!.rows.every(row => row.risk === undefined)).toBe(true);
-    expect((await loadEnvelopeBatchHistory('ALL_STATS'))[0]!.version).toBe('2.10.40');
+    expect((await loadEnvelopeBatchHistory('ALL_STATS'))[0]!.version).toBe('2.10.41');
     expect(fetch).not.toHaveBeenCalled();
   }, 60000);
   it('requires a completed source report before virtual replay', async () => {
@@ -56,12 +57,15 @@ describe('all-symbol envelope statistics and virtual account', () => {
     await sourceReport('1h', true); const pause = new AbortController();
     await executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: 'source' }, view => { if (view.result && view.status === 'RUNNING') pause.abort(); }, pause.signal);
     const paused = (await loadEnvelopeBatch('VIRTUAL'))!; expect(paused.status).toBe('PAUSED');
+    const oldHeader = (await readValue<Record<string, unknown>>('jobs', 'ENVELOPE_BATCH:VIRTUAL'))!;
+    await writeValue('jobs', 'ENVELOPE_BATCH:VIRTUAL', { ...oldHeader, version: '2.10.40', settings: { ...settings, envelopeStatisticsInterval: undefined } });
     await executeEnvelopeBatch({ kind: 'VIRTUAL', resumeId: paused.id }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('VIRTUAL'))!; expect(done.status).toBe('COMPLETED'); expect(done.result!.initialCapitalUsdt).toBe(101);
     expect(done.result!.insufficientFundsCount).toBeGreaterThan(0); expect(done.result!.entryCount).toBeGreaterThan(0);
     const trades = done.result!.recentTrades;
     expect(trades.filter(trade => trade.symbol === 'AAAUSDT').every(trade => trade.signal.envelopeSourceInterval === '1h')).toBe(true);
     expect(done.settings.leverage).toBe('5'); expect((await loadEnvelopeBatchReport(done.id))!.rows.every(row => !row.risk)).toBe(true);
+    expect(done.version).toBe('2.10.41');
     await executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: 'source' }, () => {}, new AbortController().signal);
     expect((await loadEnvelopeBatch('VIRTUAL'))!.result).toEqual(done.result);
     expect(await readValue('results', `envelope-batch:${done.id}`)).not.toBeNull(); expect(fetch).not.toHaveBeenCalled();
@@ -85,10 +89,45 @@ describe('all-symbol envelope statistics and virtual account', () => {
     const paused = (await loadEnvelopeBatch('ALL_STATS'))!;
     const header = (await readValue<Record<string, unknown>>('jobs', 'ENVELOPE_BATCH:ALL_STATS'))!;
     await writeValue('jobs', 'ENVELOPE_BATCH:ALL_STATS', { ...header, version: '2.10.38', settings: { ...settings, leverage: '1' } });
-    await executeEnvelopeBatch({ kind: 'ALL_STATS', resumeId: paused.id, settings }, () => {}, new AbortController().signal);
+    await executeEnvelopeBatch({ kind: 'ALL_STATS', resumeId: paused.id, settings: { ...settings, envelopeStatisticsInterval: '4h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('ALL_STATS'))!;
-    expect(done.id).toBe(paused.id); expect(done.version).toBe('2.10.40'); expect(done.status).toBe('COMPLETED');
+    expect(done.id).toBe(paused.id); expect(done.version).toBe('2.10.41'); expect(done.status).toBe('COMPLETED');
     expect(done.settings.leverage).toBe('5'); expect(done.rows.every(row => row.best?.leverage === 5)).toBe(true);
+    expect(done.rows.every(row => row.best?.interval === '4h')).toBe(true);
     expect(fetch).not.toHaveBeenCalled();
   }, 60000);
+  it('uses only 4h data and a 4,800-case-per-symbol scale for selected-period all statistics', async () => {
+    const db = await openCacheDatabase();
+    await new Promise<void>(resolve => { const tx = db.transaction(['pages', 'pageMetadata'], 'readwrite'); tx.objectStore('pages').clear(); tx.objectStore('pageMetadata').clear(); tx.oncomplete = () => resolve(); });
+    const selected = { ...settings, envelopeStatisticsInterval: '4h' as const };
+    const { start, end } = statisticsAnalysisWindow(selected); const seconds = 14400;
+    const rows = Array.from({ length: (end - start) / seconds + 200 }, (_, i) => ({ openTime: start + (i - 200) * seconds,
+      closeTime: start + (i - 199) * seconds, open: 100, high: 100.15, low: 99.85, close: 100, volume: 10 }));
+    for (const symbol of ['AAAUSDT', 'BBBUSDT']) await cacheCandles(symbol, '4h', rows);
+    await executeEnvelopeBatch({ kind: 'ALL_STATS', settings: selected }, () => {}, new AbortController().signal);
+    const done = (await loadEnvelopeBatch('ALL_STATS'))!;
+    expect(done.status).toBe('COMPLETED'); expect(done.total).toBe(9600); expect(done.completed).toBe(9600);
+    expect(done.rows.every(row => row.best?.interval === '4h' && row.best.leverage === 5)).toBe(true);
+    expect(done.settings.envelopeStatisticsInterval).toBe('4h'); expect(fetch).not.toHaveBeenCalled();
+  }, 30000);
+  it('upgrades a partial v2.10.40 whole-period batch without resetting completed symbols', async () => {
+    const pause = new AbortController();
+    await executeEnvelopeBatch({ kind: 'ALL_STATS', settings }, view => { if (view.rows.length === 1) pause.abort(); }, pause.signal);
+    const first = (await loadEnvelopeBatch('ALL_STATS'))!;
+    const header = (await readValue<Record<string, unknown>>('jobs', 'ENVELOPE_BATCH:ALL_STATS'))!;
+    await writeValue('jobs', 'ENVELOPE_BATCH:ALL_STATS', { ...header, version: '2.10.40', settings: { ...settings, envelopeStatisticsInterval: undefined } });
+    await executeEnvelopeBatch({ kind: 'ALL_STATS', resumeId: first.id, settings: { ...settings, envelopeStatisticsInterval: '1h' } }, () => {}, new AbortController().signal);
+    const done = (await loadEnvelopeBatch('ALL_STATS'))!;
+    expect(done.id).toBe(first.id); expect(done.rows).toHaveLength(2); expect(done.rows[0]).toEqual(first.rows[0]);
+    expect(done.settings.envelopeStatisticsInterval).toBe('ALL'); expect(done.total).toBe(38400); expect(fetch).not.toHaveBeenCalled();
+  }, 60000);
+  it('aligns a selected-period virtual replay to the same completed parent-period window', async () => {
+    const source = await sourceReport('1h');
+    source.version = '2.10.41'; source.settings = { ...settings, startTime: '09:17', endTime: '09:17', envelopeStatisticsInterval: '1h' };
+    await writeValue('results', 'envelope-batch:source', source);
+    await executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: source.id }, () => {}, new AbortController().signal);
+    const done = (await loadEnvelopeBatch('VIRTUAL'))!; const expected = statisticsAnalysisWindow(source.settings);
+    expect(done.status).toBe('COMPLETED'); expect(done.start).toBe(expected.start); expect(done.end).toBe(expected.end);
+    expect(done.settings.envelopeStatisticsInterval).toBe('1h'); expect(fetch).not.toHaveBeenCalled();
+  }, 30000);
 });

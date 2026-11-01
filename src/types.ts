@@ -15,6 +15,7 @@ export interface EnvelopeBand {
   lower: number;
 }
 export type BacktestInterval = '15m' | '1h' | '4h' | '1d';
+export type EnvelopeStatisticsInterval = BacktestInterval | 'ALL';
 export type CandleInterval = BacktestInterval | '1m';
 export type BacktestMode = 'SINGLE' | 'ALL';
 export type BacktestSide = 'BOTH' | 'LONG' | 'SHORT';
@@ -45,6 +46,7 @@ export interface BacktestSettings {
   envelopeExitMode?: EnvelopeExitMode;
   envelopeMaPeriod?: string;
   envelopeRisk?: ContractRisk;
+  envelopeStatisticsInterval?: EnvelopeStatisticsInterval;
 }
 
 export interface Candle {

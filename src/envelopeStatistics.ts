@@ -10,8 +10,24 @@ import { fixedEnvelopeSettings, replayFixedEnvelope } from './envelopeReplay';
 
 export const statisticsIntervals: BacktestInterval[] = ['15m', '1h', '4h', '1d'];
 const jobKey = 'ENVELOPE_STATISTICS';
-export const envelopeOptimizerVersion = '2.10.40';
+export const envelopeOptimizerVersion = '2.10.41';
 const version = envelopeOptimizerVersion;
+
+export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => value === '2.10.40' || value === version;
+export function selectedStatisticsIntervals(settings: Pick<BacktestSettings, 'envelopeStatisticsInterval'>): BacktestInterval[] {
+  const selected = settings.envelopeStatisticsInterval ?? 'ALL';
+  if (selected === 'ALL') return [...statisticsIntervals];
+  if (!statisticsIntervals.includes(selected)) throw new Error('통계 분석 주기는 15m·1h·4h·1d·전체 중에서 선택해 주세요.');
+  return [selected];
+}
+export const statisticsIntervalLabel = (settings: Pick<BacktestSettings, 'envelopeStatisticsInterval'>): string => {
+  const selected = selectedStatisticsIntervals(settings);
+  return selected.length === 4 ? '전체 주기' : selected[0]!;
+};
+export function statisticsAnalysisWindow(settings: BacktestSettings): { start: number; end: number } {
+  try { return analysisWindow({ ...settings, interval: selectedStatisticsIntervals(settings)[0]! }); }
+  catch (failure) { throw new Error(`${statisticsIntervalLabel(settings)} 통계: ${failure instanceof Error ? failure.message : '기간을 확인해 주세요.'}`); }
+}
 
 export interface EnvelopeStatisticsRow {
   interval: BacktestInterval;
@@ -53,18 +69,20 @@ export interface EnvelopeStatisticsJob {
 }
 
 export const statisticsTotal = 4 * envelopePeriods.length * 200 * 3;
-export const statisticsProgress = (job: EnvelopeStatisticsJob): number => job.status === 'COMPLETED' ? statisticsTotal
-  : Math.min(statisticsTotal, (job.intervalIndex * envelopePeriods.length + job.periodIndex) * 600 + (job.step - 1) * 3 + job.exitIndex);
+export const statisticsTotalFor = (settings: Pick<BacktestSettings, 'envelopeStatisticsInterval'>): number => selectedStatisticsIntervals(settings).length * envelopePeriods.length * 200 * 3;
+export const statisticsProgress = (job: EnvelopeStatisticsJob): number => job.status === 'COMPLETED' ? statisticsTotalFor(job.settings)
+  : Math.min(statisticsTotalFor(job.settings), (job.intervalIndex * envelopePeriods.length + job.periodIndex) * 600 + (job.step - 1) * 3 + job.exitIndex);
 
 export function canResumeEnvelopeStatistics(job: EnvelopeStatisticsJob): boolean {
-  return job.version === version || ['2.10.36', '2.10.38'].includes(job.version) && !job.rows.length && !job.best;
+  return job.version === version || job.version === '2.10.40' && (job.settings.envelopeStatisticsInterval ?? 'ALL') === 'ALL'
+    || ['2.10.36', '2.10.38'].includes(job.version) && !job.rows.length && !job.best;
 }
 
 export async function loadEnvelopeStatistics(): Promise<EnvelopeStatisticsJob | null> {
   const job = await readValue<EnvelopeStatisticsJob>('jobs', jobKey);
   if (!job || Date.now() - job.updatedAt > retentionMs) return null;
   if (job.version !== version && job.status !== 'COMPLETED') return { ...job, status: 'PAUSED', message: canResumeEnvelopeStatistics(job)
-    ? '입력한 레버리지로 이어가면 고정 배율 통계로 전환합니다. 기존 이력은 보존됩니다.'
+    ? job.version === '2.10.40' ? '저장된 전체 주기·고정 배율을 유지해 이어갑니다.' : '입력한 레버리지·주기로 이어가면 고정 배율 통계로 전환합니다. 기존 이력은 보존됩니다.'
     : '고정 레버리지 방식으로 변경되었습니다. 새 개별통계를 시작해 주세요. 기존 이력은 보존됩니다.' };
   return { ...job, status: job.status === 'RUNNING' ? 'PAUSED' : job.status };
 }
@@ -100,9 +118,10 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
   if (!job.instrument) throw new Error('통계 종목 정보가 없습니다.');
   job.settings = fixedEnvelopeSettings(job.settings);
   delete job.risk;
-  while (job.intervalIndex < statisticsIntervals.length) {
+  const intervals = selectedStatisticsIntervals(job.settings);
+  while (job.intervalIndex < intervals.length) {
     signal.throwIfAborted();
-    const interval = statisticsIntervals[job.intervalIndex]!;
+    const interval = intervals[job.intervalIndex]!;
     const settings = { ...job.settings, interval };
     let window: { start: number; end: number };
     try { window = analysisWindow(settings); } catch (error) {
@@ -168,20 +187,22 @@ async function execute(
       job = await loadEnvelopeStatistics();
       if (!job || job.id !== options.resumeId || job.status === 'COMPLETED' || !canResumeEnvelopeStatistics(job)) throw new Error('이어갈 개별통계가 없습니다. 이전 방식은 새 개별통계를 시작해 주세요.');
       if (job.version !== version) {
-        job = { ...job, version, settings: fixedEnvelopeSettings({ ...job.settings, leverage: options.settings?.leverage ?? job.settings.leverage }),
-          intervalIndex: 0, periodIndex: 0, step: 1, exitIndex: 0, maxSteps: {}, skippedIntervals: {} };
+        if (job.version === '2.10.40') {
+          job = { ...job, version, settings: fixedEnvelopeSettings({ ...job.settings, envelopeStatisticsInterval: 'ALL' }) };
+        } else job = { ...job, version, settings: fixedEnvelopeSettings({ ...job.settings, leverage: options.settings?.leverage ?? job.settings.leverage,
+          envelopeStatisticsInterval: options.settings?.envelopeStatisticsInterval ?? 'ALL' }), intervalIndex: 0, periodIndex: 0, step: 1, exitIndex: 0, maxSteps: {}, skippedIntervals: {} };
         delete job.risk;
       }
       job.status = 'RUNNING';
     } else {
       if (!options.settings || options.settings.mode !== 'SINGLE') throw new Error('개별통계는 개별종목에서만 가능합니다.');
       // Freeze "now" once, so every case uses the same requested end time.
-      const settings = fixedEnvelopeSettings(structuredClone(options.settings));
+      const settings = { ...fixedEnvelopeSettings(structuredClone(options.settings)), envelopeStatisticsInterval: options.settings.envelopeStatisticsInterval ?? 'ALL' as const };
       if (!settings.endDate) {
         const end = new Date(Date.now() + 9 * 3600_000).toISOString();
         settings.endDate = end.slice(0, 10); settings.endTime = end.slice(11, 16);
       }
-      analysisWindow({ ...settings, interval: '15m' });
+      statisticsAnalysisWindow(settings);
       job = { id: crypto.randomUUID(), version, settings, status: 'RUNNING', intervalIndex: 0, periodIndex: 0, step: 1,
         exitIndex: 0, updatedAt: Date.now(), message: '개별통계 준비', rows: [], maxSteps: {}, skippedIntervals: {} };
     }

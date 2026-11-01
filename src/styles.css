@@ -67,6 +67,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .segmented { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .segmented.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .segmented.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.segmented.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .segmented button { min-height: 44px; border: 1px solid #34435b; border-radius: 12px; background: transparent; color: #aab6c8; font-weight: 700; }
 .segmented button.selected { border-color: #7ea2ff; background: #7ea2ff; color: #0a1b45; }
 
@@ -177,6 +178,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .envelope-stat-row small { color: #9db8ff; }
 .envelope-stat-history .history-card-heading { flex-wrap: wrap; align-items: flex-start; gap: 4px 8px; }
 .envelope-mode-tabs button { padding: 6px 2px; font-size: clamp(12px, 3.5vw, 15px); min-height: 48px; }
+.envelope-stat-intervals button { padding: 6px 2px; font-size: clamp(12px, 3.5vw, 14px); white-space: nowrap; }
 .envelope-workspace > h2 { margin: 4px 0 -4px; }
 .embedded-backtest { min-width: 0; }
 .envelope-batch { min-width: 0; }

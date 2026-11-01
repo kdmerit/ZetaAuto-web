@@ -2,10 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ApiContext } from '../api';
 import { useAnalysisBusy } from '../analysisActivity';
 import { loadSettings, saveSettings } from '../storage';
-import { analysisWindow } from '../marketData';
 import { envelopeExitLabels } from '../envelope';
 import { canResumeEnvelopeBatch, envelopeBatchView, loadEnvelopeBatchHistory, loadEnvelopeBatchReport, type BatchHistoryEntry, type EnvelopeBatchKind, type EnvelopeBatchView } from '../envelopeBatch';
-import { envelopeOptimizerVersion } from '../envelopeStatistics';
+import { isFixedEnvelopeStatisticsVersion, statisticsAnalysisWindow, statisticsIntervalLabel, statisticsIntervals } from '../envelopeStatistics';
 import { fixedEnvelopeSettings } from '../envelopeReplay';
 import { isEnvelopeBatchRunning, pauseEnvelopeBatch, restoreEnvelopeBatch, startEnvelopeBatch, subscribeEnvelopeBatch } from '../envelopeBatchClient';
 import type { BacktestSettings } from '../types';
@@ -17,7 +16,7 @@ type View = 'SINGLE' | 'ALL' | 'SINGLE_STATS' | 'ALL_STATS';
 const views: { id: View; label: string }[] = [{ id: 'SINGLE', label: '개별분석' }, { id: 'ALL', label: '전체분석' }, { id: 'SINGLE_STATS', label: '개별통계' }, { id: 'ALL_STATS', label: '전체통계' }];
 const num = (value: number | undefined | null): string => value == null ? '—' : value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
 function readSettings(view: string): BacktestSettings {
-  const fallback = { ...loadSettings('ENVELOPE', defaultSettings()), mode: view === 'SINGLE_STATS' ? 'SINGLE' as const : 'ALL' as const, envelopeRisk: undefined };
+  const fallback = { ...loadSettings('ENVELOPE', defaultSettings()), mode: view === 'SINGLE_STATS' ? 'SINGLE' as const : 'ALL' as const, envelopeRisk: undefined, envelopeStatisticsInterval: 'ALL' as const };
   try { return { ...fallback, ...JSON.parse(localStorage.getItem(`zetaauto.web.envelope.${view}.settings`) ?? '{}'), mode: fallback.mode, envelopeRisk: undefined }; } catch { return fallback; }
 }
 function storeSettings(view: string, settings: BacktestSettings): void { try { localStorage.setItem(`zetaauto.web.envelope.${view}.settings`, JSON.stringify(settings)); } catch { /* Keep inputs usable without storage. */ } }
@@ -26,20 +25,22 @@ function validateSearch(settings: BacktestSettings): void {
   if (!/^\d+(\.\d{1,2})?$/.test(settings.initialCapitalUsdt) || Number(settings.initialCapitalUsdt) < 10) throw new Error('초기자금을 확인해 주세요.');
   if (!/^\d+(\.\d{1,2})?$/.test(settings.betAmountUsdt) || Number(settings.betAmountUsdt) < 1 || Number(settings.betAmountUsdt) > Number(settings.initialCapitalUsdt)) throw new Error('고정 베팅액을 확인해 주세요.');
   fixedEnvelopeSettings(settings);
-  analysisWindow({ ...settings, interval: '15m' });
+  statisticsAnalysisWindow(settings);
 }
 function SearchFields({ settings, onChange, disabled, single }: { settings: BacktestSettings; onChange: (settings: BacktestSettings) => void; disabled: boolean; single: boolean }) {
   const update = <K extends keyof BacktestSettings>(key: K, value: BacktestSettings[K]): void => onChange({ ...settings, [key]: value });
   return <section className="surface-card form-card"><fieldset className="analysis-fields" disabled={disabled}>
     {single ? <label className="field-label">종목명<span className="suffix-field"><input value={settings.symbol} onChange={event => update('symbol', event.target.value.toUpperCase().replace(/USDT/g, '').replace(/[^A-Z0-9]/g, '').slice(0, 36))} /><b>USDT</b></span></label> : <p className="notice">슬리피지 필터 없이 모든 활성 USDT 종목을 분석합니다. 일반 전체분석의 주간 필터 목록은 사용하지 않습니다.</p>}
     <h2>분석 방향</h2><div className="segmented three">{(['BOTH', 'LONG', 'SHORT'] as const).map(side => <button key={side} type="button" className={settings.side === side ? 'selected' : ''} onClick={() => update('side', side)}>{side === 'BOTH' ? '롱 + 숏' : side === 'LONG' ? '롱' : '숏'}</button>)}</div>
+    <h2>통계 분석 주기</h2><div className="segmented five envelope-stat-intervals" role="group" aria-label="통계 분석 주기">{([...statisticsIntervals, 'ALL'] as const).map(interval => <button key={interval} type="button" aria-pressed={(settings.envelopeStatisticsInterval ?? 'ALL') === interval} className={(settings.envelopeStatisticsInterval ?? 'ALL') === interval ? 'selected' : ''} onClick={() => update('envelopeStatisticsInterval', interval)}>{interval === 'ALL' ? '전체' : interval}</button>)}</div>
+    <p className="muted small">‘전체’는 네 주기를 모두 비교합니다. 이어하기는 저장 당시 주기를 유지합니다.</p>
     <h2>분석 기간 (한국시간)</h2><div className="field-grid two">
       <label className="field-label">시작일<input inputMode="numeric" value={settings.startDate} onChange={event => update('startDate', formatDateInput(event.target.value))} /></label>
       <label className="field-label">시작시간<input inputMode="numeric" value={settings.startTime} onChange={event => update('startTime', formatTimeInput(event.target.value))} /></label>
       <label className="field-label">종료일 (선택)<input inputMode="numeric" value={settings.endDate} onChange={event => update('endDate', formatDateInput(event.target.value))} placeholder="현재까지" /></label>
       <label className="field-label">종료시간<input inputMode="numeric" value={settings.endTime} onChange={event => update('endTime', formatTimeInput(event.target.value))} /></label>
     </div><div className="field-grid three"><label className="field-label">가상 초기자금<input inputMode="decimal" value={settings.initialCapitalUsdt} onChange={event => update('initialCapitalUsdt', event.target.value)} /></label><label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /></label><label className="field-label">고정 레버리지<input inputMode="decimal" value={settings.leverage} onChange={event => update('leverage', event.target.value)} /><small>1~100배 · 모든 조건에 동일 적용</small></label></div>
-    <p className="muted small">입력한 레버리지를 고정하고 4개 주기·8개 SMA·이격 0.1~20.0%·3개 청산 방식만 비교합니다. 레버리지를 자동으로 변경하거나 최적 배율을 찾지 않습니다.</p>
+    <p className="muted small">{statisticsIntervalLabel(settings)}에서 입력한 레버리지를 고정하고 8개 SMA·이격 0.1~20.0%·3개 청산 방식만 비교합니다. 레버리지를 자동으로 변경하거나 최적 배율을 찾지 않습니다.</p>
     <p className="muted small">거래소 최대 레버리지·위험한도는 조회하지 않습니다. SL·수수료를 반영한 가정 계산이며 실제 계좌의 강제청산은 재현하지 않습니다. 중지 후 이어갈 수 있습니다.</p>
   </fieldset></section>;
 }
@@ -56,7 +57,7 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
     void restoreEnvelopeBatch(kind).then(saved => { if (saved && mounted.current && !received && request.current === 0) receive(saved, !selectedSource); }).catch(failure => { if (mounted.current) setError(String(failure)); });
     const refreshSources = async (preferred?: string): Promise<void> => {
       const current = ++sourceRequest;
-      try { const value = (await loadEnvelopeBatchHistory('ALL_STATS')).filter(item => item.version === envelopeOptimizerVersion); if (mounted.current && current === sourceRequest) { setSources(value); const chosen = preferred ?? selectedSource; if (value.some(item => item.id === chosen)) { if (preferred) onSelectSource(chosen); } else onSelectSource(value[0]?.id ?? ''); } }
+      try { const value = (await loadEnvelopeBatchHistory('ALL_STATS')).filter(item => isFixedEnvelopeStatisticsVersion(item.version)); if (mounted.current && current === sourceRequest) { setSources(value); const chosen = preferred ?? selectedSource; if (value.some(item => item.id === chosen)) { if (preferred) onSelectSource(chosen); } else onSelectSource(value[0]?.id ?? ''); } }
       catch { if (mounted.current && current === sourceRequest) setError('전체통계 이력을 불러오지 못했습니다.'); }
     };
     if (kind === 'VIRTUAL') void refreshSources();
@@ -66,6 +67,7 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
   }, [kind, onSelectSource]);
   const start = (resume = false): void => {
     try { if (!resume && kind === 'ALL_STATS') validateSearch(settings); if (!resume && kind === 'VIRTUAL' && !selectedSource) throw new Error('완료된 전체통계 결과를 먼저 선택해 주세요.');
+      if (resume && latest && isFixedEnvelopeStatisticsVersion(latest.version)) { onRestore(latest.settings); if (latest.sourceId) onSelectSource(latest.sourceId); }
       startEnvelopeBatch(kind, settings, resume ? latest?.id : undefined, selectedSource); request.current += 1; setHistoryOpen(false); setError(null); setRunning(true); if (!resume) setView(null);
     } catch (failure) { setError(failure instanceof Error ? failure.message : '분석을 시작하지 못했습니다.'); }
   };
@@ -84,30 +86,30 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
     if (!view) return; setLoading(true);
     try { const report = await loadEnvelopeBatchReport(view.id); const row = report?.rows.find(value => value.symbol === symbol);
       if (!report || !row?.best) throw new Error('저장된 최적 세팅을 찾지 못했습니다.');
-      if (mounted.current) onChoose({ ...report.settings, mode: 'SINGLE', symbol: symbol.replace(/USDT$/, ''), interval: row.best.interval, envelopeMaPeriod: String(row.best.maPeriod), envelopeDeviationPercent: String(row.best.deviationPercent), envelopeExitMode: row.best.exitMode, leverage: String(row.best.leverage ?? report.settings.leverage), envelopeRisk: report.version === envelopeOptimizerVersion ? undefined : row.risk });
+      if (mounted.current) onChoose({ ...report.settings, mode: 'SINGLE', symbol: symbol.replace(/USDT$/, ''), interval: row.best.interval, envelopeMaPeriod: String(row.best.maPeriod), envelopeDeviationPercent: String(row.best.deviationPercent), envelopeExitMode: row.best.exitMode, leverage: String(row.best.leverage ?? report.settings.leverage), envelopeRisk: isFixedEnvelopeStatisticsVersion(report.version) ? undefined : row.risk });
     } catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : '설정을 불러오지 못했습니다.'); } finally { if (mounted.current) setLoading(false); }
   };
   const sorted = [...(view?.rows ?? [])].sort((a, b) => (b.best?.returnPercent ?? -Infinity) - (a.best?.returnPercent ?? -Infinity));
   const source = sources.find(value => value.id === selectedSource);
   return <section className="surface-card form-card envelope-batch" aria-label={label}>
-    {kind === 'VIRTUAL' ? <><label className="field-label">전체통계 결과 선택<select value={selectedSource} disabled={busy || loading} onChange={event => onSelectSource(event.target.value)}><option value="">완료된 전체통계를 선택하세요</option>{sources.map(item => <option key={item.id} value={item.id}>{new Date(item.at).toLocaleString('ko-KR')} · {item.optimized}/{item.symbols}종목 · {item.settings.startDate}~{item.settings.endDate}</option>)}</select></label>
+    {kind === 'VIRTUAL' ? <><label className="field-label">전체통계 결과 선택<select value={selectedSource} disabled={busy || loading} onChange={event => onSelectSource(event.target.value)}><option value="">완료된 전체통계를 선택하세요</option>{sources.map(item => <option key={item.id} value={item.id}>{new Date(item.at).toLocaleString('ko-KR')} · {statisticsIntervalLabel(item.settings)} · {item.optimized}/{item.symbols}종목 · {item.settings.startDate}~{item.settings.endDate}</option>)}</select></label>
       {!sources.length ? <p className="notice">고정 레버리지 전체통계분석을 먼저 완료해야 가상매매를 실행할 수 있습니다. 이전 이력은 전체통계 이력보기에서 확인할 수 있습니다.</p> : null}
-      {source ? <p className="muted small">초기자금 {source.settings.initialCapitalUsdt} USDT · 종목당 고정 베팅 {source.settings.betAmountUsdt} USDT · 레버리지 {source.settings.leverage}배 고정 · {source.settings.startDate} {source.settings.startTime} ~ {source.settings.endDate} {source.settings.endTime}</p> : null}
+      {source ? <p className="muted small">통계 주기 {statisticsIntervalLabel(source.settings)} · 초기자금 {source.settings.initialCapitalUsdt} USDT · 종목당 고정 베팅 {source.settings.betAmountUsdt} USDT · 레버리지 {source.settings.leverage}배 고정 · {source.settings.startDate} {source.settings.startTime} ~ {source.settings.endDate} {source.settings.endTime}</p> : null}
       <p className="notice">동일 기간에서 고른 최적값을 다시 사용하는 사후 분석입니다. 미래 성과 검증이 아닙니다. 15분봉으로 중심선 주기를 유지해 시간순으로 재검증하고 모든 종목이 한 계좌의 자금을 공유하므로 개별 수익률 합계와 다릅니다.</p></> : null}
     <button className="primary-button" type="button" disabled={busy || loading || kind === 'VIRTUAL' && !selectedSource} onClick={() => start()}>{running ? `${label} 진행 중` : `${label} 분석 시작`}</button>
     {running ? <button className="danger-button" type="button" onClick={pauseEnvelopeBatch}>{label} 일시정지</button> : null}
     {!running && latest?.status === 'PAUSED' ? <button className="outline-button" type="button" disabled={busy || loading || !canResumeEnvelopeBatch(latest)} onClick={() => start(true)}>{label} 이어하기</button> : null}
     <button className="outline-button" type="button" disabled={busy || loading} aria-expanded={historyOpen} onClick={() => { void toggleHistory(); }}>{historyOpen ? `${label} 이력 닫기` : `${label} 이력보기`}</button>
-    {historyOpen ? <div className="history-list">{history.length ? history.map(item => <button className="history-card" type="button" key={item.id} onClick={() => { void openHistory(item.id); }} disabled={loading}><strong>{item.settings.startDate} ~ {item.settings.endDate} · {item.kind === 'ALL_STATS' ? `${item.optimized}/${item.symbols}종목` : `${num(item.returnPercent)}%`}</strong><small>{new Date(item.at).toLocaleString('ko-KR')}</small></button>) : <p className="muted">{label} 이력이 없습니다.</p>}</div> : null}
+    {historyOpen ? <div className="history-list">{history.length ? history.map(item => <button className="history-card" type="button" key={item.id} onClick={() => { void openHistory(item.id); }} disabled={loading}><strong>{item.settings.startDate} ~ {item.settings.endDate} · {item.kind === 'ALL_STATS' ? `${item.optimized}/${item.symbols}종목` : `${num(item.returnPercent)}%`}</strong><small>{statisticsIntervalLabel(item.settings)} · 레버리지 {item.settings.leverage}배 · {new Date(item.at).toLocaleString('ko-KR')}</small></button>) : <p className="muted">{label} 이력이 없습니다.</p>}</div> : null}
     {error && error !== view?.message ? <p className="error" role="alert">{error}</p> : null}
     {view ? <><h2>{label} {view.status === 'COMPLETED' ? '결과' : view.status === 'PAUSED' ? '일시정지' : '진행 중'}</h2><p className="muted small">{view.settings.startDate} {view.settings.startTime} ~ {view.settings.endDate} {view.settings.endTime} (한국시간)</p>
-      <p className="notice small">{view.version === envelopeOptimizerVersion ? `적용 레버리지 ${view.settings.leverage}배 고정` : '이전 자동 레버리지 탐색 방식의 저장 결과입니다. 새 분석은 입력 배율을 고정 적용합니다.'}</p>
+      <p className="notice small">{statisticsIntervalLabel(view.settings)} · {isFixedEnvelopeStatisticsVersion(view.version) ? `적용 레버리지 ${view.settings.leverage}배 고정` : '이전 자동 레버리지 탐색 방식의 저장 결과입니다. 새 분석은 입력 배율을 고정 적용합니다.'}</p>
       {view.status !== 'COMPLETED' ? <ProgressBar completed={view.completed} total={view.total} label={view.status === 'PAUSED' ? `${label} 일시정지` : view.message} /> : <p className="notice">{view.message}</p>}
       {view.status === 'PAUSED' ? <p className="notice">{view.message}</p> : null}
       {kind === 'ALL_STATS' ? <><p className="muted small">종목별 최고 수익률 세팅 1개만 표시합니다. 비교 자금은 종목별로 독립적이며 수익률을 합산하지 않습니다. 지원 불가·체결 없음도 별도로 표시합니다. 최적 세팅은 기기에 저장됩니다.</p><div className="envelope-stat-rows">{sorted.slice(0, limit).map(row => <button className="envelope-stat-row" key={row.symbol} type="button" disabled={busy || loading || view.status !== 'COMPLETED' || !row.best} onClick={() => { void openSetting(row.symbol); }}><strong>{row.symbol} <span className={(row.best?.returnPercent ?? 0) >= 0 ? 'long-text' : 'short-text'}>{row.best ? `${num(row.best.returnPercent)}%` : row.status === 'NO_TRADES' ? '체결 없음' : '지원 불가'}</span></strong>{row.best ? <><span>{row.best.interval} · SMA{row.best.maPeriod} · 이격 {row.best.deviationPercent}% · {row.best.leverage}배</span><span>{envelopeExitLabels[row.best.exitMode]} · 순손익 {num(row.best.profitUsdt)} USDT · 승률 {num(row.best.winRatePercent)}%</span><small>개별분석에 이 세팅 불러오기 ›</small></> : <span>{row.message ?? '기간 내 진입 가능한 세팅이 없습니다.'}</span>}</button>)}</div>{sorted.length > limit ? <button className="outline-button" type="button" onClick={() => setLimit(value => value + 30)}>종목 더 보기 ({Math.min(limit, sorted.length)}/{sorted.length})</button> : null}</> : null}
       {kind === 'VIRTUAL' && view.result ? <div className="virtual-results" aria-label="가상매매 결과"><div className="result-heading"><h2>공유 계좌 수익률</h2><strong className={`big-number ${view.result.returnPercent >= 0 ? 'positive' : 'negative'}`}>{num(view.result.returnPercent)}%</strong></div><div className="metric-grid">
         <div><span>최종 평가금액</span><strong>{num(view.result.finalEquityUsdt)} USDT</strong></div><div><span>실현 손익</span><strong>{num(view.result.realizedProfitUsdt)} USDT</strong></div><div><span>승률</span><strong>{num(view.result.winRatePercent)}%</strong></div><div><span>진입 · 청산</span><strong>{view.result.entryCount} · {view.result.closedTradeCount}</strong></div><div><span>최대 낙폭</span><strong>{num(view.result.maxDrawdownPercent)}%</strong></div><div><span>미청산</span><strong>{view.result.openPositionCount}</strong></div>
-      </div><p className="muted small">적용 종목 {view.rows.length}개 · 수수료 {num(view.result.feesUsdt)} USDT · 자금 부족 {view.result.insufficientFundsCount}회</p><p className="muted small">{view.version === envelopeOptimizerVersion ? '입력 배율을 고정 적용한 가정 계산입니다. 실제 거래소의 강제청산·최대 레버리지 한도는 검증하지 않습니다.' : '이전 계산 방식으로 저장된 결과이며 새 고정 레버리지 분석과는 기준이 다릅니다.'}</p></div> : null}
+      </div><p className="muted small">적용 종목 {view.rows.length}개 · 수수료 {num(view.result.feesUsdt)} USDT · 자금 부족 {view.result.insufficientFundsCount}회</p><p className="muted small">{isFixedEnvelopeStatisticsVersion(view.version) ? '입력 배율을 고정 적용한 가정 계산입니다. 실제 거래소의 강제청산·최대 레버리지 한도는 검증하지 않습니다.' : '이전 계산 방식으로 저장된 결과이며 새 고정 레버리지 분석과는 기준이 다릅니다.'}</p></div> : null}
     </> : null}
   </section>;
 }

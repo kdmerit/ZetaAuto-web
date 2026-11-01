@@ -36,4 +36,8 @@ describe('envelope fixed-leverage statistics status', () => {
     const html = renderToStaticMarkup(<EnvelopeStatisticsStatus job={job({ risk, status: 'RUNNING', message: '캔들 확인' })} />);
     expect(html).toContain('적용 레버리지 5배 고정'); expect(html).not.toContain('종목 최대 100배');
   });
+  it('uses the selected-period progress total instead of the four-period total', () => {
+    const html = renderToStaticMarkup(<EnvelopeStatisticsStatus job={job({ version: '2.10.41', settings: { leverage: '5', envelopeStatisticsInterval: '1h' } as BacktestSettings })} />);
+    expect(html).toContain('4,800'); expect(html).not.toContain('19,200'); expect(html).toContain('적용 레버리지 5배 고정');
+  });
 });

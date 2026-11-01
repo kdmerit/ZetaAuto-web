@@ -4,7 +4,7 @@ import { intervalSeconds } from './api';
 import { cacheCandles, openCacheDatabase, readValue, writeValue } from './database';
 import { prepareSymbolBlock } from './engine';
 import { envelopePeriods } from './envelope';
-import { executeEnvelopeStatistics, loadEnvelopeStatistics, statisticsIntervals, statisticsProgress, statisticsTotal, type EnvelopeStatisticsJob } from './envelopeStatistics';
+import { executeEnvelopeStatistics, loadEnvelopeStatistics, selectedStatisticsIntervals, statisticsAnalysisWindow, statisticsIntervals, statisticsProgress, statisticsTotal, statisticsTotalFor, type EnvelopeStatisticsJob } from './envelopeStatistics';
 import { analysisWindow } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import type { BacktestSettings, Candle } from './types';
@@ -47,6 +47,7 @@ describe('persisted envelope parameter search', () => {
     const job = final as unknown as EnvelopeStatisticsJob;
     expect(job.status).toBe('COMPLETED'); expect(statisticsProgress(job)).toBe(statisticsTotal); expect(statisticsTotal).toBe(19200);
     expect(job.rows).toHaveLength(4 * 8 * 3);
+    expect(job.settings.envelopeStatisticsInterval).toBe('ALL');
     expect(job.rows.every(row => row.leverage === 5)).toBe(true); expect(job.risk).toBeUndefined();
     expect(new Set(job.rows.map(row => row.maPeriod))).toEqual(new Set(envelopePeriods));
     expect(Object.values(job.maxSteps).every(step => step === 1)).toBe(true);
@@ -94,19 +95,22 @@ describe('persisted envelope parameter search', () => {
     const paused = (await loadEnvelopeStatistics())!;
     await writeValue('jobs', 'ENVELOPE_STATISTICS', { ...paused, version: '2.10.38', settings: { ...settings, leverage: '1' },
       message: 'BTCUSDT의 위험한도 1단계 증거금 비율 단위(initialMargin·maxLeverage) 자료가 없거나 올바르지 않습니다.' });
-    await executeEnvelopeStatistics({ resumeId: paused.id, settings }, () => undefined, new AbortController().signal);
+    await executeEnvelopeStatistics({ resumeId: paused.id, settings: { ...settings, envelopeStatisticsInterval: '1h' } }, () => undefined, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
-    expect(done.id).toBe(paused.id); expect(done.version).toBe('2.10.40'); expect(done.status).toBe('COMPLETED');
-    expect(done.settings.leverage).toBe('5'); expect(done.risk).toBeUndefined(); expect(done.rows).toHaveLength(96);
-    expect(done.rows.every(row => row.leverage === 5)).toBe(true); expect(fetch).not.toHaveBeenCalled();
+    expect(done.id).toBe(paused.id); expect(done.version).toBe('2.10.41'); expect(done.status).toBe('COMPLETED');
+    expect(done.settings.leverage).toBe('5'); expect(done.risk).toBeUndefined(); expect(done.rows).toHaveLength(24);
+    expect(done.settings.envelopeStatisticsInterval).toBe('1h');
+    expect(done.rows.every(row => row.leverage === 5 && row.interval === '1h')).toBe(true); expect(fetch).not.toHaveBeenCalled();
   }, 30000);
-  it('keeps the saved 5x setting when resuming a current partially completed job', async () => {
+  it('keeps the saved 5x and 1h selection when resuming a current partially completed job', async () => {
     const controller = new AbortController();
-    await executeEnvelopeStatistics({ settings }, job => { if (job.rows.length >= 3) controller.abort(); }, controller.signal);
+    await executeEnvelopeStatistics({ settings: { ...settings, envelopeStatisticsInterval: '1h' } }, job => { if (job.rows.length >= 3) controller.abort(); }, controller.signal);
     const paused = (await loadEnvelopeStatistics())!;
-    await executeEnvelopeStatistics({ resumeId: paused.id, settings: { ...settings, leverage: '8' } }, () => {}, new AbortController().signal);
+    await executeEnvelopeStatistics({ resumeId: paused.id, settings: { ...settings, leverage: '8', envelopeStatisticsInterval: '4h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
     expect(done.rows.every(row => row.leverage === 5)).toBe(true); expect(done.settings.leverage).toBe('5');
+    expect(done.settings.envelopeStatisticsInterval).toBe('1h'); expect(done.rows).toHaveLength(24);
+    expect(done.rows.every(row => row.interval === '1h')).toBe(true);
   }, 30000);
   it('does not combine partial old auto-leverage rows with fixed-leverage rows', async () => {
     const controller = new AbortController();
@@ -116,5 +120,35 @@ describe('persisted envelope parameter search', () => {
     await executeEnvelopeStatistics({ resumeId: paused.id, settings }, () => {}, new AbortController().signal);
     const saved = (await loadEnvelopeStatistics())!;
     expect(saved.status).toBe('PAUSED'); expect(saved.rows).toEqual(paused.rows); expect(saved.message).toContain('새 개별통계');
+  }, 30000);
+  it.each(statisticsIntervals)('loads and compares only the selected %s candles and uses a 4,800-case progress scale', async interval => {
+    const db = await openCacheDatabase();
+    await new Promise<void>(resolve => { const tx = db.transaction(['pages', 'pageMetadata'], 'readwrite'); tx.objectStore('pages').clear(); tx.objectStore('pageMetadata').clear(); tx.oncomplete = () => resolve(); });
+    await cacheCandles('BTCUSDT', interval, rows(interval));
+    await executeEnvelopeStatistics({ settings: { ...settings, envelopeStatisticsInterval: interval } }, () => {}, new AbortController().signal);
+    const done = (await loadEnvelopeStatistics())!;
+    expect(done.status).toBe('COMPLETED'); expect(done.rows).toHaveLength(24);
+    expect(done.rows.every(row => row.interval === interval && row.leverage === 5)).toBe(true);
+    expect(statisticsTotalFor(done.settings)).toBe(4800); expect(statisticsProgress(done)).toBe(4800);
+    expect(fetch).not.toHaveBeenCalled();
+  }, 30000);
+  it('requires ten completed candles of the selected period and rejects unknown period values', async () => {
+    const daily = { ...settings, endDate: '2026-02-03', envelopeStatisticsInterval: '1d' as const };
+    expect(() => statisticsAnalysisWindow(daily)).toThrow('1d');
+    await expect(executeEnvelopeStatistics({ settings: daily }, () => {}, new AbortController().signal)).rejects.toThrow('1d');
+    expect(await loadEnvelopeStatistics()).toBeNull();
+    expect(() => selectedStatisticsIntervals({ envelopeStatisticsInterval: '30m' } as unknown as BacktestSettings)).toThrow('통계 분석 주기');
+    expect(selectedStatisticsIntervals({})).toEqual(statisticsIntervals);
+  });
+  it('continues a partial v2.10.40 ALL-period job without resetting or changing it to the current form period', async () => {
+    const controller = new AbortController();
+    await executeEnvelopeStatistics({ settings }, job => { if (job.rows.length >= 3) controller.abort(); }, controller.signal);
+    const paused = (await loadEnvelopeStatistics())!;
+    await writeValue('jobs', 'ENVELOPE_STATISTICS', { ...paused, version: '2.10.40', settings: { ...paused.settings, envelopeStatisticsInterval: undefined } });
+    await executeEnvelopeStatistics({ resumeId: paused.id, settings: { ...settings, envelopeStatisticsInterval: '1h' } }, () => {}, new AbortController().signal);
+    const done = (await loadEnvelopeStatistics())!;
+    expect(done.id).toBe(paused.id); expect(done.version).toBe('2.10.41'); expect(done.rows).toHaveLength(96);
+    expect(done.rows.slice(0, 3)).toEqual(paused.rows); expect(done.settings.envelopeStatisticsInterval).toBe('ALL');
+    expect(new Set(done.rows.map(row => row.interval))).toEqual(new Set(statisticsIntervals));
   }, 30000);
 });

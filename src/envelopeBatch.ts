@@ -1,9 +1,9 @@
 /** All-symbol optimization and a separate, cash-constrained 15-minute portfolio revalidation. */
 import { intervalSeconds } from './api';
 import { deleteValue, lease, maintainCache, readValue, retentionMs, writeValue } from './database';
-import { envelopeOptimizerVersion, searchEnvelopeInstrument, statisticsProgress, statisticsTotal, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow } from './envelopeStatistics';
+import { envelopeOptimizerVersion, isFixedEnvelopeStatisticsVersion, searchEnvelopeInstrument, statisticsAnalysisWindow, statisticsProgress, statisticsTotalFor, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow } from './envelopeStatistics';
 import { projectEnvelopeBands } from './envelope';
-import { analysisWindow, ensureCandles, listInstruments, type Instrument } from './marketData';
+import { ensureCandles, listInstruments, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { fixedEnvelopeSettings, yieldAnalysis } from './envelopeReplay';
 import type { PreparedSymbol } from './engine';
@@ -31,9 +31,10 @@ const historyKey = 'envelope-batch-history';
 
 export function envelopeBatchView(job: EnvelopeBatchJob): EnvelopeBatchView {
   const { state: _state, universe, activeSearch, rows, ...view } = job;
-  const total = job.kind === 'ALL_STATS' ? Math.max(1, universe.length) * statisticsTotal : Math.max(1, ((job.end ?? 0) - (job.start ?? 0)) / 900);
+  const perSymbolTotal = statisticsTotalFor(job.settings);
+  const total = job.kind === 'ALL_STATS' ? Math.max(1, universe.length) * perSymbolTotal : Math.max(1, ((job.end ?? 0) - (job.start ?? 0)) / 900);
   const completed = job.status === 'COMPLETED' ? total : job.kind === 'ALL_STATS'
-    ? job.cursor * statisticsTotal + (activeSearch ? statisticsProgress(activeSearch) : 0) : Math.max(0, ((job.blockStart ?? 0) - (job.start ?? 0)) / 900);
+    ? job.cursor * perSymbolTotal + (activeSearch ? statisticsProgress(activeSearch) : 0) : Math.max(0, ((job.blockStart ?? 0) - (job.start ?? 0)) / 900);
   return { ...view, rows: rows.map(({ risk: _risk, ...row }) => row), candidateCount: universe.length, completed, total };
 }
 async function readJob(kind: EnvelopeBatchKind): Promise<EnvelopeBatchJob | null> {
@@ -48,12 +49,13 @@ export async function loadEnvelopeBatch(kind: EnvelopeBatchKind): Promise<Envelo
   const job = await readJob(kind);
   if (!job) return null;
   if (job.version !== envelopeOptimizerVersion && job.status !== 'COMPLETED') job.message = canResumeEnvelopeBatch(job)
-    ? '입력한 레버리지로 이어가면 고정 배율 전체통계로 전환합니다.'
+    ? job.version === '2.10.40' ? '저장된 전체 주기·고정 배율을 유지해 이어갑니다.' : '입력한 레버리지·주기로 이어가면 고정 배율 전체통계로 전환합니다.'
     : '고정 레버리지 방식으로 변경되었습니다. 새 분석을 시작해 주세요. 기존 이력은 보존됩니다.';
   return envelopeBatchView({ ...job, status: job.status === 'RUNNING' ? 'PAUSED' : job.status });
 }
-export function canResumeEnvelopeBatch(job: Pick<EnvelopeBatchJob, 'version' | 'kind' | 'cursor' | 'rows'>): boolean {
-  return job.version === envelopeOptimizerVersion || job.kind === 'ALL_STATS' && job.version === '2.10.38' && !job.cursor && !job.rows.length;
+export function canResumeEnvelopeBatch(job: Pick<EnvelopeBatchJob, 'version' | 'kind' | 'cursor' | 'rows' | 'settings'>): boolean {
+  return job.version === envelopeOptimizerVersion || job.version === '2.10.40' && (job.settings.envelopeStatisticsInterval ?? 'ALL') === 'ALL'
+    || job.kind === 'ALL_STATS' && job.version === '2.10.38' && !job.cursor && !job.rows.length;
 }
 export async function loadEnvelopeBatchReport(id: string): Promise<EnvelopeBatchJob | null> {
   const value = await readValue<EnvelopeBatchJob>('results', archiveKey(id));
@@ -73,7 +75,7 @@ async function saveReport(job: EnvelopeBatchJob): Promise<void> {
   for (const item of previous) if (!keep.some(value => value.id === item.id)) await deleteValue('results', archiveKey(item.id));
 }
 function frozenSettings(settings: BacktestSettings): BacktestSettings {
-  const copy = { ...fixedEnvelopeSettings(settings), mode: 'ALL' as const };
+  const copy = { ...fixedEnvelopeSettings(settings), mode: 'ALL' as const, envelopeStatisticsInterval: settings.envelopeStatisticsInterval ?? 'ALL' as const };
   if (!copy.endDate) { const text = new Date(Date.now() + 9 * 3600_000).toISOString(); copy.endDate = text.slice(0, 10); copy.endTime = text.slice(11, 16); }
   return copy;
 }
@@ -107,21 +109,30 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
       if (!job || job.id !== options.resumeId || !canResumeEnvelopeBatch(job) || job.status === 'COMPLETED') throw new Error('이어갈 분석이 없습니다. 새 분석을 시작해 주세요.');
       const header = await readValue<SavedBatch>('jobs', key(options.kind)); oldRowsKey = header!.rowsKey; oldStateKey = header!.stateKey; savedRows = job.rows; savedState = job.state;
       if (job.version !== envelopeOptimizerVersion) {
+        if (job.version === '2.10.40') {
+          job.settings = fixedEnvelopeSettings({ ...job.settings, envelopeStatisticsInterval: 'ALL' });
+          if (job.activeSearch) {
+            job.activeSearch.version = envelopeOptimizerVersion;
+            job.activeSearch.settings = { ...job.activeSearch.settings, envelopeStatisticsInterval: 'ALL' };
+          }
+        } else {
+          job.settings = fixedEnvelopeSettings({ ...job.settings, leverage: options.settings?.leverage ?? job.settings.leverage,
+            envelopeStatisticsInterval: options.settings?.envelopeStatisticsInterval ?? 'ALL' });
+          delete job.activeSearch;
+        }
         job.version = envelopeOptimizerVersion;
-        job.settings = fixedEnvelopeSettings({ ...job.settings, leverage: options.settings?.leverage ?? job.settings.leverage });
-        delete job.activeSearch;
       }
       job.status = 'RUNNING';
     } else if (options.kind === 'ALL_STATS') {
       if (!options.settings) throw new Error('분석 설정이 없습니다.');
-      const settings = frozenSettings(options.settings); analysisWindow({ ...settings, interval: '15m' });
+      const settings = frozenSettings(options.settings); statisticsAnalysisWindow(settings);
       job = { id: crypto.randomUUID(), version: envelopeOptimizerVersion, kind: options.kind, status: 'RUNNING', settings, updatedAt: Date.now(), message: 'USDT 전체 종목 확인 · 슬리피지 필터 미사용', universe: [], cursor: 0, rows: [] };
     } else {
       const source = options.sourceId ? await loadEnvelopeBatchReport(options.sourceId) : null;
-      if (!source || source.kind !== 'ALL_STATS' || source.version !== envelopeOptimizerVersion) throw new Error('완료된 고정 레버리지 전체통계 결과를 먼저 선택해 주세요.');
+      if (!source || source.kind !== 'ALL_STATS' || !isFixedEnvelopeStatisticsVersion(source.version)) throw new Error('완료된 고정 레버리지 전체통계 결과를 먼저 선택해 주세요.');
       const rows = source.rows.filter(row => row.status === 'OK' && row.best);
       if (!rows.length) throw new Error('선택한 전체통계에 가상매매 가능한 최적 세팅이 없습니다.');
-      const settings = { ...fixedEnvelopeSettings(source.settings), interval: '15m' as const }; const window = analysisWindow(settings);
+      const settings = { ...fixedEnvelopeSettings(source.settings), interval: '15m' as const }; const window = statisticsAnalysisWindow(source.settings);
       job = { id: crypto.randomUUID(), version: envelopeOptimizerVersion, kind: options.kind, status: 'RUNNING', settings, updatedAt: Date.now(), message: '15분봉 공유 계좌 재검증 준비',
         sourceId: source.id, rows, universe: rows.map(row => ({ symbol: row.symbol, launchAt: row.launchAt })), cursor: 0, state: initialPortfolio(Number(settings.initialCapitalUsdt)), start: window.start, end: window.end, blockStart: window.start };
     }

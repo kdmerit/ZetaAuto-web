@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { envelopeExitLabels, envelopeExitModes, envelopePeriods } from '../envelope';
-import { canResumeEnvelopeStatistics, envelopeOptimizerVersion, statisticsIntervals, statisticsProgress, statisticsTotal, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow } from '../envelopeStatistics';
+import { canResumeEnvelopeStatistics, isFixedEnvelopeStatisticsVersion, selectedStatisticsIntervals, statisticsIntervalLabel, statisticsIntervals, statisticsProgress, statisticsTotalFor, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow } from '../envelopeStatistics';
 import { isEnvelopeStatisticsRunning, pauseEnvelopeStatistics, restoreEnvelopeStatistics, startEnvelopeStatistics, subscribeEnvelopeStatistics } from '../envelopeStatisticsClient';
 import type { BacktestSettings, EnvelopeExitMode } from '../types';
 import { loadEnvelopeStatisticsHistory, loadEnvelopeStatisticsReport, type EnvelopeStatisticsHistoryEntry } from '../envelopeStatisticsHistory';
@@ -12,18 +12,19 @@ const colors = ['#88aaff', '#51d4a3', '#eea757', '#cf9bff'];
 const number = (value: number | null | undefined): string => value == null ? '—' : value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
 
 export function EnvelopeStatisticsStatus({ job }: { job: EnvelopeStatisticsJob }) {
-  const legacy = job.version !== envelopeOptimizerVersion;
+  const legacy = !isFixedEnvelopeStatisticsVersion(job.version);
   return <>
     <p className="notice small">{legacy ? job.version === '2.10.38'
       ? '이전 자동 레버리지 탐색 결과입니다. 새 통계는 입력한 레버리지를 고정 적용합니다.'
       : '이전 버전의 고정 레버리지 통계입니다. 저장된 결과는 당시 기준으로 표시합니다.'
       : `적용 레버리지 ${job.settings.leverage}배 고정 · 최대 한도·위험한도를 조회하지 않습니다.`}</p>
-    {job.status !== 'COMPLETED' ? <ProgressBar completed={statisticsProgress(job)} total={statisticsTotal} label={job.status === 'PAUSED' ? '개별통계 일시정지' : job.message} /> : <p className="notice">{job.message}</p>}
+    {job.status !== 'COMPLETED' ? <ProgressBar completed={statisticsProgress(job)} total={statisticsTotalFor(job.settings)} label={job.status === 'PAUSED' ? '개별통계 일시정지' : job.message} /> : <p className="notice">{job.message}</p>}
     {job.status === 'PAUSED' ? <p className="notice" role="status">{job.message}</p> : null}
   </>;
 }
 
 function ComparisonGraph({ rows, metric }: { rows: EnvelopeStatisticsRow[]; metric: Metric }) {
+  const shownIntervals = statisticsIntervals.filter(interval => rows.some(row => row.interval === interval));
   const [point, setPoint] = useState<number | null>(null);
   const values = rows.flatMap(row => row[metric] === null ? [] : [row[metric]!]);
   const maxX = Math.max(0.1, ...rows.map(row => row.deviationPercent));
@@ -42,7 +43,8 @@ function ComparisonGraph({ rows, metric }: { rows: EnvelopeStatisticsRow[]; metr
         const value = minimum + span * index / 3;
         return <g key={index}><line x1="52" x2="462" y1={y(value)} y2={y(value)} stroke="#40516a" /><text x="47" y={y(value) + 4} textAnchor="end">{number(value)}</text></g>;
       })}
-      {statisticsIntervals.map((interval, index) => {
+      {shownIntervals.map(interval => {
+        const index = statisticsIntervals.indexOf(interval);
         const points = rows.filter(row => row.interval === interval && row[metric] !== null).sort((a, b) => a.deviationPercent - b.deviationPercent);
         return <g key={interval}>
           <polyline points={points.map(row => `${x(row.deviationPercent)},${y(row[metric]!)}`).join(' ')} fill="none" stroke={colors[index]} strokeWidth="2.4" />
@@ -52,7 +54,7 @@ function ComparisonGraph({ rows, metric }: { rows: EnvelopeStatisticsRow[]; metr
       {point !== null ? <line x1={x(point / 10)} x2={x(point / 10)} y1="20" y2="180" stroke="#e6ecf5" strokeDasharray="3 3" /> : null}
       <text x="52" y="201">0%</text><text x="462" y="201" textAnchor="end">이격 {maxX.toFixed(1)}%</text>
     </svg>
-    <div className="envelope-stat-legend">{statisticsIntervals.map((interval, index) => <span key={interval} style={{ color: colors[index] }}>{interval}</span>)}</div>
+    <div className="envelope-stat-legend">{shownIntervals.map(interval => <span key={interval} style={{ color: colors[statisticsIntervals.indexOf(interval)] }}>{interval}</span>)}</div>
     {chosen.length ? <p className="small">이격 {(point! / 10).toFixed(1)}% · {chosen.map(row => `${row.interval} ${number(row[metric])}${metric === 'returnPercent' || metric === 'winRatePercent' ? '%' : ''}`).join(' / ')}</p> : null}
   </div>;
 }
@@ -102,6 +104,7 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
   const start = (resume = false): void => {
     try {
       if (!resume) validate();
+      if (resume && latestJob && isFixedEnvelopeStatisticsVersion(latestJob.version)) onChoose(latestJob.settings, 'history');
       setError(null); setLimit(30);
       startEnvelopeStatistics(settings, resume ? latestJob?.id : undefined);
       setJob(resume ? latestJob : null); setHistoryOpen(false); historyRequest.current += 1;
@@ -141,13 +144,13 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
       {historyEntries.length ? historyEntries.map(entry => <button type="button" className="history-card" key={entry.id} disabled={historyLoading || running || disabled} onClick={() => { void openHistory(entry); }}>
         <span className="history-card-heading"><strong>{entry.settings.symbol.toUpperCase().replace(/USDT$/, '')} 개별통계</strong><em className={entry.bestReturnPercent !== null && entry.bestReturnPercent < 0 ? 'negative' : 'positive'}>최고 {entry.bestReturnPercent === null ? '—' : `${number(entry.bestReturnPercent)}%`}</em></span>
         <span>{entry.settings.startDate} {entry.settings.startTime} ~ {entry.settings.endDate || '현재'} {entry.settings.endDate ? entry.settings.endTime : ''}</span>
-        <small>{entry.comparedCount.toLocaleString()}개 조건 비교 · 저장 {new Date(entry.savedAt).toLocaleString('ko-KR')}</small>
+        <small>{statisticsIntervalLabel(entry.settings)} · {entry.comparedCount.toLocaleString()}개 조건 비교 · 저장 {new Date(entry.savedAt).toLocaleString('ko-KR')}</small>
       </button>) : <p className="muted history-empty">{settings.mode === 'SINGLE' ? `${historySymbol || '해당 종목'} ` : ''}개별통계 이력이 없습니다.</p>}
     </div> : null}
     {error && error !== job?.message ? <p className="error" role="alert">{error}</p> : null}
     {job ? <>
       <h3>{job.settings.symbol} 개별통계 {job.status === 'COMPLETED' ? '결과' : job.status === 'PAUSED' ? '일시정지' : '진행 중'}</h3>
-      <p className="muted small">{job.settings.startDate} {job.settings.startTime} ~ {job.settings.endDate} {job.settings.endTime} (한국시간)<br />4개 주기 × 8개 SMA × 0.1~20.0% × 3개 청산 방식 · 입력 레버리지 고정</p>
+      <p className="muted small">{job.settings.startDate} {job.settings.startTime} ~ {job.settings.endDate} {job.settings.endTime} (한국시간)<br />{statisticsIntervalLabel(job.settings)} · {selectedStatisticsIntervals(job.settings).length}개 주기 × 8개 SMA × 0.1~20.0% × 3개 청산 방식 · 입력 레버리지 고정</p>
       <EnvelopeStatisticsStatus job={job} />
       <p className="muted small">밴드 접촉이 없는 이격 이후의 조합은 건너뜁니다. 완료한 조건은 기기에 저장되며 화면을 닫아 중단되면 이어갈 수 있습니다.</p>
       {Object.entries(job.skippedIntervals).map(([interval, message]) => <p key={interval} className="notice small">{interval} 제외: {message}</p>)}
