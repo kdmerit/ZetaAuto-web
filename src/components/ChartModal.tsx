@@ -136,12 +136,24 @@ function ChartSvg({
     ? Math.min(chart.candles.length - 1, Math.ceil((viewport.left + viewport.width) / step) - 1)
     : Math.min(chart.candles.length - 1, rangeStart + 40);
   const { min, max, maxVolume } = useMemo(
-    () => visibleCandleRange(chart.candles, rangeStart, rangeEnd),
-    [chart.candles, rangeStart, rangeEnd],
+    () => {
+      const range = visibleCandleRange(chart.candles, rangeStart, rangeEnd);
+      if (!chart.envelope) return range;
+      const first = chart.candles[rangeStart]?.openTime ?? 0;
+      const last = chart.candles[rangeEnd]?.openTime ?? 0;
+      let low = range.min; let high = range.max;
+      for (const band of chart.envelope.bands) if (band.openTime >= first && band.openTime <= last) {
+        low = Math.min(low, band.lower); high = Math.max(high, band.upper);
+      }
+      const padding = (high - low) * 0.02;
+      return { min: low - padding, max: high + padding, maxVolume: range.maxVolume };
+    },
+    [chart.candles, chart.envelope, rangeStart, rangeEnd],
   );
   const drawStart = Math.max(0, rangeStart - 1);
   const drawEnd = Math.min(chart.candles.length - 1, rangeEnd + 1);
   const drawnCandles = chart.candles.slice(drawStart, drawEnd + 1);
+  const envelopeByTime = useMemo(() => new Map(chart.envelope?.bands.map(band => [band.openTime, band]) ?? []), [chart.envelope]);
   const reportViewTime = (): void => {
     const host = scrollRef.current;
     if (!host) return;
@@ -336,6 +348,13 @@ function ChartSvg({
           <line key={`grid-${index}`} x1="0" x2={width} y1={(plotHeight / 4) * index} y2={(plotHeight / 4) * index} stroke="#34435B" strokeWidth="1" />
         ))}
         <g clipPath={`url(#${plotClipId})`}>
+        {chart.envelope ? (['upper', 'center', 'lower'] as const).map(key => <polyline key={`envelope-${key}`} className={`envelope-band envelope-${key}`}
+          points={drawnCandles.flatMap((candle, offset) => {
+            const band = envelopeByTime.get(candle.openTime);
+            return band ? [`${(drawStart + offset + 0.5) * step},${yFor(band[key])}`] : [];
+          }).join(' ')} fill="none" stroke="#CFB1FF" strokeWidth={key === 'center' ? 1 : 1.8} opacity={key === 'center' ? 0.6 : 0.95} strokeDasharray={key === 'center' ? '3 4' : undefined}>
+          <title>{`엔벨로프 ${key === 'upper' ? '상단' : key === 'lower' ? '하단' : '중심선'} · ${chart.envelope!.interval} SMA${chart.envelope!.period} ±${chart.envelope!.deviationPercent}%`}</title>
+        </polyline>) : null}
         {chart.waves.filter((wave) => wave.startIndex <= drawEnd && wave.endIndex >= drawStart).map((wave) => {
           const x = Math.max(0, wave.startIndex) * step;
           const w = Math.max(step, (wave.endIndex - wave.startIndex + 1) * step);
@@ -502,6 +521,7 @@ export function ChartModal({ chart, onClose, onLoadOlder, onFocusCandle, onInter
               onClick={() => { void changeInterval(interval); }}>{interval}</button>
           ))}
         </div>
+        {chart.envelope ? <p className="envelope-chart-caption">엔벨로프 {chart.envelope.interval} · SMA{chart.envelope.period} · ±{chart.envelope.deviationPercent}%</p> : null}
         <ChartSvg chart={chart} visibleMas={visibleMas} selection={selection} onSelect={setSelection} onClear={() => setSelection(null)} focusRequest={focusRequest} onLoadOlder={onLoadOlder} loadingOlder={loadingOlder || focusing || switching !== null} onViewTime={rememberViewTime} />
         <div className="chart-readout">
           <div className="candle-info-heading">

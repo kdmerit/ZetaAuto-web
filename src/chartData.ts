@@ -99,6 +99,9 @@ export function mergeChartPages(older: ChartData, current: ChartData): ChartData
   return {
     ...current,
     candles,
+    ...(current.envelope ? { envelope: { ...current.envelope,
+      bands: [...new Map([...(older.envelope?.bands ?? []), ...current.envelope.bands].map(band => [band.openTime, band])).values()].sort((a, b) => a.openTime - b.openTime),
+    } } : {}),
     markers: executions.filter((event) => event.candleIndex >= 0),
     executions,
     waves,

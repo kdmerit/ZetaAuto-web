@@ -35,6 +35,9 @@ import { chartTimestamp, mergeChartPages } from '../chartData';
 import { chartAtInterval, withChartExecutionTimes } from '../chartIntervals';
 import { serverSettingsSnapshot, volatilityParameters } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
+import { envelopeExitLabels, envelopeExitModes, envelopeParameters, envelopePeriods } from '../envelope';
+import { EnvelopeStatisticsPanel } from './EnvelopeStatisticsPanel';
+import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 
 interface StrategyBacktestProps {
   strategy: Strategy;
@@ -69,6 +72,9 @@ function defaultSettings(): BacktestSettings {
     volatilityK2: '1.0',
     volatilityTpEnabled: true,
     volatilityNextCloseEnabled: false,
+    envelopeDeviationPercent: '0.5',
+    envelopeMaPeriod: '20',
+    envelopeExitMode: 'CENTER',
   };
 }
 
@@ -116,12 +122,14 @@ const reasonLabels: Record<string, string> = {
   SESSION_CLOSE: '신호 캔들 마감 청산',
   VOLATILITY_CLOSE: '변동폭 K1 종가 청산',
   NEXT_CANDLE_CLOSE: '매수 다음 캔들 종가 청산',
+  ENVELOPE_CENTER: '엔벨로프 중심선 청산',
+  ENVELOPE_OPPOSITE: '엔벨로프 반대 밴드 청산',
 };
 
 function defaultRequest(settings: BacktestSettings, strategy: Strategy): BacktestRequestBody {
   // The optional AWS fallback still runs VOLATILITY v1. Do not silently send a
   // v2 request to that incompatible calculation. Old server histories stay readable.
-  if (strategy === 'VOLATILITY') throw new Error('새 변동성 돌파 조건은 이 기기에서 분석합니다.');
+  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE') throw new Error('이 전략은 이 기기에서 분석합니다.');
   const body: BacktestRequestBody = {
     strategy,
     mode: settings.mode,
@@ -187,6 +195,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [statisticsRunning, setStatisticsRunning] = useState(false);
   const [localJob, setLocalJob] = useState<LocalJobView | null>(null);
   const [chart, setChart] = useState<ChartData | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
@@ -249,6 +258,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     setHistoryEntries([]);
     restoringHistoryRef.current = false;
     setLocalJob(null);
+    setStatisticsRunning(strategy === 'ENVELOPE' && isEnvelopeStatisticsRunning());
     setRunning(isLocalBacktestRunning(strategy));
     const receive = (view: LocalJobView): void => {
       setLocalJob(view);
@@ -270,6 +280,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     void restoreLocalBacktest(strategy).then(async local => {
       if (requestId !== resultRequestRef.current) return;
       if (local) { receive(local); return; }
+      if (strategy === 'ENVELOPE') return;
       const job = await getServerBacktest(contextRef.current, strategy);
       if (job && requestId === resultRequestRef.current) {
         setServerJob(job);
@@ -360,6 +371,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     if (strategy === 'DISPARITY' && (!/^(0\.[1-9]|[1-9](\.\d)?|10(\.0)?)$/.test(settings.minDisparityPercent))) throw new Error('MA60 이격률은 0.1~10.0%로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^([1-9]|[1-9]\d|100)$/.test(settings.roiClosePercent))) throw new Error('ROI 손실 청산은 1~100 정수로 입력해 주세요.');
     if (strategy === 'VOLATILITY') volatilityParameters(settings);
+    if (strategy === 'ENVELOPE') envelopeParameters(settings);
     const start = Date.parse(`${settings.startDate}T${settings.startTime}:00+09:00`);
     const end = settings.endDate ? Date.parse(`${settings.endDate}T${settings.endTime}:00+09:00`) : Date.now();
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start > Date.now()) throw new Error('분석 기간을 확인해 주세요.');
@@ -394,6 +406,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   };
 
   const runLocal = (resume = false): void => {
+    if (isEnvelopeStatisticsRunning()) throw new Error('통계분석을 먼저 일시정지해 주세요.');
     if (!resume) validate();
     resultRequestRef.current += 1;
     const snapshot = { ...(resume && localJob ? localJob.settings : settings) };
@@ -594,7 +607,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   };
 
   const activeServer = serverJob && ['QUEUED', 'RUNNING'].includes(serverJob.status);
-  const title = strategy === 'PULLBACK' ? '눌림목' : strategy === 'DISPARITY' ? '이격매매' : '변동성 돌파';
+  const title = strategy === 'PULLBACK' ? '눌림목' : strategy === 'DISPARITY' ? '이격매매' : strategy === 'ENVELOPE' ? '엔벨로프' : '변동성 돌파';
   const resultTrades = result?.recentTrades ? [...result.recentTrades].reverse() : [];
   const currentHistorySymbol = historyScopeSymbol(settings);
   const historyLabel = settings.mode === 'ALL'
@@ -636,6 +649,21 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
                 <strong>숏 포지션</strong>
                 <p>위 조건을 반대로 적용합니다. ROI 손실은 레버리지가 반영된 가격 기준입니다.</p>
               </div>
+            ) : strategy === 'ENVELOPE' ? (
+              <div className="condition-copy">
+                <p>중심선은 선택 주기의 SMA5·10·20·40·60·80·100·120입니다. 봉 시작 전 확정된 N개 종가 평균을 사용하며 봉 안에서는 밴드를 고정합니다.</p>
+                <p>상단 = 중심선 × (1 + 이격%/100), 하단 = 중심선 × (1 − 이격%/100)</p>
+                <strong>롱 포지션</strong>
+                <p>하단 접촉 시 진입 · SL = 실제 매수가 × (1 − 이격%/100)</p>
+                <p>① 중심선 전량 ② 상단 전량 ③ 중심선 50% + 상단 나머지 전량 중 선택합니다.</p>
+                <strong>숏 포지션</strong>
+                <p>상단 접촉 시 진입 · SL = 실제 매수가 × (1 + 이격%/100)</p>
+                <p>① 중심선 전량 ② 하단 전량 ③ 중심선 50% + 하단 나머지 전량 중 선택합니다.</p>
+                <p>보유 중 중심선·밴드는 매 봉 시작에 갱신하고 SL은 실제 진입가 기준으로 고정합니다. 절반 청산 후에도 SL은 그대로입니다. SL 갭은 시가에 손절하며 진입·손절 시장가에 0.02% 슬리피지, 편도 0.055% 수수료를 반영합니다.</p>
+                <p>선택 봉의 시가→고가→저가→종가와 시가→저가→고가→종가 두 경로 중 보수적인 결과를 사용합니다. 양쪽 밴드가 모두 닿는 봉은 진입 방향도 경로에 따라 비교합니다. 봉 중간 체결 시각은 봉 시작 시각의 추정치이며 정확한 틱 재현은 아닙니다.</p>
+                <p>한 종목은 봉당 한 번만 진입하고 봉 시작에 보유했다면 같은 봉에 재진입하지 않습니다. 전체종목은 종목명 순서·봉 시작 가용자금 한도로 배분하며 미래 청산 자금을 재사용하지 않습니다. 기간 말 미청산분은 평가액에 포함합니다.</p>
+                <p>통계분석은 개별종목만 가능하며 4개 주기·8개 SMA·이격 0.1~20.0%(0.1 단위)·3개 청산 방식을 같은 자금·방향·기간으로 비교합니다. 해당 SMA·주기에서 처음으로 밴드 접촉이 없는 이격부터는 더 넓은 이격도 건너뜁니다.</p>
+              </div>
             ) : (
               <div className="condition-copy">
                 <p>R = |직전 종가 − 직전 시가| (몸통 크기) · 변동폭(%) = R ÷ 직전 종가 × 100</p>
@@ -667,7 +695,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
         ) : null}
 
         <section className="surface-card form-card">
-          <fieldset className="analysis-fields" disabled={running || Boolean(activeServer)}>
+          <fieldset className="analysis-fields" disabled={running || statisticsRunning || Boolean(activeServer)}>
           <h2>분석 대상</h2>
           <div className="segmented">
             {(['SINGLE', 'ALL'] as const).map((mode) => (
@@ -688,7 +716,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
             {(['BOTH', 'LONG', 'SHORT'] as const).map((side) => <button key={side} type="button" className={settings.side === side ? 'selected' : ''} onClick={() => update('side', side)}>{side === 'BOTH' ? '롱 + 숏' : side === 'LONG' ? '롱' : '숏'}</button>)}
           </div>
 
-          <h2>캔들 주기</h2>
+          <h2>{strategy === 'ENVELOPE' ? '엔벨로프 중심선 주기' : '캔들 주기'}</h2>
           <div className="segmented four">
             {(['15m', '1h', '4h', '1d'] as const).map((interval) => <button key={interval} type="button" className={settings.interval === interval ? 'selected' : ''} onClick={() => update('interval', interval)}>{interval.toUpperCase()}</button>)}
           </div>
@@ -715,6 +743,13 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
               <label className="checkbox-row"><input type="checkbox" checked={settings.ma20HalfCloseEnabled} onChange={(event) => update('ma20HalfCloseEnabled', event.target.checked)} /><span>캔들 절반 MA20 청산</span></label>
               <label className="field-label">ROI 손실 청산 (%)<input inputMode="numeric" value={settings.roiClosePercent} onChange={(event) => update('roiClosePercent', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>레버리지 적용 ROI · 1~100</small></label>
             </>
+          ) : strategy === 'ENVELOPE' ? (
+            <>
+              <h2>엔벨로프 중심선 봉수</h2>
+              <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
+              <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '0.5'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용 · SL도 같은 비율</small></label>
+              <label className="field-label">청산 방식<select value={settings.envelopeExitMode ?? 'CENTER'} onChange={event => update('envelopeExitMode', event.target.value as BacktestSettings['envelopeExitMode'])}>{envelopeExitModes.map(mode => <option value={mode} key={mode}>{envelopeExitLabels[mode]}</option>)}</select></label>
+            </>
           ) : (
             <>
               <label className="field-label">변동폭 최소 (%)<span className="suffix-field"><input inputMode="decimal" value={settings.minVolatilityPercent} onChange={(event) => update('minVolatilityPercent', event.target.value.replace(/[^0-9.]/g, '').slice(0, 5))} /><b>%</b></span><small>0.1~10.0 · 기본 0.5 · 직전 몸통 크기 ÷ 직전 종가 × 100</small></label>
@@ -730,25 +765,25 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
               <label className="checkbox-row"><input type="checkbox" checked={settings.volatilityNextCloseEnabled} onChange={(event) => update('volatilityNextCloseEnabled', event.target.checked)} /><span>매수 다음 캔들 종가 청산</span></label>
               <p className="muted small">봉 중간 K1 돌파에 진입하며 SL은 진입 시점까지의 저가(롱)·고가(숏)로 고정합니다. 두 옵션은 먼저 충족한 조건으로 청산하며, 모두 끄면 SL만 적용합니다. 신호봉의 1분봉은 필요한 구간만 조회·캐시하며 1분봉 내부 경로는 보수적으로 추정합니다.</p>
             </>
-          ) : (
+          ) : strategy !== 'ENVELOPE' ? (
             <>
               <label className="checkbox-row"><input type="checkbox" checked={settings.partialTpEnabled} onChange={(event) => update('partialTpEnabled', event.target.checked)} /><span>부분 TP 50%</span></label>
               <p className="muted small">{strategy === 'PULLBACK' ? '1차 매수가와 최초 TP의 중간에서 50% 청산합니다. 2차 체결 시 미체결 부분 TP는 취소됩니다.' : '매수가와 신호 시점 MA60의 중간에서 50% 청산하고 SL을 최초 매수가로 옮깁니다.'}</p>
             </>
-          )}
+          ) : null}
 
           </fieldset>
           <div className="action-row">
-            <button className="primary-button" type="button" disabled={running || Boolean(activeServer)} onClick={() => run()}>{running || activeServer ? '분석 진행 중' : localJob?.status === 'PAUSED' ? '새 분석 시작' : '분석 시작'}</button>
+            <button className="primary-button" type="button" disabled={running || statisticsRunning || Boolean(activeServer)} onClick={() => run()}>{running || activeServer ? '분석 진행 중' : localJob?.status === 'PAUSED' ? '새 분석 시작' : '분석 시작'}</button>
             {running || activeServer ? <button className="danger-button" type="button" onClick={() => void cancel()}>{running ? '분석 일시정지' : '분석 중지'}</button> : null}
           </div>
-          {!running && !activeServer && localJob?.status === 'PAUSED' && localJob.version === engineVersionFor(strategy) ? <button className="outline-button" type="button" onClick={() => run(true)}>분석 이어하기</button> : null}
+          {!running && !statisticsRunning && !activeServer && localJob?.status === 'PAUSED' && localJob.version === engineVersionFor(strategy) ? <button className="outline-button" type="button" onClick={() => run(true)}>분석 이어하기</button> : null}
           {localJob && localJob.status !== 'COMPLETED' ? <p className="muted small">화면을 끄거나 탭을 닫으면 분석이 정지될 수 있습니다. 다시 열어 ‘분석 이어하기’를 누르면 저장된 지점부터 계속합니다.</p> : null}
-          {error && strategy !== 'VOLATILITY' && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
+          {error && strategy !== 'VOLATILITY' && strategy !== 'ENVELOPE' && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
           <button
             className="outline-button history-toggle"
             type="button"
-            disabled={running || Boolean(activeServer)}
+            disabled={running || statisticsRunning || Boolean(activeServer)}
             aria-expanded={historyOpen}
             onClick={toggleHistory}
           >
@@ -769,6 +804,12 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
           {localJob ? <p className="muted small">분석 대상 {localJob.universeCount.toLocaleString()}종목 · 슬리피지 제외 {localJob.excludedCount.toLocaleString()}종목{localJob.status === 'COMPLETED' ? ' · 완료' : localJob.status === 'PAUSED' ? ' · 일시정지' : ''}</p> : null}
           {activeServer ? <ProgressBar completed={serverJob.completedBars} total={Math.max(serverJob.totalBars, 1)} label={`${serverJob.phase === 'UNIVERSE' ? '종목 확인' : serverJob.phase === 'DATA' ? '캔들 조회' : '전략 계산'} · ${serverJob.status === 'QUEUED' ? '대기 중' : '분석 중'}`} /> : null}
         </section>
+
+        {strategy === 'ENVELOPE' ? <section className="surface-card form-card"><EnvelopeStatisticsPanel settings={settings} disabled={running || Boolean(activeServer)} validate={validate} onBusyChange={setStatisticsRunning} onChoose={next => {
+          setSettings(next); saveSettings(strategy, next); setError(null);
+          setNotice('통계분석 조건을 불러왔습니다. 분석 시작을 누르면 이 조건의 체결 결과와 차트를 확인합니다.');
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }} /></section> : null}
 
         {result ? <ResultCard result={result} onOpenTrade={(trade) => void openTrade(trade)} /> : null}
       </div>

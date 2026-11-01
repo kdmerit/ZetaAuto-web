@@ -71,7 +71,7 @@ function SignedInApp() {
       // The destination is still the same strategy, not the menu; use history
       // state instead of relying only on the dialog remaining in the DOM.
       if (event.state?.screen === 'STRATEGY'
-        && (event.state.strategy === 'PULLBACK' || event.state.strategy === 'DISPARITY' || event.state.strategy === 'VOLATILITY')) {
+        && (event.state.strategy === 'PULLBACK' || event.state.strategy === 'DISPARITY' || event.state.strategy === 'VOLATILITY' || event.state.strategy === 'ENVELOPE')) {
         if (screenRef.current.kind !== 'STRATEGY' || screenRef.current.strategy !== event.state.strategy) {
           setScreen({ kind: 'STRATEGY', strategy: event.state.strategy });
         }

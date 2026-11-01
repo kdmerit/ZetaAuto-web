@@ -1,4 +1,11 @@
-export type Strategy = 'PULLBACK' | 'DISPARITY' | 'VOLATILITY';
+export type Strategy = 'PULLBACK' | 'DISPARITY' | 'VOLATILITY' | 'ENVELOPE';
+export type EnvelopeExitMode = 'CENTER' | 'OPPOSITE' | 'HALF';
+
+export interface EnvelopeBand {
+  center: number;
+  upper: number;
+  lower: number;
+}
 export type BacktestInterval = '15m' | '1h' | '4h' | '1d';
 export type CandleInterval = BacktestInterval | '1m';
 export type BacktestMode = 'SINGLE' | 'ALL';
@@ -26,6 +33,9 @@ export interface BacktestSettings {
   volatilityK2: string;
   volatilityTpEnabled: boolean;
   volatilityNextCloseEnabled: boolean;
+  envelopeDeviationPercent?: string;
+  envelopeExitMode?: EnvelopeExitMode;
+  envelopeMaPeriod?: string;
 }
 
 export interface Candle {
@@ -103,6 +113,12 @@ export interface ChartData {
   priceLines: PriceLine[];
   sourceInterval?: BacktestInterval;
   sourceWaves?: Wave[];
+  envelope?: {
+    interval: BacktestInterval;
+    period: number;
+    deviationPercent: number;
+    bands: { openTime: number; center: number; upper: number; lower: number }[];
+  };
 }
 
 export interface Execution {
@@ -163,7 +179,10 @@ export interface Signal {
   breakoutRangePercent?: number;
   breakoutRange?: number;
   breakoutLevel?: number;
-  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP';
+  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'ENVELOPE_TOUCH';
+  envelopeDeviationPercent?: number;
+  envelopeExitMode?: EnvelopeExitMode;
+  envelopeMaPeriod?: number;
   waves?: Wave[];
 }
 

@@ -2,6 +2,7 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { chartTimestamp, tradeChartFills } from './chartData';
 import { ensureCandles, listInstruments } from './marketData';
+import { refreshEnvelopeOverlay } from './envelopeChart';
 import type { BacktestInterval, BacktestTrade, ChartData, ChartMarker, Wave } from './types';
 
 export const chartIntervals: BacktestInterval[] = ['15m', '1h', '4h', '1d'];
@@ -78,8 +79,8 @@ export async function chartAtInterval(
   const executions = events.map(event => ({ ...event, candleIndex: indices.get(event.openTime) ?? -1 }));
   const sourceWaves = source.sourceWaves ?? source.waves;
   const referenceIndex = indices.get(focusAt) ?? 0;
-  return { ...source, interval, sourceInterval, sourceWaves, candles,
+  return refreshEnvelopeOverlay({ ...source, interval, sourceInterval, sourceWaves, candles,
     executions, markers: executions.filter(event => event.candleIndex >= 0),
     waves: visibleWaves(sourceWaves, candles),
-    referenceAt: new Date(candles[referenceIndex]!.openTime * 1000).toISOString(), referenceIndex };
+    referenceAt: new Date(candles[referenceIndex]!.openTime * 1000).toISOString(), referenceIndex });
 }

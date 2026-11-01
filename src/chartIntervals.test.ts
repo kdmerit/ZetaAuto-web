@@ -149,4 +149,18 @@ describe('chart resolution without changing trade results', () => {
     await expect(chartAtInterval(source, '15m')).rejects.toThrow('403');
     expect(source).toEqual(previous);
   });
+
+  it('keeps envelope bands on the original strategy timeframe when price-chart resolution changes', async () => {
+    await seed();
+    const { chart, trade } = fixture();
+    chart.envelope = { interval: '4h', period: 20, deviationPercent: 1, bands: [] };
+    const source = withChartExecutionTimes(chart, trade);
+    const view = await chartAtInterval(source, '1h');
+    expect(view.interval).toBe('1h');
+    expect(view.envelope).toMatchObject({ interval: '4h', period: 20, deviationPercent: 1 });
+    expect(view.envelope!.bands).toHaveLength(view.candles.length);
+    expect(view.envelope!.bands[0]).toMatchObject({ center: 101, upper: 102.01, lower: 99.99 });
+    expect(view.priceLines).toEqual(chart.priceLines);
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });

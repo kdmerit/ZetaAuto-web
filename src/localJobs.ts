@@ -10,7 +10,7 @@ import type { BacktestResult, BacktestSettings, Strategy } from './types';
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
+  return strategy === 'ENVELOPE' ? '2.10.36' : strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
 }
 export interface LocalJob {
   id: string;
@@ -192,6 +192,10 @@ async function executeWithLease(
         const candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - 200 * seconds, blockEnd, job.end, signal);
         const prepared = prepareSymbolBlock(instrument.symbol, candles, job.settings, job.strategy, job.blockStart, blockEnd, job.waveStates[instrument.symbol]);
         for (const bar of prepared.bars) if (bar.signal && !instrument[bar.signal.side]) bar.signal = null;
+        for (const bar of prepared.bars) if (bar.envelope) {
+          bar.envelope.long &&= instrument.LONG;
+          bar.envelope.short &&= instrument.SHORT;
+        }
         for (const bar of prepared.bars) {
           if (bar.signal?.exitMode !== 'VOLATILITY_TP') continue;
           bar.intrabarCandles = await ensureCandles(instrument, '1m', bar.candle.openTime, bar.candle.closeTime, bar.candle.closeTime, signal);

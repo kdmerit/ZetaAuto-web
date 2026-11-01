@@ -4,6 +4,7 @@ import { buildLocalChart } from './engine';
 import { loadLocalJob, loadLocalResult, type LocalJobView } from './localJobs';
 import { ensureCandles, listInstruments } from './marketData';
 import { saveBacktestHistory, saveCachedResult } from './storage';
+import { projectEnvelopeBands } from './envelope';
 import type { BacktestResult, BacktestSettings, BacktestTrade, ChartData, Strategy } from './types';
 
 type LocalEvent = { type: 'UPDATE'; view: LocalJobView } | { type: 'ERROR'; message: string } | { type: 'IDLE' };
@@ -122,5 +123,6 @@ export async function chartForLocalTrade(
     }),
     markers: executions.filter(execution => execution.candleIndex >= 0), executions,
     priceLines: trade.priceLines ?? fallback.priceLines,
+    ...(fallback.envelope ? { envelope: projectEnvelopeBands(rows, candles, fallback.envelope) } : {}),
   };
 }

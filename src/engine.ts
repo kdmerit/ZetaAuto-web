@@ -1,6 +1,7 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { volatilityParameters } from './backtestSettings';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
+import { bandFor, envelopeParameters, priorMovingAverages, projectEnvelopeBands } from './envelope';
 import type {
   BacktestResult,
   BacktestSettings,
@@ -8,6 +9,7 @@ import type {
   Candle,
   ChartData,
   EnrichedCandle,
+  EnvelopeBand,
   Execution,
   PriceLine,
   Signal,
@@ -392,6 +394,7 @@ export interface PreparedBar {
   ma20: number | null;
   ma60Exit: number | null;
   intrabarCandles?: Candle[];
+  envelope?: EnvelopeBand & { long: boolean; short: boolean };
 }
 
 export interface PreparedSymbol {
@@ -411,6 +414,19 @@ export function prepareSymbolBlock(
   previousWaveState?: WaveState,
   minuteCandles?: Candle[],
 ): PreparedSymbol {
+  if (strategy === 'ENVELOPE') {
+    const { percent, period } = envelopeParameters(settings);
+    const centers = priorMovingAverages(candles, period);
+    return { symbol, bars: candles.flatMap((candle, index) => {
+      if (candle.openTime < start || candle.openTime >= end) return [];
+      const center = centers[index];
+      return [{ candle, signal: null, ma20: center ?? null, ma60Exit: null,
+        ...(center === null || center === undefined ? {} : { envelope: {
+          ...bandFor(center, percent), long: settings.side !== 'SHORT', short: settings.side !== 'LONG',
+        } }),
+      }];
+    }) };
+  }
   const waveState = strategy === 'PULLBACK' ? structuredClone(previousWaveState ?? initialWaveState()) : undefined;
   const signals = strategy === 'PULLBACK' ? pullbackSignals(candles, settings, waveState)
     : strategy === 'DISPARITY' ? disparitySignals(candles, settings) : volatilitySignals(candles, settings);
@@ -790,7 +806,7 @@ export function runBacktest(
   minuteCandles?: Candle[],
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
-  if (strategy === 'VOLATILITY') {
+  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE') {
     const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
     const start = candles[0]!.openTime;
     const end = candles.at(-1)!.closeTime;
@@ -898,6 +914,9 @@ export function buildLocalChart(
     if (signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
     lines.push(line('TP', signal.target));
     if (signal.partial) lines.push(line('PARTIAL_TP', signal.partial));
+  } else if (signal.strategy === 'ENVELOPE') {
+    lines.push(line('ENTRY', trade.executions.find(fill => fill.kind === 'ENTRY')?.price ?? trade.entryPrice));
+    lines.push(line('SL', signal.activeStop ?? signal.stop));
   } else {
     lines.push(line('ENTRY', trade.entryPrice));
     if (signal.volatilityStopEnabled === true) lines.push(line('SL', signal.activeStop ?? signal.stop));
@@ -922,10 +941,15 @@ export function buildLocalChart(
     markers,
     executions: markers,
     priceLines: lines.filter((value): value is PriceLine => value !== null),
+    ...(signal.strategy === 'ENVELOPE' ? { envelope: projectEnvelopeBands(result.candles, candles, {
+      interval, period: signal.envelopeMaPeriod ?? Number(settings.envelopeMaPeriod ?? '20'),
+      deviationPercent: signal.envelopeDeviationPercent ?? Number(settings.envelopeDeviationPercent ?? '0.5'),
+    }) } : {}),
   };
 }
 
 export function strategyDescription(strategy: Strategy): string {
+  if (strategy === 'ENVELOPE') return '선택한 주기·SMA의 하단 접촉에 롱, 상단 접촉에 숏으로 진입하며 이격 비율 SL과 세 가지 밴드 청산 방식을 비교합니다.';
   if (strategy === 'PULLBACK') {
     return '공통 몸통 파동의 고점·저점 상승과 MA10·MA20·간격의 3봉 연속 증가를 확인한 반전 첫 봉을 2분할 매수합니다.';
   }

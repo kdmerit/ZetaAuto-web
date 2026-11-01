@@ -2,6 +2,7 @@
 import type { PreparedBar, PreparedSymbol } from './engine';
 import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, Execution, PriceLine, Signal } from './types';
 import { validateMinuteCandles } from './intrabar';
+import { envelopeParameters } from './envelope';
 
 const feeRate = 0.00055;
 const slippage = 0.0002;
@@ -73,6 +74,7 @@ export function portfolioEquity(state: PortfolioState): number {
 }
 
 function priceLines(p: Holding): PriceLine[] {
+  if (p.signal.strategy === 'ENVELOPE') return [{ kind: 'ENTRY', price: p.first }, { kind: 'SL', price: p.stop }];
   if (p.signal.strategy === 'VOLATILITY') return [
     { kind: 'ENTRY', price: p.first },
     ...(p.signal.volatilityStopEnabled === true ? [{ kind: 'SL' as const, price: p.stop }] : []),
@@ -90,7 +92,7 @@ function priceLines(p: Holding): PriceLine[] {
 }
 
 function recordFill(p: Holding, kind: Execution['kind'], price: number, quantity: number, candle: Candle, opening = false, confirmedClose = false): void {
-  const intrabar = p.signal.exitMode === 'VOLATILITY_TP' && !opening && !confirmedClose;
+  const intrabar = (p.signal.exitMode === 'VOLATILITY_TP' || p.signal.exitMode === 'ENVELOPE_TOUCH') && !opening && !confirmedClose;
   const parentOpenTime = (candle as Candle & { parentOpenTime?: number }).parentOpenTime ?? candle.openTime;
   p.executions.push({ kind, price, quantity, at: opening || intrabar ? candle.openTime : candle.closeTime, candleOpenAt: parentOpenTime,
     ...(intrabar ? { timing: 'INTRABAR' as const } : confirmedClose ? { timing: 'BAR_CLOSE' as const } : {}) });
@@ -154,13 +156,17 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   const margin = split ? bet / 2 : bet;
   const fee = margin * leverage * feeRate;
   const p: Holding = {
-    symbol, signal, opened: signal.exitMode === 'VOLATILITY_TP' ? candle.openTime : candle.closeTime, first: entry, entry, qty: margin * leverage / entry,
+    symbol, signal, opened: signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'ENVELOPE_TOUCH' ? candle.openTime : candle.closeTime, first: entry, entry, qty: margin * leverage / entry,
     margin, reserved: bet - margin, reservedFee: (bet - margin) * leverage * feeRate,
     pending: split, second: split ? (entry + signal.stop) / 2 : entry,
     target,
-    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' ? (entry + signal.initialTarget) / 2 : null,
-    partialDone: false, stop: signal.stop, mark: candle.close, net: -fee, executions: [],
+    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
+    partialDone: false, stop: signal.strategy === 'ENVELOPE' ? entry * (1 - direction * signal.envelopeDeviationPercent! / 100) : signal.stop, mark: candle.close, net: -fee, executions: [],
   };
+  if (signal.strategy === 'ENVELOPE') {
+    p.signal = { ...signal, stop: p.stop, initialStop: p.stop };
+    if (signal.envelopeExitMode === 'HALF') p.partial = signal.partial ?? null;
+  }
   state.positions[symbol] = p;
   state.cash -= bet + bet * leverage * feeRate;
   state.realized -= fee;
@@ -212,7 +218,9 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
   const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' || p.signal.volatilityTpEnabled !== false;
   if (targetEnabled && (long ? price >= p.target : price <= p.target)) {
     const disparity = p.signal.strategy === 'DISPARITY';
-    close(state, p, disparity ? price : p.target, p.qty, disparity ? 'MA60_TOUCH' : 'FULL_TP', candle, opening);
+    const reason = p.signal.strategy === 'ENVELOPE' ? p.signal.envelopeExitMode === 'CENTER' ? 'ENVELOPE_CENTER' : 'ENVELOPE_OPPOSITE'
+      : disparity ? 'MA60_TOUCH' : 'FULL_TP';
+    close(state, p, disparity ? price : p.target, p.qty, reason, candle, opening);
   }
 }
 
@@ -331,6 +339,39 @@ function worstPath(candidates: PortfolioState[]): PortfolioState {
   return (stopped.length ? stopped : candidates).sort((a, b) => portfolioEquity(a) - portfolioEquity(b))[0]!;
 }
 
+/** One entry at the first eligible band touch on each admissible path; no retrospective fills. */
+function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, lowFirst: boolean): PortfolioState {
+  const state = initialPortfolio(available);
+  const band = bar.envelope!;
+  const { percent, exit, period } = envelopeParameters(settings);
+  const candle = bar.candle;
+  const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
+  let attempted = false;
+  const attempt = (side: 'LONG' | 'SHORT', price: number): void => {
+    attempted = true;
+    const direction = side === 'LONG' ? 1 : -1;
+    const target = exit === 'CENTER' ? band.center : side === 'LONG' ? band.upper : band.lower;
+    enter(state, symbol, { strategy: 'ENVELOPE', side, index: candle.openTime,
+      entry: price, stop: price * (1 - direction * percent / 100), target, initialTarget: target,
+      partial: exit === 'HALF' ? band.center : undefined,
+      exitMode: 'ENVELOPE_TOUCH', envelopeDeviationPercent: percent, envelopeExitMode: exit, envelopeMaPeriod: period,
+    }, candle, settings);
+  };
+  if (band.long && candle.open <= band.lower) attempt('LONG', candle.open);
+  else if (band.short && candle.open >= band.upper) attempt('SHORT', candle.open);
+  for (let index = 1; index < path.length; index += 1) {
+    let before = path[index - 1]!;
+    const after = path[index]!;
+    if (!attempted) {
+      if (band.long && before > band.lower && after <= band.lower) { attempt('LONG', band.lower); before = band.lower; }
+      else if (band.short && before < band.upper && after >= band.upper) { attempt('SHORT', band.upper); before = band.upper; }
+    }
+    const position = state.positions[symbol];
+    if (position) replaySegment(state, position, before, after, candle, settings);
+  }
+  return state;
+}
+
 function mergePath(state: PortfolioState, selected: PortfolioState, symbol: string, baseline = 0): void {
   state.cash += selected.cash - baseline;
   for (const field of ['realized', 'fees', 'closed', 'wins', 'losses', 'breakeven', 'secondFills', 'entries', 'signals', 'insufficientFunds'] as const) state[field] += selected[field];
@@ -346,6 +387,12 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
   if (position.signal.strategy === 'DISPARITY') {
     if (bar.ma60Exit === null) throw new Error(`${symbol}의 MA60 계산에 필요한 캔들이 부족합니다.`);
     position.target = bar.ma60Exit;
+  }
+  if (position.signal.strategy === 'ENVELOPE') {
+    if (!bar.envelope) throw new Error(`${symbol}의 엔벨로프 중심선 계산에 필요한 캔들이 부족합니다.`);
+    position.target = position.signal.envelopeExitMode === 'CENTER' ? bar.envelope.center
+      : position.signal.side === 'LONG' ? bar.envelope.upper : bar.envelope.lower;
+    position.partial = position.signal.envelopeExitMode === 'HALF' && !position.partialDone ? bar.envelope.center : null;
   }
   const candidates = [replayPath(position, bar, settings, true), replayPath(position, bar, settings, false)];
   mergePath(state, worstPath(candidates), symbol);
@@ -372,9 +419,13 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
     let intrabarBudget = Math.max(0, state.cash);
     for (const { symbol, bar } of rows) processBar(state, symbol, bar, settings);
     for (const { symbol, bar } of rows) {
-      if (bar.signal?.exitMode !== 'VOLATILITY_TP' || occupiedAtOpen.has(symbol)) continue;
+      if (occupiedAtOpen.has(symbol) || bar.signal?.exitMode !== 'VOLATILITY_TP' && !bar.envelope) continue;
+      if (bar.envelope && !(bar.envelope.long && bar.candle.low <= bar.envelope.lower)
+        && !(bar.envelope.short && bar.candle.high >= bar.envelope.upper)) continue;
       const available = Math.max(0, Math.min(intrabarBudget, state.cash));
-      const selected = replayIntrabarEntry(symbol, bar, settings, available);
+      const selected = bar.envelope
+        ? worstPath([envelopeEntryPath(symbol, bar, settings, available, true), envelopeEntryPath(symbol, bar, settings, available, false)])
+        : replayIntrabarEntry(symbol, bar, settings, available);
       mergePath(state, selected, symbol, available);
       if (selected.entries) intrabarBudget = Math.max(0, intrabarBudget - Number(settings.betAmountUsdt) * (1 + Number(settings.leverage) * feeRate));
     }
