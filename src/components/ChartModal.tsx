@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from 'react';
 
 import { chartTimestamp, entryCandleIndex, firstEntryTime, movingAverageAngle, tradeChartFills, visibleCandleRange } from '../chartData';
+import { chartIntervals } from '../chartIntervals';
 import { chartMaStorageKey, loadChartMas, saveChartMas } from '../storage';
-import type { ChartData, ChartMarker, EnrichedCandle, PriceLine } from '../types';
+import type { BacktestInterval, ChartData, ChartMarker, EnrichedCandle, PriceLine } from '../types';
 
 interface ChartModalProps {
   chart: ChartData;
   onClose: () => void;
   onLoadOlder?: () => Promise<boolean>;
   onFocusCandle?: (openTime: number) => Promise<boolean>;
+  onIntervalChange?: (interval: BacktestInterval, focusAt: number) => Promise<number | null>;
   loadingOlder?: boolean;
   historyError?: string | null;
 }
@@ -84,6 +86,7 @@ function ChartSvg({
   focusRequest,
   onLoadOlder,
   loadingOlder,
+  onViewTime,
 }: {
   chart: ChartData;
   visibleMas: Record<string, boolean>;
@@ -93,6 +96,7 @@ function ChartSvg({
   focusRequest: FocusRequest;
   onLoadOlder?: () => Promise<boolean>;
   loadingOlder?: boolean;
+  onViewTime: (openTime: number) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const gestureRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean; selection: CrosshairSelection | null } | null>(null);
@@ -138,6 +142,13 @@ function ChartSvg({
   const drawStart = Math.max(0, rangeStart - 1);
   const drawEnd = Math.min(chart.candles.length - 1, rangeEnd + 1);
   const drawnCandles = chart.candles.slice(drawStart, drawEnd + 1);
+  const reportViewTime = (): void => {
+    const host = scrollRef.current;
+    if (!host) return;
+    const index = Math.max(0, Math.min(chart.candles.length - 1, Math.floor((host.scrollLeft + host.clientWidth / 2) / step)));
+    const candle = chart.candles[index];
+    if (candle) onViewTime(candle.openTime);
+  };
   useLayoutEffect(() => {
     const host = scrollRef.current;
     if (!host) return;
@@ -162,7 +173,8 @@ function ChartSvg({
     // once the requested candle is actually present.
     previousViewRef.current = { firstAt: chart.candles[0]?.openTime, step, focusRequest: completedFocus };
     syncViewport();
-  }, [chart, step, focusRequest, syncViewport, zoom]);
+    reportViewTime();
+  }, [chart, step, focusRequest, syncViewport, zoom, onViewTime]);
   useLayoutEffect(() => {
     const host = scrollRef.current;
     if (!host) return undefined;
@@ -245,6 +257,7 @@ function ChartSvg({
       if (scrollFrameRef.current === null) scrollFrameRef.current = requestAnimationFrame(() => {
         scrollFrameRef.current = null;
         syncViewport();
+        reportViewTime();
       });
       requestOlderAtEdge();
     }}>
@@ -381,16 +394,19 @@ function ChartSvg({
   );
 }
 
-export function ChartModal({ chart, onClose, onLoadOlder, onFocusCandle, loadingOlder, historyError }: ChartModalProps) {
+export function ChartModal({ chart, onClose, onLoadOlder, onFocusCandle, onIntervalChange, loadingOlder, historyError }: ChartModalProps) {
   const backdropPointer = useRef<number | null>(null);
+  const viewTimeRef = useRef<number | null>(null);
+  const rememberViewTime = useCallback((openTime: number) => { viewTimeRef.current = openTime; }, []);
   const [visibleMas, setVisibleMas] = useState(loadChartMas);
   const [selection, setSelection] = useState<CrosshairSelection | null>(null);
   const [focusRequest, setFocusRequest] = useState<FocusRequest>({ openTime: null, revision: 0 });
   const [focusing, setFocusing] = useState(false);
+  const [switching, setSwitching] = useState<BacktestInterval | null>(null);
   const [focusError, setFocusError] = useState<string | null>(null);
   const fills = useMemo(() => tradeChartFills(chart), [chart]);
   const focusExecution = async (fill: ChartMarker): Promise<void> => {
-    if (focusing || loadingOlder) return;
+    if (focusing || switching || loadingOlder) return;
     setFocusing(true);
     setFocusError(null);
     try {
@@ -403,6 +419,23 @@ export function ChartModal({ chart, onClose, onLoadOlder, onFocusCandle, loading
       setFocusError('체결 캔들을 불러오지 못했습니다. 다시 눌러 주세요.');
     } finally {
       setFocusing(false);
+    }
+  };
+  const changeInterval = async (interval: BacktestInterval): Promise<void> => {
+    if (!onIntervalChange || interval === chart.interval || switching || focusing || loadingOlder) return;
+    const focusAt = selection?.openTime ?? viewTimeRef.current ?? firstEntryTime(chart) ?? chart.candles[0]?.openTime;
+    if (focusAt === undefined || focusAt === null) return;
+    setSwitching(interval);
+    setFocusError(null);
+    try {
+      const nextFocus = await onIntervalChange(interval, focusAt);
+      if (nextFocus === null) return;
+      setSelection(null);
+      setFocusRequest(current => ({ openTime: nextFocus, revision: current.revision + 1 }));
+    } catch {
+      setFocusError('차트 주기를 변경하지 못했습니다. 다시 눌러 주세요.');
+    } finally {
+      setSwitching(null);
     }
   };
   useEffect(() => {
@@ -444,7 +477,7 @@ export function ChartModal({ chart, onClose, onLoadOlder, onFocusCandle, loading
           <div>
             <p className="eyebrow">{chart.interval.toUpperCase()} · BACKTEST</p>
             <h2>{chart.symbol} <span className={chart.side === 'LONG' ? 'long-text' : 'short-text'}>{chart.side === 'LONG' ? '롱' : '숏'}</span></h2>
-            <p className="muted chart-reference">{formatDate(firstEntryTime(chart) ?? chart.referenceAt)}</p>
+            <p className="muted chart-reference">{formatDate(fills.entry?.sourceOpenTime ?? firstEntryTime(chart) ?? chart.referenceAt)}</p>
           </div>
           <button className="close-button" type="button" onClick={onClose} aria-label="차트 닫기">×</button>
         </div>
@@ -462,13 +495,20 @@ export function ChartModal({ chart, onClose, onLoadOlder, onFocusCandle, loading
             ))}
           </div>
         </div>
-        <ChartSvg chart={chart} visibleMas={visibleMas} selection={selection} onSelect={setSelection} onClear={() => setSelection(null)} focusRequest={focusRequest} onLoadOlder={onLoadOlder} loadingOlder={loadingOlder || focusing} />
+        <div className="chart-intervals" role="group" aria-label="차트 캔들 주기" aria-busy={switching !== null}>
+          {chartIntervals.map(interval => (
+            <button type="button" key={interval} className={chart.interval === interval ? 'selected' : ''} aria-pressed={chart.interval === interval}
+              disabled={!onIntervalChange || loadingOlder || focusing || switching !== null}
+              onClick={() => { void changeInterval(interval); }}>{interval}</button>
+          ))}
+        </div>
+        <ChartSvg chart={chart} visibleMas={visibleMas} selection={selection} onSelect={setSelection} onClear={() => setSelection(null)} focusRequest={focusRequest} onLoadOlder={onLoadOlder} loadingOlder={loadingOlder || focusing || switching !== null} onViewTime={rememberViewTime} />
         <div className="chart-readout">
           <div className="candle-info-heading">
             <strong className={selected ? undefined : 'candle-info-hidden'} aria-hidden={!selected}>{infoCandle ? formatDate(infoCandle.openTime) : ''}</strong>
             <div className="trade-price-links" role="group" aria-label="체결 가격 이동">
               {([['entry', '매수가', fills.entry], ['close', '청산가', fills.close]] as const).map(([kind, label, fill]) => (
-                <button className={`trade-price-link ${kind}`} key={kind} type="button" disabled={!fill || focusing || loadingOlder}
+                <button className={`trade-price-link ${kind}`} key={kind} type="button" disabled={!fill || focusing || switching !== null || loadingOlder}
                   aria-label={fill ? `${label} ${formatPrice(fill.price)} · ${kind === 'entry' ? '최초 매수' : '최종 청산'} 지점으로 이동` : `${label} 정보 없음`}
                   onClick={() => { if (fill) void focusExecution(fill); }}>{label} {fill ? formatPrice(fill.price) : '—'}</button>
               ))}
@@ -488,7 +528,7 @@ export function ChartModal({ chart, onClose, onLoadOlder, onFocusCandle, loading
             </div>
           ) : null}
         </div>
-        {loadingOlder || focusing ? <p className="muted small" role="status">차트 불러오는 중…</p> : null}
+        {loadingOlder || focusing || switching !== null ? <p className="muted small" role="status">차트 불러오는 중…</p> : null}
         {historyError || focusError ? <p className="error" role="alert">{historyError || focusError}</p> : null}
       </section>
     </div>

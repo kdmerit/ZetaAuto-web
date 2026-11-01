@@ -135,6 +135,9 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .ma-toggles { display: grid; grid-template-columns: repeat(5, max-content); justify-content: space-between; align-items: center; gap: 4px; }
 .ma-toggle { display: inline-flex; align-items: center; gap: 3px; min-height: 32px; color: var(--ma-color); font-size: clamp(11px, 3.2vw, 13px); font-weight: 700; white-space: nowrap; }
 .ma-toggle input { width: 18px; height: 18px; margin: 0; }
+.chart-intervals { display: grid; flex: 0 0 auto; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 4px 8px 6px; background: #202d42; }
+.chart-intervals button { min-height: 32px; border: 1px solid #526583; border-radius: 8px; background: #151f30; color: #d9e2f0; font-size: 14px; font-weight: 700; }
+.chart-intervals button.selected { border-color: #7ea2ff; background: #7ea2ff; color: #0a1b45; }
 .chart-frame { position: relative; flex: 1 1 0; min-width: 0; min-height: 150px; }
 .chart-scroll { height: 100%; overflow-x: auto; overflow-y: hidden; border-radius: 0; background: #202d42; touch-action: pan-x; overscroll-behavior-x: contain; }
 .chart-scroll.crosshair-active { touch-action: none; overflow-x: hidden; }
@@ -146,7 +149,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .candle-info-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
 .candle-info-heading > strong { min-width: 0; }
 .trade-price-links { display: flex; flex: 0 0 auto; flex-direction: column; align-items: flex-end; gap: 1px; min-width: 0; }
-.trade-price-link { min-height: 20px; padding: 1px 0; border: 0; background: transparent; font-size: clamp(12.6px, 3.6vw, 14.4px); font-weight: 700; line-height: 1.25; text-align: right; text-decoration: underline dotted; text-underline-offset: 3px; white-space: nowrap; }
+.trade-price-link { min-height: 20px; padding: 1px 0; border: 0; background: transparent; font-size: clamp(13.608px, 3.888vw, 15.552px); font-weight: 700; line-height: 1.25; text-align: right; text-decoration: underline dotted; text-underline-offset: 3px; white-space: nowrap; }
 .trade-price-link.entry { color: #F0A34A; }
 .trade-price-link.close { color: #39C98A; }
 .candle-info { display: flex; flex-direction: column; gap: 1px; }

@@ -69,6 +69,9 @@ export interface ChartMarker {
   price: number;
   quantity: number;
   candleIndex: number;
+  sourceOpenTime?: number;
+  executedAt?: number;
+  timing?: 'INTRABAR' | 'BAR_CLOSE';
 }
 
 export type PriceLineKind =
@@ -98,6 +101,8 @@ export interface ChartData {
   markers: ChartMarker[];
   executions?: ChartMarker[];
   priceLines: PriceLine[];
+  sourceInterval?: BacktestInterval;
+  sourceWaves?: Wave[];
 }
 
 export interface Execution {

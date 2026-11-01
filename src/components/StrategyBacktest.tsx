@@ -25,12 +25,14 @@ import type {
   BacktestResult,
   BacktestSettings,
   BacktestTrade,
+  BacktestInterval,
   ChartData,
   ServerJob,
   Strategy,
 } from '../types';
 import { ChartModal } from './ChartModal';
-import { mergeChartPages } from '../chartData';
+import { chartTimestamp, mergeChartPages } from '../chartData';
+import { chartAtInterval, withChartExecutionTimes } from '../chartIntervals';
 import { serverSettingsSnapshot, volatilityParameters } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
 
@@ -484,10 +486,10 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     try {
       if (serverJob?.result && serverJob.jobId && trade.tradeId && trade.symbol !== 'LOCAL') {
         const next = await fetchServerEntryChart(context, trade.symbol, trade.side, new Date(trade.exitAt * 1000).toISOString(), serverJob.jobId, trade.tradeId);
-        if (requestId === chartRequestRef.current) setChart(next);
+        if (requestId === chartRequestRef.current) setChart(withChartExecutionTimes(next, trade));
       } else if (result) {
         const next = await chartForLocalTrade(result, trade, analysisSettingsRef.current);
-        if (requestId === chartRequestRef.current) setChart(next);
+        if (requestId === chartRequestRef.current) setChart(withChartExecutionTimes(next, trade));
       }
     } catch (failure) {
       if (requestId === chartRequestRef.current) setError(failure instanceof Error ? failure.message : '차트 조회에 실패했습니다.');
@@ -505,12 +507,14 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     setLoadingOlder(true);
     setChartError(null);
     try {
-      const older = serverJob
+      const older = chart.interval !== analysisSettingsRef.current.interval
+        ? await chartAtInterval(chart, chart.interval, { beforeAt: oldest })
+        : serverJob
         ? await fetchServerChart(context, selectedTrade.symbol, selectedTrade.side, new Date(selectedTrade.exitAt * 1000).toISOString(), serverJob.jobId, selectedTrade.tradeId, new Date(oldest * 1000).toISOString())
         : result ? await chartForLocalTrade(result, selectedTrade, analysisSettingsRef.current, oldest) : null;
       if (!older) return false;
       if (requestId !== chartRequestRef.current) return false;
-      const merged = mergeChartPages(older, chart);
+      const merged = mergeChartPages(withChartExecutionTimes(older, selectedTrade), chart);
       if (merged.candles.length <= chart.candles.length) {
         setHasOlder(false);
         return false;
@@ -538,19 +542,42 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     setLoadingOlder(true);
     setChartError(null);
     try {
-      const next = serverJob
+      const next = chart.interval !== analysisSettingsRef.current.interval
+        ? await chartAtInterval(chart, chart.interval, { focusAt: openTime })
+        : serverJob
         ? await fetchServerChart(context, selectedTrade.symbol, selectedTrade.side, new Date(selectedTrade.exitAt * 1000).toISOString(), serverJob.jobId, selectedTrade.tradeId, undefined, new Date(openTime * 1000).toISOString())
         : result ? await chartForLocalTrade(result, selectedTrade, analysisSettingsRef.current, undefined, openTime) : null;
       if (requestId !== chartRequestRef.current) return false;
       if (!next?.candles.some(candle => candle.openTime === openTime)) throw new Error('해당 체결 시점의 캔들을 불러오지 못했습니다. 다시 눌러 주세요.');
       // Distant entry/exit pages are not adjacent candles: switch pages rather
       // than merging them into a chart with an unmarked gap in its time axis.
-      setChart(next);
+      setChart(withChartExecutionTimes(next, selectedTrade));
       setHasOlder(true);
       return true;
     } catch (failure) {
       if (requestId === chartRequestRef.current) setChartError(failure instanceof Error ? failure.message : '체결 캔들을 불러오지 못했습니다.');
       return false;
+    } finally {
+      olderRequestRef.current = false;
+      setLoadingOlder(false);
+    }
+  };
+
+  const changeChartInterval = async (interval: BacktestInterval, focusAt: number): Promise<number | null> => {
+    if (!chart || olderRequestRef.current) return null;
+    const requestId = ++chartRequestRef.current;
+    olderRequestRef.current = true;
+    setLoadingOlder(true);
+    setChartError(null);
+    try {
+      const next = await chartAtInterval(chart, interval, { focusAt });
+      if (requestId !== chartRequestRef.current) return null;
+      setChart(next);
+      setHasOlder(true);
+      return chartTimestamp(next.referenceAt);
+    } catch (failure) {
+      if (requestId === chartRequestRef.current) setChartError(failure instanceof Error ? failure.message : '차트 주기를 변경하지 못했습니다.');
+      return null;
     } finally {
       olderRequestRef.current = false;
       setLoadingOlder(false);
@@ -746,7 +773,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
         {result ? <ResultCard result={result} onOpenTrade={(trade) => void openTrade(trade)} /> : null}
       </div>
       {chartLoading ? <div className="modal-backdrop"><div className="loading-card">체결 차트를 불러오는 중입니다…</div></div> : null}
-      {chart ? <ChartModal chart={chart} onClose={closeChart} onLoadOlder={selectedTrade && hasOlder ? loadOlder : undefined} onFocusCandle={focusChartCandle} loadingOlder={loadingOlder} historyError={chartError} /> : null}
+      {chart ? <ChartModal chart={chart} onClose={closeChart} onLoadOlder={selectedTrade && hasOlder ? loadOlder : undefined} onFocusCandle={focusChartCandle} onIntervalChange={changeChartInterval} loadingOlder={loadingOlder} historyError={chartError} /> : null}
     </main>
   );
 }
