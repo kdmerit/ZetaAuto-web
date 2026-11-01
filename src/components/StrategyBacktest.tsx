@@ -36,19 +36,23 @@ import { chartAtInterval, withChartExecutionTimes } from '../chartIntervals';
 import { serverSettingsSnapshot, volatilityParameters } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
 import { envelopeExitLabels, envelopeExitModes, envelopeParameters, envelopePeriods } from '../envelope';
-import { EnvelopeStatisticsPanel } from './EnvelopeStatisticsPanel';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
+import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
+import { useAnalysisBusy } from '../analysisActivity';
 
 interface StrategyBacktestProps {
   strategy: Strategy;
   context: ApiContext;
+  embedded?: boolean;
+  forcedMode?: 'SINGLE' | 'ALL';
+  preferredSettings?: BacktestSettings;
 }
 
 function dateText(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-function defaultSettings(): BacktestSettings {
+export function defaultSettings(): BacktestSettings {
   const start = new Date(Date.now() - 90 * 86_400_000);
   return {
     mode: 'SINGLE',
@@ -78,7 +82,7 @@ function defaultSettings(): BacktestSettings {
   };
 }
 
-function formatDateInput(value: string): string {
+export function formatDateInput(value: string): string {
   const digits = value.replace(/\D/g, '').slice(0, 8);
   return digits.length <= 4
     ? digits
@@ -87,7 +91,7 @@ function formatDateInput(value: string): string {
       : `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6)}`;
 }
 
-function formatTimeInput(value: string): string {
+export function formatTimeInput(value: string): string {
   const digits = value.replace(/\D/g, '').slice(0, 4);
   return digits.length <= 2 ? digits : `${digits.slice(0, 2)}:${digits.slice(2)}`;
 }
@@ -116,6 +120,7 @@ const reasonLabels: Record<string, string> = {
   PARTIAL_TP: '부분 TP 50%',
   FULL_TP: '전체 TP',
   SL: 'SL',
+  LIQ: '격리 LIQ 추정 청산',
   MA60_TOUCH: 'MA60 접촉 청산',
   MA20_HALF_BREAK: '캔들 절반 MA20 청산',
   ROI_LOSS: 'ROI 손실 청산',
@@ -185,17 +190,17 @@ function restoredServerJob(entry: BacktestHistoryEntry): ServerJob {
   };
 }
 
-export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
+export function StrategyBacktest({ strategy, context, embedded = false, forcedMode, preferredSettings }: StrategyBacktestProps) {
   const defaults = useMemo(defaultSettings, []);
-  const [settings, setSettings] = useState<BacktestSettings>(() => loadSettings(strategy, defaults));
+  const [settings, setSettings] = useState<BacktestSettings>(() => ({ ...(preferredSettings ?? loadSettings(strategy, defaults)), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) }));
   const [expanded, setExpanded] = useState(false);
-  const [result, setResult] = useState<BacktestResult | null>(() => loadCachedResult(strategy));
+  const [result, setResult] = useState<BacktestResult | null>(() => forcedMode ? null : loadCachedResult(strategy));
   const [serverJob, setServerJob] = useState<ServerJob | null>(null);
   const [progress, setProgress] = useState({ phase: '대기 중', completed: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const [statisticsRunning, setStatisticsRunning] = useState(false);
+  const statisticsRunning = strategy === 'ENVELOPE' && isEnvelopeStatisticsRunning();
   const [localJob, setLocalJob] = useState<LocalJobView | null>(null);
   const [chart, setChart] = useState<ChartData | null>(null);
   const [chartLoading, setChartLoading] = useState(false);
@@ -212,6 +217,8 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   const contextRef = useRef(context);
   const analysisSettingsRef = useRef(settings);
   const restoringHistoryRef = useRef(false);
+  const anyAnalysisBusy = useAnalysisBusy();
+  const leverageMaximum = strategy === 'ENVELOPE' ? settings.envelopeRisk?.maxLeverage ?? 100 : 100;
 
   useEffect(() => {
     contextRef.current = context;
@@ -248,19 +255,19 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
 
   useEffect(() => {
     const requestId = ++resultRequestRef.current;
-    const fallback = loadSettings(strategy, defaults);
+    const fallback = { ...(preferredSettings ?? loadSettings(strategy, defaults)), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
     analysisSettingsRef.current = fallback;
     setSettings(fallback);
-    setResult(loadCachedResult(strategy));
+    setResult(forcedMode ? null : loadCachedResult(strategy));
     setServerJob(null);
     setChart(null);
     setHistoryOpen(false);
     setHistoryEntries([]);
     restoringHistoryRef.current = false;
     setLocalJob(null);
-    setStatisticsRunning(strategy === 'ENVELOPE' && isEnvelopeStatisticsRunning());
     setRunning(isLocalBacktestRunning(strategy));
     const receive = (view: LocalJobView): void => {
+      if (forcedMode && view.settings.mode !== forcedMode) return;
       setLocalJob(view);
       const snapshot = { ...defaults, ...view.settings };
       if (view.status !== 'COMPLETED') setSettings(snapshot);
@@ -279,7 +286,18 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     });
     void restoreLocalBacktest(strategy).then(async local => {
       if (requestId !== resultRequestRef.current) return;
-      if (local) { receive(local); return; }
+      if (preferredSettings) {
+        if (local && (!forcedMode || local.settings.mode === forcedMode)) setLocalJob(local);
+        setNotice('선택한 통계 세팅을 불러왔습니다. 분석 시작을 누르면 이 조건의 체결 결과와 차트를 확인합니다. 기존 일시정지 작업은 이어하기로 재개할 수 있습니다.');
+        return;
+      }
+      if (local && (!forcedMode || local.settings.mode === forcedMode)) { receive(local); return; }
+      if (forcedMode) {
+        const entry = loadBacktestHistory(strategy, forcedMode, historyScopeSymbol(fallback))[0];
+        const saved = entry?.localRunId ? await loadLocalResult(entry.localRunId) : null;
+        if (saved && requestId === resultRequestRef.current) { setResult(saved.result); analysisSettingsRef.current = { ...defaults, ...saved.settings }; }
+        return;
+      }
       if (strategy === 'ENVELOPE') return;
       const job = await getServerBacktest(contextRef.current, strategy);
       if (job && requestId === resultRequestRef.current) {
@@ -288,7 +306,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
       }
     }).catch(() => undefined);
     return () => { unsubscribe(); resultRequestRef.current += 1; };
-  }, [defaults, strategy]);
+  }, [defaults, strategy, forcedMode, preferredSettings]);
 
   useEffect(() => {
     if (!serverJob || !['QUEUED', 'RUNNING'].includes(serverJob.status)) return undefined;
@@ -338,7 +356,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   }, [historyOpen, settings.mode, settings.symbol, strategy]);
 
   const update = <K extends keyof BacktestSettings>(key: K, value: BacktestSettings[K]) => {
-    const next = { ...settings, [key]: value };
+    const next = { ...settings, [key]: value, ...(key === 'symbol' ? { envelopeRisk: undefined } : {}) };
     setSettings(next);
     saveSettings(strategy, next);
   };
@@ -346,7 +364,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   useEffect(() => {
     const refreshSharedStorage = (): void => {
       if (document.visibilityState === 'hidden' || running || (serverJob && ['QUEUED', 'RUNNING'].includes(serverJob.status))) return;
-      const shared = loadSettings(strategy, defaults);
+      const shared = { ...loadSettings(strategy, defaults), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
       setSettings(current => JSON.stringify(current) === JSON.stringify(shared) ? current : shared);
       if (historyOpen) setHistoryEntries(loadBacktestHistory(strategy, shared.mode, historyScopeSymbol(shared)));
     };
@@ -358,7 +376,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
       window.removeEventListener('focus', refreshSharedStorage);
       document.removeEventListener('visibilitychange', refreshSharedStorage);
     };
-  }, [defaults, historyOpen, running, serverJob, strategy]);
+  }, [defaults, historyOpen, running, serverJob, strategy, forcedMode]);
 
   const validate = (): void => {
     if (settings.mode === 'SINGLE' && !baseSymbol(settings.symbol)) throw new Error('종목명을 입력해 주세요.');
@@ -366,7 +384,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
     if (settings.endDate && (!/^\d{4}-\d{2}-\d{2}$/.test(settings.endDate) || !/^\d{2}:\d{2}$/.test(settings.endTime))) throw new Error('종료일·시간을 확인해 주세요.');
     if (!/^\d+(\.\d{1,2})?$/.test(settings.initialCapitalUsdt) || Number(settings.initialCapitalUsdt) < 10) throw new Error('초기자금을 확인해 주세요.');
     if (!/^\d+(\.\d{1,2})?$/.test(settings.betAmountUsdt) || Number(settings.betAmountUsdt) < 1 || Number(settings.betAmountUsdt) > Number(settings.initialCapitalUsdt)) throw new Error('고정 베팅액을 확인해 주세요.');
-    if (!/^\d{1,3}(\.\d{1,2})?$/.test(settings.leverage) || Number(settings.leverage) < 1 || Number(settings.leverage) > 100) throw new Error('레버리지는 1~100배로 입력해 주세요.');
+    if (!/^\d{1,4}(\.\d{1,2})?$/.test(settings.leverage) || Number(settings.leverage) < 1 || Number(settings.leverage) > leverageMaximum) throw new Error(`레버리지는 1~${leverageMaximum}배로 입력해 주세요.`);
     if (strategy === 'PULLBACK' && (!/^\d+$/.test(settings.fullTpWavePercent) || Number(settings.fullTpWavePercent) < 1 || Number(settings.fullTpWavePercent) > 100)) throw new Error('전체 TP 파동폭은 1~100 정수로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^(0\.[1-9]|[1-9](\.\d)?|10(\.0)?)$/.test(settings.minDisparityPercent))) throw new Error('MA60 이격률은 0.1~10.0%로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^([1-9]|[1-9]\d|100)$/.test(settings.roiClosePercent))) throw new Error('ROI 손실 청산은 1~100 정수로 입력해 주세요.');
@@ -407,6 +425,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
 
   const runLocal = (resume = false): void => {
     if (isEnvelopeStatisticsRunning()) throw new Error('통계분석을 먼저 일시정지해 주세요.');
+    if (isEnvelopeBatchRunning()) throw new Error('전체통계·가상매매를 먼저 일시정지해 주세요.');
     if (!resume) validate();
     resultRequestRef.current += 1;
     const snapshot = { ...(resume && localJob ? localJob.settings : settings) };
@@ -613,16 +632,17 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
   const historyLabel = settings.mode === 'ALL'
     ? '전체종목 이력보기'
     : `${currentHistorySymbol || '종목'} 이력보기`;
+  const Root = embedded ? 'section' : 'main';
 
   return (
-    <main className="screen">
-      <div className="content strategy-content">
-        <header className="page-header strategy-header">
+    <Root className={embedded ? 'embedded-backtest' : 'screen'}>
+      <div className={`${embedded ? '' : 'content '}strategy-content`}>
+        {!embedded ? <header className="page-header strategy-header">
           <div>
             <p className="eyebrow">{strategy} · BACKTEST</p>
             <h1>{title} 백테스트</h1>
           </div>
-        </header>
+        </header> : null}
         <button className="outline-button detail-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
           {expanded ? '상세설명접기' : '상세설명보기'}
         </button>
@@ -662,7 +682,9 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
                 <p>보유 중 중심선·밴드는 매 봉 시작에 갱신하고 SL은 실제 진입가 기준으로 고정합니다. 절반 청산 후에도 SL은 그대로입니다. SL 갭은 시가에 손절하며 진입·손절 시장가에 0.02% 슬리피지, 편도 0.055% 수수료를 반영합니다.</p>
                 <p>선택 봉의 시가→고가→저가→종가와 시가→저가→고가→종가 두 경로 중 보수적인 결과를 사용합니다. 양쪽 밴드가 모두 닿는 봉은 진입 방향도 경로에 따라 비교합니다. 봉 중간 체결 시각은 봉 시작 시각의 추정치이며 정확한 틱 재현은 아닙니다.</p>
                 <p>한 종목은 봉당 한 번만 진입하고 봉 시작에 보유했다면 같은 봉에 재진입하지 않습니다. 전체종목은 종목명 순서·봉 시작 가용자금 한도로 배분하며 미래 청산 자금을 재사용하지 않습니다. 기간 말 미청산분은 평가액에 포함합니다.</p>
-                <p>통계분석은 개별종목만 가능하며 4개 주기·8개 SMA·이격 0.1~20.0%(0.1 단위)·3개 청산 방식을 같은 자금·방향·기간으로 비교합니다. 해당 SMA·주기에서 처음으로 밴드 접촉이 없는 이격부터는 더 넓은 이격도 건너뜁니다.</p>
+                <p>개별통계는 4개 주기·8개 SMA·이격 0.1~20.0%(0.1 단위)·3개 청산 방식과 정수 레버리지를 같은 자금·방향·기간으로 비교합니다. LIQ는 롱 SL×0.997 이하, 숏 SL×1.003 이상인 안전 범위까지만 올립니다. 밴드 접촉이 없는 이격부터 더 넓은 이격은 건너뜁니다.</p>
+                <p>전체통계는 슬리피지 필터 없이 모든 활성 USDT 종목의 최적 세팅을 하나씩 저장합니다. 가상매매는 완료된 전체통계 결과를 선택해 15분봉·한 계좌의 공유 자금으로 같은 기간을 재검증합니다. 과거 최적값의 사후 분석이며 미래 성과를 보장하지 않습니다.</p>
+                {settings.envelopeRisk ? <p className="notice">통계에서 불러온 세팅은 현재 공개 위험한도에 따른 격리 LIQ 예상치를 사용합니다. 시가 갭이 SL과 LIQ를 모두 넘으면 남은 포지션 증거금을 소진하는 추정 청산으로 처리합니다. 실제 계좌·과거 거래소 청산가와 다를 수 있습니다.</p> : null}
               </div>
             ) : (
               <div className="condition-copy">
@@ -695,15 +717,15 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
         ) : null}
 
         <section className="surface-card form-card">
-          <fieldset className="analysis-fields" disabled={running || statisticsRunning || Boolean(activeServer)}>
-          <h2>분석 대상</h2>
+          <fieldset className="analysis-fields" disabled={running || statisticsRunning || anyAnalysisBusy || Boolean(activeServer)}>
+          {!forcedMode ? <><h2>분석 대상</h2>
           <div className="segmented">
             {(['SINGLE', 'ALL'] as const).map((mode) => (
               <button key={mode} type="button" className={settings.mode === mode ? 'selected' : ''} onClick={() => update('mode', mode)}>
                 {mode === 'SINGLE' ? '개별 종목' : '전체 종목'}
               </button>
             ))}
-          </div>
+          </div></> : null}
           <p className="muted small">저장된 캔들을 우선 사용하고 없는 구간만 조회합니다. 전체 종목은 현재 슬리피지 조건을 통과한 종목을 하나의 가상 계좌에서 분석합니다.</p>
           {settings.mode === 'SINGLE' ? (
             <label className="field-label">종목명
@@ -732,7 +754,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
           <div className="field-grid three">
             <label className="field-label">가상 초기자금<input inputMode="decimal" value={settings.initialCapitalUsdt} onChange={(event) => update('initialCapitalUsdt', event.target.value)} /></label>
             <label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={(event) => update('betAmountUsdt', event.target.value)} /></label>
-            <label className="field-label">레버리지<input inputMode="decimal" value={settings.leverage} onChange={(event) => update('leverage', event.target.value)} /><small>1~100배</small></label>
+            <label className="field-label">레버리지<input inputMode="decimal" value={settings.leverage} onChange={(event) => update('leverage', event.target.value)} /><small>1~{leverageMaximum}배</small></label>
           </div>
 
           {strategy === 'PULLBACK' ? (
@@ -774,7 +796,7 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
 
           </fieldset>
           <div className="action-row">
-            <button className="primary-button" type="button" disabled={running || statisticsRunning || Boolean(activeServer)} onClick={() => run()}>{running || activeServer ? '분석 진행 중' : localJob?.status === 'PAUSED' ? '새 분석 시작' : '분석 시작'}</button>
+            <button className="primary-button" type="button" disabled={running || statisticsRunning || anyAnalysisBusy || Boolean(activeServer)} onClick={() => run()}>{running || activeServer ? '분석 진행 중' : localJob?.status === 'PAUSED' ? '새 분석 시작' : '분석 시작'}</button>
             {running || activeServer ? <button className="danger-button" type="button" onClick={() => void cancel()}>{running ? '분석 일시정지' : '분석 중지'}</button> : null}
           </div>
           {!running && !statisticsRunning && !activeServer && localJob?.status === 'PAUSED' && localJob.version === engineVersionFor(strategy) ? <button className="outline-button" type="button" onClick={() => run(true)}>분석 이어하기</button> : null}
@@ -806,17 +828,11 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
           {activeServer ? <ProgressBar completed={serverJob.completedBars} total={Math.max(serverJob.totalBars, 1)} label={`${serverJob.phase === 'UNIVERSE' ? '종목 확인' : serverJob.phase === 'DATA' ? '캔들 조회' : '전략 계산'} · ${serverJob.status === 'QUEUED' ? '대기 중' : '분석 중'}`} /> : null}
         </section>
 
-        {strategy === 'ENVELOPE' ? <section className="surface-card form-card"><EnvelopeStatisticsPanel settings={settings} disabled={running || Boolean(activeServer)} validate={validate} onBusyChange={setStatisticsRunning} onChoose={(next, source) => {
-          setSettings(next); saveSettings(strategy, next); setError(null);
-          setNotice(source === 'history' ? '저장된 통계분석 결과와 당시 설정을 불러왔습니다.' : '통계분석 조건을 불러왔습니다. 분석 시작을 누르면 이 조건의 체결 결과와 차트를 확인합니다.');
-          if (source !== 'history') window.scrollTo({ top: 0, behavior: 'smooth' });
-        }} /></section> : null}
-
         {result ? <ResultCard result={result} onOpenTrade={(trade) => void openTrade(trade)} /> : null}
       </div>
       {chartLoading ? <div className="modal-backdrop"><div className="loading-card">체결 차트를 불러오는 중입니다…</div></div> : null}
       {chart ? <ChartModal chart={chart} onClose={closeChart} onLoadOlder={selectedTrade && hasOlder ? loadOlder : undefined} onFocusCandle={focusChartCandle} onIntervalChange={changeChartInterval} loadingOlder={loadingOlder} historyError={chartError} /> : null}
-    </main>
+    </Root>
   );
 }
 

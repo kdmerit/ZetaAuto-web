@@ -20,7 +20,7 @@ export async function delay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function publicRequest<T>(path: string, params: Record<string, string>, signal?: AbortSignal): Promise<T> {
+export async function publicRequest<T>(path: string, params: Record<string, string>, signal?: AbortSignal): Promise<T> {
   for (let attempt = 0; attempt < 4; attempt += 1) {
     signal?.throwIfAborted();
     const slot = Math.max(Date.now(), nextRequestAt);

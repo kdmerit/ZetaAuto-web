@@ -36,6 +36,7 @@ beforeEach(async () => {
   vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('seeded statistics must not fetch'); }));
   await writeValue('publicData', 'instruments:BTCUSDT', { expiresAt: Date.now() + 300000, data: [{ symbol: 'BTCUSDT', launchAt: 0 }] });
   await writeValue('publicData', 'orderbook:BTCUSDT', { expiresAt: Date.now() + 300000, data: { b: [['99.99', '10000']], a: [['100.01', '10000']] } });
+  await writeValue('publicData', 'contract-risk:v1:BTCUSDT', { symbol: 'BTCUSDT', checkedAt: Date.now(), maxLeverage: 3, model: 'ISOLATED_ESTIMATE_V1', tiers: [{ limit: 1000000, maintenanceRate: 0.005, deduction: 0, maxLeverage: 3 }] });
   for (const interval of statisticsIntervals) await cacheCandles('BTCUSDT', interval, rows(interval));
 });
 afterEach(() => { vi.unstubAllGlobals(); });

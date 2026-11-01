@@ -1,6 +1,14 @@
 export type Strategy = 'PULLBACK' | 'DISPARITY' | 'VOLATILITY' | 'ENVELOPE';
 export type EnvelopeExitMode = 'CENTER' | 'OPPOSITE' | 'HALF';
 
+export interface ContractRisk {
+  symbol: string;
+  checkedAt: number;
+  maxLeverage: number;
+  model: 'ISOLATED_ESTIMATE_V1';
+  tiers: { limit: number; maintenanceRate: number; deduction: number; maxLeverage: number }[];
+}
+
 export interface EnvelopeBand {
   center: number;
   upper: number;
@@ -36,6 +44,7 @@ export interface BacktestSettings {
   envelopeDeviationPercent?: string;
   envelopeExitMode?: EnvelopeExitMode;
   envelopeMaPeriod?: string;
+  envelopeRisk?: ContractRisk;
 }
 
 export interface Candle {
@@ -183,6 +192,7 @@ export interface Signal {
   envelopeDeviationPercent?: number;
   envelopeExitMode?: EnvelopeExitMode;
   envelopeMaPeriod?: number;
+  envelopeSourceInterval?: BacktestInterval;
   waves?: Wave[];
 }
 

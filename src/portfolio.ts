@@ -1,8 +1,9 @@
 /** Shared virtual account replay, with conservative OHLC paths and resumable JSON state. */
 import type { PreparedBar, PreparedSymbol } from './engine';
-import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, Execution, PriceLine, Signal } from './types';
+import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, ContractRisk, Execution, PriceLine, Signal } from './types';
 import { validateMinuteCandles } from './intrabar';
 import { envelopeParameters } from './envelope';
+import { estimatedLiquidation } from './contractRisk';
 
 const feeRate = 0.00055;
 const slippage = 0.0002;
@@ -27,6 +28,7 @@ interface Holding {
   mark: number;
   net: number;
   executions: Execution[];
+  risk?: ContractRisk;
 }
 
 export interface PortfolioState {
@@ -50,6 +52,7 @@ export interface PortfolioState {
   dataStartAt: number | null;
   dataEndAt: number | null;
   equityCurve: { at: number; equityUsdt: number }[];
+  envelopeParents?: Record<string, { openTime: number; blocked: boolean }>;
 }
 
 export function initialPortfolio(capital: number): PortfolioState {
@@ -159,6 +162,7 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     symbol, signal, opened: signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'ENVELOPE_TOUCH' ? candle.openTime : candle.closeTime, first: entry, entry, qty: margin * leverage / entry,
     margin, reserved: bet - margin, reservedFee: (bet - margin) * leverage * feeRate,
     pending: split, second: split ? (entry + signal.stop) / 2 : entry,
+    ...(signal.strategy === 'ENVELOPE' && settings.envelopeRisk?.symbol === symbol ? { risk: settings.envelopeRisk } : {}),
     target,
     partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
     partialDone: false, stop: signal.strategy === 'ENVELOPE' ? entry * (1 - direction * signal.envelopeDeviationPercent! / 100) : signal.stop, mark: candle.close, net: -fee, executions: [],
@@ -204,6 +208,14 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
   const p = state.positions[symbol];
   if (!p) return;
   const long = p.signal.side === 'LONG';
+  if (p.risk) {
+    const liq = estimatedLiquidation(p.signal.side, p.entry, p.qty, p.margin, p.risk);
+    if (liq !== null && (long ? price <= liq : price >= liq)) {
+      // Isolated liquidation exhausts remaining collateral (including close-fee reserve).
+      const bankruptcy = long ? (p.entry - p.margin / p.qty) / (1 - feeRate) : (p.entry + p.margin / p.qty) / (1 + feeRate);
+      close(state, p, Math.max(Number.EPSILON, bankruptcy), p.qty, 'LIQ', candle, opening); return;
+    }
+  }
   const stopped = (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true)
     && (long ? price <= p.stop : price >= p.stop);
   if (p.pending && !stopped && (long ? price <= p.second : price >= p.second)) fillSecond(state, p, opening ? price : p.second, candle, settings, opening);
@@ -226,6 +238,10 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
 
 function replaySegment(state: PortfolioState, p: Holding, before: number, after: number, candle: Candle, settings: BacktestSettings): void {
   const levels = new Set<number>();
+  if (p.risk) {
+    const liq = estimatedLiquidation(p.signal.side, p.entry, p.qty, p.margin, p.risk);
+    if (liq !== null) levels.add(liq);
+  }
   if (p.signal.exitMode !== 'VOLATILITY_TP' || p.signal.volatilityTpEnabled !== false) levels.add(p.target);
   if (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true) levels.add(p.stop);
   if (p.pending) levels.add(p.second);
@@ -242,7 +258,8 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
 
 function replayPath(position: Holding, bar: PreparedBar, settings: BacktestSettings, lowFirst: boolean): PortfolioState {
   const state = initialPortfolio(0);
-  const p = structuredClone(position);
+  const { risk, ...holding } = position;
+  const p: Holding = { ...structuredClone(holding), ...(risk ? { risk } : {}) };
   state.positions[p.symbol] = p;
   const candle = bar.candle;
   const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
@@ -355,6 +372,7 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
       entry: price, stop: price * (1 - direction * percent / 100), target, initialTarget: target,
       partial: exit === 'HALF' ? band.center : undefined,
       exitMode: 'ENVELOPE_TOUCH', envelopeDeviationPercent: percent, envelopeExitMode: exit, envelopeMaPeriod: period,
+      ...(band.sourceInterval ? { envelopeSourceInterval: band.sourceInterval } : {}),
     }, candle, settings);
   };
   if (band.long && candle.open <= band.lower) attempt('LONG', candle.open);
@@ -399,7 +417,13 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
 }
 
 /** Close-entry strategies reuse exits; intrabar entries use the opening cash budget only. */
-export function replayPortfolioBlock(state: PortfolioState, documents: PreparedSymbol[], settings: BacktestSettings, start: number, end: number, seconds: number): void {
+export interface ReplayOptions {
+  fundingCheck?: boolean;
+  settingsForSymbol?: Record<string, BacktestSettings>;
+  onFrame?: (state: PortfolioState, at: number, bars: { symbol: string; bar: PreparedBar }[]) => void;
+}
+
+export function replayPortfolioBlock(state: PortfolioState, documents: PreparedSymbol[], settings: BacktestSettings, start: number, end: number, seconds: number, options: ReplayOptions = {}): void {
   const byTime = new Map<number, { symbol: string; bar: PreparedBar }[]>();
   for (const document of [...documents].sort((a, b) => a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0)) {
     for (const bar of document.bars) {
@@ -414,22 +438,32 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
     const present = new Set(rows.map(row => row.symbol));
     if (Object.keys(state.positions).some(symbol => !present.has(symbol))) throw new Error('보유 종목의 캔들이 누락되어 계산을 중단했습니다.');
     const occupiedAtOpen = new Set(Object.keys(state.positions));
+    for (const { symbol, bar } of rows) if (bar.envelope?.parentOpenTime !== undefined) {
+      state.envelopeParents ??= {};
+      const previous = state.envelopeParents[symbol];
+      if (!previous || previous.openTime !== bar.envelope.parentOpenTime) state.envelopeParents[symbol] = { openTime: bar.envelope.parentOpenTime, blocked: occupiedAtOpen.has(symbol) };
+    }
     // A later intrabar/close exit must not finance an earlier breakout touch.
     // No same-bar profit/margin recycling or exit-then-retroactive re-entry.
     let intrabarBudget = Math.max(0, state.cash);
-    for (const { symbol, bar } of rows) processBar(state, symbol, bar, settings);
+    for (const { symbol, bar } of rows) processBar(state, symbol, bar, options.settingsForSymbol?.[symbol] ?? settings);
     for (const { symbol, bar } of rows) {
+      const parameters = options.settingsForSymbol?.[symbol] ?? settings;
       if (occupiedAtOpen.has(symbol) || bar.signal?.exitMode !== 'VOLATILITY_TP' && !bar.envelope) continue;
+      if (bar.envelope?.parentOpenTime !== undefined && state.envelopeParents?.[symbol]?.blocked) continue;
       if (bar.envelope && !(bar.envelope.long && bar.candle.low <= bar.envelope.lower)
         && !(bar.envelope.short && bar.candle.high >= bar.envelope.upper)) continue;
-      const available = Math.max(0, Math.min(intrabarBudget, state.cash));
+      const available = options.fundingCheck === false ? Number(parameters.betAmountUsdt) * (1 + Number(parameters.leverage) * feeRate) : Math.max(0, Math.min(intrabarBudget, state.cash));
       const selected = bar.envelope
-        ? worstPath([envelopeEntryPath(symbol, bar, settings, available, true), envelopeEntryPath(symbol, bar, settings, available, false)])
-        : replayIntrabarEntry(symbol, bar, settings, available);
+        ? worstPath([envelopeEntryPath(symbol, bar, parameters, available, true), envelopeEntryPath(symbol, bar, parameters, available, false)])
+        : replayIntrabarEntry(symbol, bar, parameters, available);
       mergePath(state, selected, symbol, available);
-      if (selected.entries) intrabarBudget = Math.max(0, intrabarBudget - Number(settings.betAmountUsdt) * (1 + Number(settings.leverage) * feeRate));
+      if (selected.entries) {
+        if (bar.envelope?.parentOpenTime !== undefined) state.envelopeParents![symbol]!.blocked = true;
+        if (options.fundingCheck !== false) intrabarBudget = Math.max(0, intrabarBudget - Number(parameters.betAmountUsdt) * (1 + Number(parameters.leverage) * feeRate));
+      }
     }
-    for (const { symbol, bar } of rows) if (bar.signal && bar.signal.exitMode !== 'VOLATILITY_TP') enter(state, symbol, bar.signal, bar.candle, settings);
+    for (const { symbol, bar } of rows) if (bar.signal && bar.signal.exitMode !== 'VOLATILITY_TP') enter(state, symbol, bar.signal, bar.candle, options.settingsForSymbol?.[symbol] ?? settings);
     if (!rows.length) continue;
     state.observedBars += 1;
     state.dataStartAt ??= at;
@@ -439,6 +473,7 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
     if (state.peak > 0) state.maxDrawdown = Math.max(state.maxDrawdown, (state.peak - equity) / state.peak * 100);
     state.equityCurve.push({ at: at + seconds, equityUsdt: equity });
     if (state.equityCurve.length > 600) state.equityCurve = state.equityCurve.filter((_, index) => index % 2 === 0 || index === state.equityCurve.length - 1);
+    options.onFrame?.(state, at, rows);
   }
 }
 

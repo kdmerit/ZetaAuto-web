@@ -10,6 +10,7 @@ import type {
   ChartData,
   EnrichedCandle,
   EnvelopeBand,
+  BacktestInterval,
   Execution,
   PriceLine,
   Signal,
@@ -394,7 +395,7 @@ export interface PreparedBar {
   ma20: number | null;
   ma60Exit: number | null;
   intrabarCandles?: Candle[];
-  envelope?: EnvelopeBand & { long: boolean; short: boolean };
+  envelope?: EnvelopeBand & { long: boolean; short: boolean; parentOpenTime?: number; sourceInterval?: BacktestInterval };
 }
 
 export interface PreparedSymbol {

@@ -27,6 +27,7 @@ function notify(strategy: Strategy, event: LocalEvent): void {
 export function isLocalBacktestRunning(strategy: Strategy): boolean {
   return worker !== null && activeStrategy === strategy;
 }
+export const isAnyLocalBacktestRunning = (): boolean => worker !== null;
 
 export async function restoreLocalBacktest(strategy: Strategy): Promise<LocalJobView | null> {
   const view = isLocalBacktestRunning(strategy) ? views.get(strategy) ?? await loadLocalJob(strategy) : await loadLocalJob(strategy);
@@ -65,11 +66,11 @@ export function startLocalBacktest(strategy: Strategy, settings: BacktestSetting
         notify(strategy, { type: 'UPDATE', view: paused });
       }
     }
-    notify(strategy, message);
     if (message.type === 'IDLE') {
       instance.terminate();
       if (worker === instance) { worker = null; activeStrategy = null; }
     }
+    notify(strategy, message);
   };
   instance.onerror = () => {
     instance.terminate();

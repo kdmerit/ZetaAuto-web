@@ -18,7 +18,7 @@ interface IndexEntry { id: string; at: number; summary?: EnvelopeStatisticsHisto
 
 function summaryFor(job: EnvelopeStatisticsJob): EnvelopeStatisticsHistoryEntry {
   let best: number | null = null;
-  for (const row of job.rows) if (row.closedTradeCount > 0 && Number.isFinite(row.returnPercent)) {
+  for (const row of job.rows) if (row.entryCount > 0 && Number.isFinite(row.returnPercent)) {
     best = best === null ? row.returnPercent : Math.max(best, row.returnPercent);
   }
   return { id: job.id, savedAt: job.updatedAt, settings: job.settings, comparedCount: job.rows.length, bestReturnPercent: best };

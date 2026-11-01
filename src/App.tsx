@@ -4,6 +4,7 @@ import { AUTH_CONFIG_ERROR } from './config';
 import { ALLOWED_WEB_EMAIL, useAuth } from './auth';
 import { BacktestMenu } from './components/BacktestMenu';
 import { StrategyBacktest } from './components/StrategyBacktest';
+import { EnvelopeWorkspace } from './components/EnvelopeWorkspace';
 import type { Strategy } from './types';
 import { sendNativeMessage, subscribeNativeBack } from './nativeBridge';
 
@@ -113,7 +114,7 @@ function SignedInApp() {
           onOpen={openStrategy}
         />
       ) : (
-        <StrategyBacktest
+        screen.strategy === 'ENVELOPE' ? <EnvelopeWorkspace context={{ apiBaseUrl: auth.config.apiBaseUrl, accessToken: auth.accessToken, refreshAccessToken: auth.refreshAccessToken }} /> : <StrategyBacktest
           strategy={screen.strategy}
           context={{
             apiBaseUrl: auth.config.apiBaseUrl,
