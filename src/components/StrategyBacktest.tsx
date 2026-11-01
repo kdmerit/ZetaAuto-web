@@ -802,13 +802,14 @@ export function StrategyBacktest({ strategy, context }: StrategyBacktestProps) {
           {error ? <p className="error" role="alert">{error}</p> : null}
           {running || localJob?.status === 'PAUSED' ? <ProgressBar completed={progress.completed} total={progress.total || Math.max(estimateBars(settings), 1)} label={progress.phase} /> : null}
           {localJob ? <p className="muted small">분석 대상 {localJob.universeCount.toLocaleString()}종목 · 슬리피지 제외 {localJob.excludedCount.toLocaleString()}종목{localJob.status === 'COMPLETED' ? ' · 완료' : localJob.status === 'PAUSED' ? ' · 일시정지' : ''}</p> : null}
+          {localJob?.settings.mode === 'ALL' && localJob.universeCheckedAt ? <p className="muted small">전체종목 필터: {new Date(localJob.universeCheckedAt).toLocaleString('ko-KR')} 검사 · 7일 공통 재사용</p> : null}
           {activeServer ? <ProgressBar completed={serverJob.completedBars} total={Math.max(serverJob.totalBars, 1)} label={`${serverJob.phase === 'UNIVERSE' ? '종목 확인' : serverJob.phase === 'DATA' ? '캔들 조회' : '전략 계산'} · ${serverJob.status === 'QUEUED' ? '대기 중' : '분석 중'}`} /> : null}
         </section>
 
-        {strategy === 'ENVELOPE' ? <section className="surface-card form-card"><EnvelopeStatisticsPanel settings={settings} disabled={running || Boolean(activeServer)} validate={validate} onBusyChange={setStatisticsRunning} onChoose={next => {
+        {strategy === 'ENVELOPE' ? <section className="surface-card form-card"><EnvelopeStatisticsPanel settings={settings} disabled={running || Boolean(activeServer)} validate={validate} onBusyChange={setStatisticsRunning} onChoose={(next, source) => {
           setSettings(next); saveSettings(strategy, next); setError(null);
-          setNotice('통계분석 조건을 불러왔습니다. 분석 시작을 누르면 이 조건의 체결 결과와 차트를 확인합니다.');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
+          setNotice(source === 'history' ? '저장된 통계분석 결과와 당시 설정을 불러왔습니다.' : '통계분석 조건을 불러왔습니다. 분석 시작을 누르면 이 조건의 체결 결과와 차트를 확인합니다.');
+          if (source !== 'history') window.scrollTo({ top: 0, behavior: 'smooth' });
         }} /></section> : null}
 
         {result ? <ResultCard result={result} onOpenTrade={(trade) => void openTrade(trade)} /> : null}

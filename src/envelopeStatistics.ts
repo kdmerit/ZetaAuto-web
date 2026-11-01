@@ -1,6 +1,7 @@
 /** Resumable parameter sweep. Every row uses the same virtual-account replay as ordinary analysis. */
 import { intervalSeconds } from './api';
-import { deleteValue, lease, maintainCache, readValue, retentionMs, writeValue } from './database';
+import { lease, maintainCache, readValue, retentionMs, writeValue } from './database';
+import { saveEnvelopeStatisticsHistory } from './envelopeStatisticsHistory';
 import { prepareSymbolBlock } from './engine';
 import { envelopeExitModes, envelopePeriods } from './envelope';
 import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, type EligibleInstrument } from './marketData';
@@ -195,13 +196,8 @@ async function execute(
     }
     job.status = 'COMPLETED';
     job.message = `통계분석 완료 · ${job.rows.length.toLocaleString()}개 조건 비교`;
+    await saveEnvelopeStatisticsHistory(job);
     await checkpoint(true);
-    // Last report plus bounded 30-day archives; candle cache follows its own policy.
-    const index = await readValue<{ id: string; at: number }[]>('publicData', 'envelope-statistics-index') ?? [];
-    const keep = [{ id: job.id, at: job.updatedAt }, ...index.filter(item => item.id !== job!.id)].filter(item => Date.now() - item.at <= retentionMs).slice(0, 20);
-    await writeValue('results', `envelope-statistics:${job.id}`, job);
-    await writeValue('publicData', 'envelope-statistics-index', keep);
-    for (const item of index) if (!keep.some(value => value.id === item.id)) await deleteValue('results', `envelope-statistics:${item.id}`);
   } catch (error) {
     if (!job) throw error;
     job.status = 'PAUSED';

@@ -6,6 +6,14 @@ import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, 
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateMinuteCandles } from './intrabar';
 import type { BacktestResult, BacktestSettings, Strategy } from './types';
+import { loadWeeklyUniverse, saveWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
+
+export interface LocalRunOptions {
+  strategy: Strategy;
+  settings?: BacktestSettings;
+  resumeId?: string;
+  universeSnapshot?: WeeklyUniverseSnapshot | null;
+}
 
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
@@ -25,6 +33,9 @@ export interface LocalJob {
   cursor: number;
   candidates: Instrument[];
   universe: EligibleInstrument[];
+  universeChecks?: EligibleInstrument[];
+  universeCheckedAt?: number;
+  universeCacheExpiresAt?: number;
   excludedCount: number;
   updatedAt: number;
   message: string | null;
@@ -32,7 +43,7 @@ export interface LocalJob {
   waveStates: Record<string, WaveState>;
 }
 
-export interface LocalJobView extends Omit<LocalJob, 'state' | 'waveStates' | 'candidates' | 'universe'> {
+export interface LocalJobView extends Omit<LocalJob, 'state' | 'waveStates' | 'candidates' | 'universe' | 'universeChecks'> {
   candidateCount: number;
   universeCount: number;
   result: BacktestResult | null;
@@ -55,7 +66,7 @@ async function readJob(strategy: Strategy): Promise<LocalJob | null> {
 }
 
 export function jobView(job: LocalJob): LocalJobView {
-  const { state, waveStates: _waves, candidates, universe, ...view } = job;
+  const { state, waveStates: _waves, candidates, universe, universeChecks: _checks, ...view } = job;
   const bars = (job.end - job.start) / intervalSeconds(job.settings.interval);
   const finishedBars = (job.blockStart - job.start) / intervalSeconds(job.settings.interval);
   const blockBars = Math.min(blockSize(job), bars - finishedBars);
@@ -96,10 +107,11 @@ export async function loadLocalResult(id: string): Promise<StoredLocalResult | n
 }
 
 async function executeWithLease(
-  options: { strategy: Strategy; settings?: BacktestSettings; resumeId?: string },
+  options: LocalRunOptions,
   publish: (view: LocalJobView) => void,
   signal: AbortSignal,
   useLease: boolean,
+  publishUniverse?: (snapshot: WeeklyUniverseSnapshot) => void,
 ): Promise<void> {
   const owner = crypto.randomUUID();
   let job: LocalJob | null = null;
@@ -158,6 +170,22 @@ async function executeWithLease(
     await checkpoint();
     if (previousJob) { await deletePrefix('prepared', `${previousJob.id}:`); await deleteValue('results', previousJob.snapshotKey); }
     if (job.phase === 'UNIVERSE') {
+      const snapshot = job.settings.mode === 'ALL' ? await loadWeeklyUniverse(options.universeSnapshot) : null;
+      if (snapshot) {
+        job.candidates = snapshot.instruments.map(({ symbol, launchAt }) => ({ symbol, launchAt }));
+        job.universe = snapshot.instruments.filter(instrument => job!.settings.side === 'BOTH' ? instrument.LONG || instrument.SHORT : instrument[job!.settings.side]);
+        job.excludedCount = job.candidates.length - job.universe.length;
+        job.cursor = job.candidates.length;
+        job.universeCheckedAt = snapshot.checkedAt;
+        job.universeCacheExpiresAt = snapshot.expiresAt;
+        publishUniverse?.(snapshot);
+      } else if (job.settings.mode === 'ALL') {
+        // Old paused universe scans lack the excluded candidates' direction flags.
+        // Restart this preparation phase only; account/data checkpoints are untouched.
+        if (!job.universeChecks || job.universeChecks.length !== job.cursor) {
+          job.universeChecks = []; job.cursor = 0; job.universe = []; job.excludedCount = 0;
+        }
+      }
       if (!job.candidates.length) {
         job.candidates = await listInstruments(job.settings.mode === 'SINGLE' ? `${job.settings.symbol.replace(/USDT$/i, '').toUpperCase()}USDT` : undefined, signal);
         if (!job.candidates.length || job.candidates.length > 3000) throw new Error('분석할 USDT 종목을 확인하지 못했습니다.');
@@ -167,6 +195,7 @@ async function executeWithLease(
         signal.throwIfAborted();
         const selected = job.candidates.slice(job.cursor, job.cursor + 4);
         const checked = await Promise.all(selected.map(instrument => instrumentEligibility(instrument, signal)));
+        if (job.settings.mode === 'ALL') job.universeChecks!.push(...checked);
         for (const instrument of checked) {
           const eligible = job.settings.side === 'BOTH' ? instrument.LONG || instrument.SHORT : instrument[job.settings.side];
           if (eligible) job.universe.push(instrument);
@@ -175,6 +204,13 @@ async function executeWithLease(
         job.cursor += selected.length;
         await checkpoint();
       }
+      if (job.settings.mode === 'ALL' && !snapshot) {
+        const refreshed = await saveWeeklyUniverse(job.universeChecks!);
+        job.universeCheckedAt = refreshed.checkedAt;
+        job.universeCacheExpiresAt = refreshed.expiresAt;
+        publishUniverse?.(refreshed);
+      }
+      delete job.universeChecks;
       if (!job.universe.length) throw new Error('현재 슬리피지 조건을 통과한 종목이 없습니다. 새 분석을 시작해 주세요.');
       job.universe.sort((a, b) => a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0);
       job.cursor = 0;
@@ -247,15 +283,16 @@ async function executeWithLease(
 
 /** Chrome releases a Web Lock immediately when its worker/tab ends; leases cover older browsers. */
 export async function executeLocalJob(
-  options: { strategy: Strategy; settings?: BacktestSettings; resumeId?: string },
+  options: LocalRunOptions,
   publish: (view: LocalJobView) => void,
   signal: AbortSignal,
+  publishUniverse?: (snapshot: WeeklyUniverseSnapshot) => void,
 ): Promise<void> {
   if (typeof navigator !== 'undefined' && navigator.locks) {
     return navigator.locks.request('zetaauto-local-analysis', { ifAvailable: true }, async lock => {
       if (!lock) throw new Error('다른 탭에서 분석 중입니다. 해당 탭의 분석을 일시정지해 주세요.');
-      await executeWithLease(options, publish, signal, false);
+      await executeWithLease(options, publish, signal, false, publishUniverse);
     });
   }
-  return executeWithLease(options, publish, signal, true);
+  return executeWithLease(options, publish, signal, true, publishUniverse);
 }

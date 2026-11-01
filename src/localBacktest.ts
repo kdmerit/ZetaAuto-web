@@ -6,6 +6,7 @@ import { ensureCandles, listInstruments } from './marketData';
 import { saveBacktestHistory, saveCachedResult } from './storage';
 import { projectEnvelopeBands } from './envelope';
 import type { BacktestResult, BacktestSettings, BacktestTrade, ChartData, Strategy } from './types';
+import { loadLocalWeeklyUniverse, saveLocalWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
 
 type LocalEvent = { type: 'UPDATE'; view: LocalJobView } | { type: 'ERROR'; message: string } | { type: 'IDLE' };
 const listeners = new Map<Strategy, Set<(event: LocalEvent) => void>>();
@@ -40,8 +41,9 @@ export function startLocalBacktest(strategy: Strategy, settings: BacktestSetting
   activeStrategy = strategy;
   worker = new Worker(new URL('./backtest.worker.ts', import.meta.url), { type: 'module' });
   const instance = worker;
-  instance.onmessage = (event: MessageEvent<LocalEvent>) => {
+  instance.onmessage = (event: MessageEvent<LocalEvent | { type: 'UNIVERSE_CACHE'; snapshot: WeeklyUniverseSnapshot }>) => {
     const message = event.data;
+    if (message.type === 'UNIVERSE_CACHE') { saveLocalWeeklyUniverse(message.snapshot); return; }
     if (message.type === 'UPDATE') {
       views.set(strategy, message.view);
       const view = message.view;
@@ -78,7 +80,8 @@ export function startLocalBacktest(strategy: Strategy, settings: BacktestSetting
     notify(strategy, { type: 'ERROR', message: '분석이 중단되었습니다. 저장된 지점부터 이어가 주세요.' });
     notify(strategy, { type: 'IDLE' });
   };
-  instance.postMessage({ type: 'START', strategy, settings, resumeId });
+  instance.postMessage({ type: 'START', strategy, settings, resumeId,
+    ...(settings.mode === 'ALL' ? { universeSnapshot: loadLocalWeeklyUniverse() } : {}) });
 }
 
 export function pauseLocalBacktest(strategy: Strategy): void {

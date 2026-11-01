@@ -3,6 +3,7 @@ import { envelopeExitLabels, envelopeExitModes, envelopePeriods } from '../envel
 import { statisticsIntervals, statisticsProgress, statisticsTotal, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow } from '../envelopeStatistics';
 import { isEnvelopeStatisticsRunning, pauseEnvelopeStatistics, restoreEnvelopeStatistics, startEnvelopeStatistics, subscribeEnvelopeStatistics } from '../envelopeStatisticsClient';
 import type { BacktestSettings, EnvelopeExitMode } from '../types';
+import { loadEnvelopeStatisticsHistory, loadEnvelopeStatisticsReport, type EnvelopeStatisticsHistoryEntry } from '../envelopeStatisticsHistory';
 import { ProgressBar } from './ProgressBar';
 
 type Metric = 'returnPercent' | 'profitUsdt' | 'winCount' | 'winRatePercent' | 'entryCount';
@@ -48,33 +49,41 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
   settings: BacktestSettings;
   disabled: boolean;
   validate: () => void;
-  onChoose: (settings: BacktestSettings) => void;
+  onChoose: (settings: BacktestSettings, source?: 'history') => void;
   onBusyChange: (busy: boolean) => void;
 }) {
   const [job, setJob] = useState<EnvelopeStatisticsJob | null>(null);
+  const [latestJob, setLatestJob] = useState<EnvelopeStatisticsJob | null>(null);
   const [running, setRunning] = useState(isEnvelopeStatisticsRunning);
   const [error, setError] = useState<string | null>(null);
   const [metric, setMetric] = useState<Metric>('returnPercent');
   const [period, setPeriod] = useState(20);
   const [exit, setExit] = useState<EnvelopeExitMode>('CENTER');
   const [limit, setLimit] = useState(30);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyEntries, setHistoryEntries] = useState<EnvelopeStatisticsHistoryEntry[]>([]);
+  const historySymbol = settings.symbol.toUpperCase().replace(/USDT$/, '');
+  const historyRequest = useRef(0);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
     let received = false;
-    void restoreEnvelopeStatistics().then(saved => { if (mounted.current && !received) setJob(saved); }).catch(() => { if (mounted.current) setError('저장된 통계분석을 불러오지 못했습니다.'); });
+    void restoreEnvelopeStatistics().then(saved => { if (mounted.current && !received) { setJob(saved); setLatestJob(saved); } }).catch(() => { if (mounted.current) setError('저장된 통계분석을 불러오지 못했습니다.'); });
     const unsubscribe = subscribeEnvelopeStatistics(event => {
       received = true;
-      if (event.type === 'UPDATE') setJob(event.job);
+      if (event.type === 'UPDATE') { setJob(event.job); setLatestJob(event.job); }
       if (event.type === 'ERROR') {
         setError(event.message);
         setJob(current => current && current.status === 'RUNNING' ? { ...current, status: 'PAUSED', message: event.message } : current);
+        setLatestJob(current => current && current.status === 'RUNNING' ? { ...current, status: 'PAUSED', message: event.message } : current);
       }
       if (event.type === 'IDLE') setRunning(false);
     });
     return () => { mounted.current = false; unsubscribe(); };
   }, []);
-  useEffect(() => { onBusyChange(running); }, [running, onBusyChange]);
+  useEffect(() => { onBusyChange(running || historyLoading); }, [running, historyLoading, onBusyChange]);
+  useEffect(() => { historyRequest.current += 1; setHistoryOpen(false); setHistoryEntries([]); setHistoryLoading(false); }, [settings.mode, historySymbol]);
   const rows = useMemo(() => [...(job?.rows ?? [])].sort((a, b) => Number(b.entryCount > 0) - Number(a.entryCount > 0) || b.returnPercent - a.returnPercent || a.maxDrawdownPercent - b.maxDrawdownPercent), [job]);
   const graphRows = useMemo(() => rows.filter(row => row.maPeriod === period && row.exitMode === exit), [rows, period, exit]);
   const best = rows.find(row => row.closedTradeCount > 0);
@@ -82,16 +91,48 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
     try {
       if (!resume) validate();
       setError(null); setLimit(30);
-      startEnvelopeStatistics(settings, resume ? job?.id : undefined);
-      if (!resume) setJob(null);
+      startEnvelopeStatistics(settings, resume ? latestJob?.id : undefined);
+      setJob(resume ? latestJob : null); setHistoryOpen(false); historyRequest.current += 1;
       setRunning(true);
     } catch (failure) { setError(failure instanceof Error ? failure.message : '통계분석을 시작하지 못했습니다.'); }
   };
+  const toggleHistory = async (): Promise<void> => {
+    if (historyOpen) { setHistoryOpen(false); return; }
+    const requestId = ++historyRequest.current;
+    setHistoryLoading(true); setError(null);
+    try {
+      const entries = settings.mode === 'SINGLE' && !historySymbol ? [] : await loadEnvelopeStatisticsHistory(settings.mode === 'SINGLE' ? historySymbol : undefined);
+      if (mounted.current && requestId === historyRequest.current) { setHistoryEntries(entries); setHistoryOpen(true); }
+    } catch { if (mounted.current && requestId === historyRequest.current) setError('통계분석 이력을 불러오지 못했습니다. 다시 눌러 주세요.'); }
+    finally { if (mounted.current && requestId === historyRequest.current) setHistoryLoading(false); }
+  };
+  const openHistory = async (entry: EnvelopeStatisticsHistoryEntry): Promise<void> => {
+    const requestId = ++historyRequest.current;
+    setHistoryLoading(true); setError(null);
+    try {
+      const saved = await loadEnvelopeStatisticsReport(entry.id);
+      if (!saved) throw new Error('저장된 통계분석 결과가 없거나 보관 기간이 지났습니다.');
+      if (!mounted.current || requestId !== historyRequest.current) return;
+      setJob(saved); setLimit(30); setMetric('returnPercent');
+      setPeriod(Number(saved.settings.envelopeMaPeriod ?? '20')); setExit(saved.settings.envelopeExitMode ?? 'CENTER');
+      setHistoryOpen(false); setHistoryEntries([]);
+      onChoose(saved.settings, 'history');
+    } catch (failure) { if (mounted.current && requestId === historyRequest.current) setError(failure instanceof Error ? failure.message : '통계분석 이력을 불러오지 못했습니다.'); }
+    finally { if (mounted.current && requestId === historyRequest.current) setHistoryLoading(false); }
+  };
   return <section className="envelope-statistics" aria-label="엔벨로프 통계분석">
-    <button className="outline-button full-width" type="button" disabled={disabled || running || settings.mode !== 'SINGLE'} onClick={() => start()}>{running ? '통계분석 진행 중' : '통계분석'}</button>
+    <button className="outline-button full-width" type="button" disabled={disabled || running || historyLoading || settings.mode !== 'SINGLE'} onClick={() => start()}>{running ? '통계분석 진행 중' : '통계분석'}</button>
     {settings.mode !== 'SINGLE' ? <p className="muted small">통계분석은 개별종목을 선택하면 사용할 수 있습니다.</p> : null}
     {running ? <button className="danger-button full-width" type="button" onClick={pauseEnvelopeStatistics}>통계분석 일시정지</button> : null}
-    {!running && job?.status === 'PAUSED' ? <button className="outline-button full-width" type="button" disabled={disabled || settings.mode !== 'SINGLE'} onClick={() => start(true)}>통계분석 이어하기 · {job.settings.symbol}</button> : null}
+    {!running && latestJob?.status === 'PAUSED' ? <button className="outline-button full-width" type="button" disabled={disabled || historyLoading || settings.mode !== 'SINGLE'} onClick={() => start(true)}>통계분석 이어하기 · {latestJob.settings.symbol}</button> : null}
+    <button className="outline-button full-width" type="button" disabled={disabled || running || historyLoading} aria-expanded={historyOpen} onClick={() => { void toggleHistory(); }}>{historyLoading ? '통계분석 이력 불러오는 중' : historyOpen ? '통계분석 이력 닫기' : `${settings.mode === 'SINGLE' ? `${historySymbol || '해당 종목'} ` : ''}통계분석 이력보기`}</button>
+    {historyOpen ? <div className="history-list envelope-stat-history" aria-label="통계분석 이력">
+      {historyEntries.length ? historyEntries.map(entry => <button type="button" className="history-card" key={entry.id} disabled={historyLoading || running || disabled} onClick={() => { void openHistory(entry); }}>
+        <span className="history-card-heading"><strong>{entry.settings.symbol.toUpperCase().replace(/USDT$/, '')} 통계분석</strong><em className={entry.bestReturnPercent !== null && entry.bestReturnPercent < 0 ? 'negative' : 'positive'}>최고 {entry.bestReturnPercent === null ? '—' : `${number(entry.bestReturnPercent)}%`}</em></span>
+        <span>{entry.settings.startDate} {entry.settings.startTime} ~ {entry.settings.endDate || '현재'} {entry.settings.endDate ? entry.settings.endTime : ''}</span>
+        <small>{entry.comparedCount.toLocaleString()}개 조건 비교 · 저장 {new Date(entry.savedAt).toLocaleString('ko-KR')}</small>
+      </button>) : <p className="muted history-empty">{settings.mode === 'SINGLE' ? `${historySymbol || '해당 종목'} ` : ''}통계분석 이력이 없습니다.</p>}
+    </div> : null}
     {error ? <p className="error" role="alert">{error}</p> : null}
     {job ? <>
       <h3>{job.settings.symbol} 통계분석 {job.status === 'COMPLETED' ? '결과' : job.status === 'PAUSED' ? '일시정지' : '진행 중'}</h3>
@@ -110,7 +151,7 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
         {graphRows.length ? <ComparisonGraph rows={graphRows} metric={metric} /> : <p className="muted small">선택한 SMA·청산 방식의 비교 결과가 아직 없습니다.</p>}
         <p className="muted small">과거 기간 내 비교이며 미래 수익을 보장하지 않습니다. 수익률·순손익은 수수료와 미청산 평가손익을 포함하며 수익횟수·승률은 완료된 포지션 기준입니다.</p>
         <h3>세부 결과 · 수익률 순 {rows.length.toLocaleString()}건</h3>
-        <div className="envelope-stat-rows">{rows.slice(0, limit).map(row => <button className="envelope-stat-row" type="button" key={`${row.interval}:${row.maPeriod}:${row.deviationPercent}:${row.exitMode}`} disabled={running || disabled} onClick={() => onChoose({ ...job.settings, interval: row.interval, envelopeMaPeriod: String(row.maPeriod), envelopeDeviationPercent: row.deviationPercent.toFixed(1), envelopeExitMode: row.exitMode })}>
+        <div className="envelope-stat-rows">{rows.slice(0, limit).map(row => <button className="envelope-stat-row" type="button" key={`${row.interval}:${row.maPeriod}:${row.deviationPercent}:${row.exitMode}`} disabled={running || historyLoading || disabled} onClick={() => onChoose({ ...job.settings, interval: row.interval, envelopeMaPeriod: String(row.maPeriod), envelopeDeviationPercent: row.deviationPercent.toFixed(1), envelopeExitMode: row.exitMode })}>
           <strong>{row.interval} · SMA{row.maPeriod} · {row.deviationPercent.toFixed(1)}% <span className={row.returnPercent >= 0 ? 'long-text' : 'short-text'}>{number(row.returnPercent)}%</span></strong>
           <span>{envelopeExitLabels[row.exitMode]}</span>
           <span>순손익 {number(row.profitUsdt)} USDT · 수익 {row.winCount}회 · 승률 {number(row.winRatePercent)}%</span>

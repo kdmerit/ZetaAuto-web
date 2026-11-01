@@ -4,6 +4,7 @@ import { cacheCandles, lease, openCacheDatabase, readValue, writeValue } from '.
 import { engineVersionFor, executeLocalJob, loadLocalJob, loadLocalResult, type LocalJobView } from './localJobs';
 import { ensureCandles, instrumentEligibility, listInstruments } from './marketData';
 import type { BacktestSettings, Candle } from './types';
+import { universeRetentionMs, weeklyUniverseDatabaseKey, type WeeklyUniverseSnapshot } from './universeCache';
 
 vi.mock('./marketData', async importOriginal => {
   const actual = await importOriginal<typeof import('./marketData')>();
@@ -44,9 +45,61 @@ beforeEach(async () => {
     return rows;
   });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('durable local analysis', () => {
+  it('reuses one direction-neutral weekly universe across all four strategies and refreshes after seven days', async () => {
+    const candidates = ['AAAUSDT', 'ZZZUSDT', 'NONEUSDT'].map(symbol => ({ symbol, launchAt: origin - 200 * 3600 }));
+    vi.mocked(listInstruments).mockClear().mockResolvedValue(candidates);
+    vi.mocked(instrumentEligibility).mockClear().mockImplementation(async instrument => ({ ...instrument,
+      LONG: instrument.symbol === 'AAAUSDT', SHORT: instrument.symbol === 'ZZZUSDT' }));
+    const run = async (strategy: 'PULLBACK' | 'DISPARITY' | 'VOLATILITY' | 'ENVELOPE', side: BacktestSettings['side']) => {
+      await executeLocalJob({ strategy, settings: { ...settings, side } }, () => undefined, new AbortController().signal);
+      const view = (await loadLocalJob(strategy))!; expect(view.status).toBe('COMPLETED'); return view;
+    };
+    expect((await run('PULLBACK', 'LONG')).universeCount).toBe(1);
+    expect((await run('DISPARITY', 'SHORT')).universeCount).toBe(1);
+    expect((await run('VOLATILITY', 'BOTH')).universeCount).toBe(2);
+    expect((await run('ENVELOPE', 'BOTH')).excludedCount).toBe(1);
+    expect(listInstruments).toHaveBeenCalledTimes(1); expect(instrumentEligibility).toHaveBeenCalledTimes(3);
+    const snapshot = (await readValue<WeeklyUniverseSnapshot>('publicData', weeklyUniverseDatabaseKey))!;
+    expect(snapshot.instruments).toHaveLength(3);
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(snapshot.checkedAt + universeRetentionMs);
+    const refreshed = await run('PULLBACK', 'BOTH');
+    expect(listInstruments).toHaveBeenCalledTimes(2); expect(instrumentEligibility).toHaveBeenCalledTimes(6);
+    expect(refreshed.universeCheckedAt).toBe(snapshot.checkedAt + universeRetentionMs);
+  });
+
+  it('does not replace the prior complete snapshot when a refresh fails partway', async () => {
+    vi.mocked(listInstruments).mockClear(); vi.mocked(instrumentEligibility).mockClear();
+    const checkedAt = Date.now() - 8 * 86400_000;
+    const previous: WeeklyUniverseSnapshot = { version: 1, checkedAt, expiresAt: checkedAt + universeRetentionMs,
+      notionalUsdt: 10000, maxSlippagePercent: 0.5, instruments: [{ symbol: 'OLDUSDT', launchAt: 0, LONG: true, SHORT: true }] };
+    await writeValue('publicData', weeklyUniverseDatabaseKey, previous);
+    vi.mocked(instrumentEligibility).mockRejectedValueOnce(new Error('temporary orderbook failure'));
+    await executeLocalJob({ strategy: 'ENVELOPE', settings }, () => undefined, new AbortController().signal);
+    expect((await loadLocalJob('ENVELOPE'))?.status).toBe('PAUSED');
+    expect(await readValue('publicData', weeklyUniverseDatabaseKey)).toEqual(previous);
+    const paused = (await loadLocalJob('ENVELOPE'))!;
+    await executeLocalJob({ strategy: 'ENVELOPE', resumeId: paused.id }, () => undefined, new AbortController().signal);
+    expect((await loadLocalJob('ENVELOPE'))?.status).toBe('COMPLETED');
+    expect((await readValue<WeeklyUniverseSnapshot>('publicData', weeklyUniverseDatabaseKey))!.checkedAt).toBeGreaterThan(checkedAt);
+  });
+
+  it('keeps single-symbol checks separate and does not refilter a paused data-stage job after expiry', async () => {
+    vi.mocked(listInstruments).mockClear(); vi.mocked(instrumentEligibility).mockClear();
+    vi.mocked(ensureCandles).mockRejectedValueOnce(new Error('temporary candle failure'));
+    await executeLocalJob({ strategy: 'ENVELOPE', settings }, () => undefined, new AbortController().signal);
+    const paused = (await loadLocalJob('ENVELOPE'))!; expect(paused.status).toBe('PAUSED');
+    const initialCalls = vi.mocked(instrumentEligibility).mock.calls.length;
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(Date.now() + 8 * 86400_000);
+    await executeLocalJob({ strategy: 'ENVELOPE', resumeId: paused.id }, () => undefined, new AbortController().signal);
+    expect(instrumentEligibility).toHaveBeenCalledTimes(initialCalls);
+    vi.mocked(listInstruments).mockResolvedValueOnce([{ symbol: 'AAAUSDT', launchAt: origin - 200 * 3600 }]);
+    await executeLocalJob({ strategy: 'ENVELOPE', settings: { ...settings, mode: 'SINGLE' } }, () => undefined, new AbortController().signal);
+    expect(instrumentEligibility).toHaveBeenCalledTimes(initialCalls + 1);
+    expect(listInstruments).toHaveBeenLastCalledWith('AAAUSDT', expect.any(AbortSignal));
+  });
   it('resumes from a committed shared-account block with identical trades and totals', async () => {
     const pause = new AbortController();
     const updates: LocalJobView[] = [];
