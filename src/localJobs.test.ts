@@ -48,17 +48,17 @@ beforeEach(async () => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('durable local analysis', () => {
-  it('upgrades an old envelope checkpoint with the stop option off without changing its account result', async () => {
+  it('preserves an old envelope checkpoint but requires a new analysis after the reclaim model change', async () => {
     const controller = new AbortController();
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, view => { if (view.blockStart > origin) controller.abort(); }, controller.signal);
     const header = (await readValue<Record<string, unknown>>('jobs', 'ENVELOPE'))!;
     await writeValue('jobs', 'ENVELOPE', { ...header, version: '2.10.36' });
-    const paused = (await loadLocalJob('ENVELOPE'))!; expect(canResumeLocalJob(paused)).toBe(true);
+    const paused = (await loadLocalJob('ENVELOPE'))!; expect(canResumeLocalJob(paused)).toBe(false);
     expect(canResumeLocalJob({ ...paused, settings: { ...settings, envelopeMoveSlOnCenter: true } })).toBe(false);
-    await executeLocalJob({ strategy: 'ENVELOPE', resumeId: paused.id }, () => {}, new AbortController().signal);
-    const resumed = (await loadLocalJob('ENVELOPE'))!; expect(resumed.id).toBe(paused.id); expect(resumed.version).toBe('2.10.42');
+    await expect(executeLocalJob({ strategy: 'ENVELOPE', resumeId: paused.id }, () => {}, new AbortController().signal)).rejects.toThrow('새 분석');
+    expect((await loadLocalJob('ENVELOPE'))!.id).toBe(paused.id);
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, () => {}, new AbortController().signal);
-    expect((await loadLocalJob('ENVELOPE'))!.result).toEqual({ ...resumed.result, localRunId: expect.any(String) });
+    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.43');
   });
   it('reuses one direction-neutral weekly universe across all four strategies and refreshes after seven days', async () => {
     const candidates = ['AAAUSDT', 'ZZZUSDT', 'NONEUSDT'].map(symbol => ({ symbol, launchAt: origin - 200 * 3600 }));

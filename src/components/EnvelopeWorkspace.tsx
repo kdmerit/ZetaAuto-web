@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ApiContext } from '../api';
 import { useAnalysisBusy } from '../analysisActivity';
 import { loadSettings, saveSettings } from '../storage';
-import { envelopeExitLabels } from '../envelope';
-import { canResumeEnvelopeBatch, envelopeBatchView, loadEnvelopeBatchHistory, loadEnvelopeBatchReport, type BatchHistoryEntry, type EnvelopeBatchKind, type EnvelopeBatchView, type OptimizedSymbol } from '../envelopeBatch';
-import { isDirectionalStatisticsVersion, isFixedEnvelopeStatisticsVersion, selectedStatisticsSides, settingsForStatisticsRow, statisticsAnalysisWindow, statisticsIntervalLabel, statisticsIntervals, statisticsSideLabel, type StatisticsSide } from '../envelopeStatistics';
+import { currentEnvelopeSettings, envelopeExitLabels } from '../envelope';
+import { canResumeEnvelopeBatch, envelopeBatchView, loadEnvelopeBatchHistory, loadEnvelopeBatchReport, validateVirtualSettings, virtualPeriodRelation, type BatchHistoryEntry, type EnvelopeBatchKind, type EnvelopeBatchView, type OptimizedSymbol } from '../envelopeBatch';
+import { isDirectionalStatisticsVersion, isFixedEnvelopeStatisticsVersion, isReclaimStatisticsVersion, optimalSettingCriteria, selectedStatisticsSides, settingsForStatisticsRow, statisticsAnalysisWindow, statisticsIntervalLabel, statisticsIntervals, statisticsSideLabel, type StatisticsSide } from '../envelopeStatistics';
 import { fixedEnvelopeSettings } from '../envelopeReplay';
 import { isEnvelopeBatchRunning, pauseEnvelopeBatch, restoreEnvelopeBatch, startEnvelopeBatch, subscribeEnvelopeBatch } from '../envelopeBatchClient';
 import type { BacktestSettings } from '../types';
@@ -17,7 +17,7 @@ const views: { id: View; label: string }[] = [{ id: 'SINGLE', label: '개별분�
 const num = (value: number | undefined | null): string => value == null ? '—' : value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
 function readSettings(view: string): BacktestSettings {
   const fallback = { ...loadSettings('ENVELOPE', defaultSettings()), mode: view === 'SINGLE_STATS' ? 'SINGLE' as const : 'ALL' as const, envelopeRisk: undefined, envelopeStatisticsInterval: 'ALL' as const };
-  try { return { ...fallback, ...JSON.parse(localStorage.getItem(`zetaauto.web.envelope.${view}.settings`) ?? '{}'), mode: fallback.mode, envelopeRisk: undefined }; } catch { return fallback; }
+  try { return currentEnvelopeSettings({ ...fallback, ...JSON.parse(localStorage.getItem(`zetaauto.web.envelope.${view}.settings`) ?? '{}'), mode: fallback.mode }); } catch { return currentEnvelopeSettings(fallback); }
 }
 function storeSettings(view: string, settings: BacktestSettings): void { try { localStorage.setItem(`zetaauto.web.envelope.${view}.settings`, JSON.stringify(settings)); } catch { /* Keep inputs usable without storage. */ } }
 function validateSearch(settings: BacktestSettings): void {
@@ -41,19 +41,40 @@ function SearchFields({ settings, onChange, disabled, single }: { settings: Back
       <label className="field-label">종료일 (선택)<input inputMode="numeric" value={settings.endDate} onChange={event => update('endDate', formatDateInput(event.target.value))} placeholder="현재까지" /></label>
       <label className="field-label">종료시간<input inputMode="numeric" value={settings.endTime} onChange={event => update('endTime', formatTimeInput(event.target.value))} /></label>
     </div><div className="field-grid three"><label className="field-label">가상 초기자금<input inputMode="decimal" value={settings.initialCapitalUsdt} onChange={event => update('initialCapitalUsdt', event.target.value)} /></label><label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /></label><label className="field-label">고정 레버리지<input inputMode="decimal" value={settings.leverage} onChange={event => update('leverage', event.target.value)} /><small>1~100배 · 모든 조건에 동일 적용</small></label></div>
-    <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeMoveSlOnCenter === true} onChange={event => update('envelopeMoveSlOnCenter', event.target.checked)} /><span>중앙선 터치시 SL 변경</span></label>
-    <p className="muted small">선택한 체크 상태를 모든 통계 조건에 적용합니다. 첫 유리한 중앙선 접촉 시 SL을 매수가와 중앙선의 중간값으로 한 번 이동합니다. 숏은 반대로 적용합니다.</p>
-    <p className="muted small">{statisticsIntervalLabel(settings)}에서 입력한 레버리지를 고정하고 8개 SMA·이격 0.1~20.0%·3개 청산 방식만 비교합니다. 레버리지를 자동으로 변경하거나 최적 배율을 찾지 않습니다.</p>
+    <p className="notice small">매매 고정: 서로 다른 봉의 밴드 이탈 후 재돌파 진입 · 중앙선 첫 접촉 시 SL을 매수가와 중앙선의 중간값으로 이동 · 반대 밴드 전량 청산</p>
+    <p className="muted small">{statisticsIntervalLabel(settings)}에서 입력한 레버리지를 고정하고 8개 SMA·이격 0.1~20.0%만 비교합니다. 청산 방식은 하나이며 자동 배율 탐색은 하지 않습니다.</p>
+    <p className="notice small">최적 세팅 필수 기준: {optimalSettingCriteria}</p>
     <p className="muted small">거래소 최대 레버리지·위험한도는 조회하지 않습니다. SL·수수료를 반영한 가정 계산이며 실제 계좌의 강제청산은 재현하지 않습니다. 중지 후 이어갈 수 있습니다.</p>
   </fieldset></section>;
+}
+
+export function VirtualEvaluationFields({ settings, onChange, disabled }: { settings: BacktestSettings; onChange: (settings: BacktestSettings) => void; disabled: boolean }) {
+  const update = <K extends keyof BacktestSettings>(key: K, value: BacktestSettings[K]): void => onChange({ ...settings, [key]: value });
+  return <section className="surface-card form-card" aria-label="가상매매 검증 설정"><fieldset className="analysis-fields" disabled={disabled}>
+    <h2>가상매매 분석 기간 (한국시간)</h2><div className="field-grid two">
+      <label className="field-label">시작일<input inputMode="numeric" value={settings.startDate} onChange={event => update('startDate', formatDateInput(event.target.value))} /></label>
+      <label className="field-label">시작시간<input inputMode="numeric" value={settings.startTime} onChange={event => update('startTime', formatTimeInput(event.target.value))} /></label>
+      <label className="field-label">종료일 (선택)<input inputMode="numeric" value={settings.endDate} onChange={event => update('endDate', formatDateInput(event.target.value))} placeholder="현재까지" /></label>
+      <label className="field-label">종료시간<input inputMode="numeric" value={settings.endTime} onChange={event => update('endTime', formatTimeInput(event.target.value))} /></label>
+    </div><div className="field-grid three">
+      <label className="field-label">가상 초기자금<input inputMode="decimal" value={settings.initialCapitalUsdt} onChange={event => update('initialCapitalUsdt', event.target.value)} /></label>
+      <label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /></label>
+      <label className="field-label">레버리지<input inputMode="decimal" value={settings.leverage} onChange={event => update('leverage', event.target.value)} /><small>1~100배 · 모든 종목에 동일 적용</small></label>
+    </div><p className="muted small">검증 기간·자금·배율은 세팅을 선정한 통계와 별도로 저장합니다. 원본을 바꿔도 입력한 검증 설정은 바뀌지 않습니다.</p>
+  </fieldset></section>;
+}
+
+export function VirtualPeriodNotice({ evaluation, training }: { evaluation: BacktestSettings; training: BacktestSettings }) {
+  const relation = virtualPeriodRelation(evaluation, training);
+  return <p className="notice small">{relation === 'AFTER' ? '세팅 선정 이후의 기간을 검증합니다. 이 기간으로 세팅을 다시 최적화하지 않습니다.' : relation === 'BEFORE' ? '세팅 선정 이전의 기간입니다. 나중에 고른 세팅을 과거에 적용하는 검증이며 순방향 표본 외 검증은 아닙니다.' : relation === 'OVERLAP' ? '세팅 선정 기간과 검증 기간이 겹칩니다. 겹친 구간은 표본 외 검증이 아닙니다.' : '검증 기간을 입력해 주세요.'} 실제 미래 수익을 보장하지 않습니다.</p>;
 }
 
 export function EnvelopeSymbolSettings({ row, settings, disabled, onChoose }: { row: Omit<OptimizedSymbol, 'risk'>; settings: BacktestSettings; disabled: boolean; onChoose: (side?: StatisticsSide) => void }) {
   const choices = row.bestBySide ? selectedStatisticsSides(settings).map(side => ({ side, best: row.bestBySide?.[side] }))
     : [{ side: settings.side === 'BOTH' ? undefined : settings.side, best: row.best }];
   return <article className="envelope-symbol-result" aria-label={`${row.symbol} 최적 세팅`}><h3>{row.symbol}</h3>{choices.map(({ side, best }) => <button className="envelope-stat-row" key={side ?? 'combined'} type="button" disabled={disabled || !best} onClick={() => onChoose(side)}>
-    <strong>{side ? statisticsSideLabel(side) : '이전 롱 + 숏 합산'} 최고 수익률 <span className={(best?.returnPercent ?? 0) >= 0 ? 'long-text' : 'short-text'}>{best ? `${num(best.returnPercent)}%` : row.status === 'UNSUPPORTED' ? '지원 불가' : '체결 없음'}</span></strong>
-    {best ? <><span>{best.interval} · SMA{best.maPeriod} · 이격 {best.deviationPercent}% · {best.leverage ?? settings.leverage}배</span><span>{envelopeExitLabels[best.exitMode]} · 순손익 {num(best.profitUsdt)} USDT · 승률 {num(best.winRatePercent)}%</span><small>개별분석에 이 방향의 세팅 불러오기 ›</small></> : <span>{row.message ?? '기간 내 진입 가능한 세팅이 없습니다.'}</span>}
+    <strong>{side ? statisticsSideLabel(side) : '이전 롱 + 숏 합산'} 최고 수익률 <span className={(best?.returnPercent ?? 0) >= 0 ? 'long-text' : 'short-text'}>{best ? `${num(best.returnPercent)}%` : row.status === 'UNSUPPORTED' ? '지원 불가' : side && row.tradedSides?.[side] ? '최적 기준 미달' : '체결 없음'}</span></strong>
+    {best ? <><span>{best.interval} · SMA{best.maPeriod} · 이격 {best.deviationPercent}% · {best.leverage ?? settings.leverage}배</span><span>{envelopeExitLabels[best.exitMode]} · 순손익 {num(best.profitUsdt)} USDT · 승률 {num(best.winRatePercent)}%</span><span>진입 {best.entryCount}회 · 승/패 {best.winCount}/{best.lossCount}</span><small>개별분석에 이 방향의 세팅 불러오기 ›</small></> : <span>{row.message ?? (side && row.tradedSides?.[side] ? optimalSettingCriteria : '기간 내 진입 가능한 세팅이 없습니다.')}</span>}
   </button>)}</article>;
 }
 
@@ -69,7 +90,7 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
     void restoreEnvelopeBatch(kind).then(saved => { if (saved && mounted.current && !received && request.current === 0) receive(saved, !selectedSource); }).catch(failure => { if (mounted.current) setError(String(failure)); });
     const refreshSources = async (preferred?: string): Promise<void> => {
       const current = ++sourceRequest;
-      try { const value = (await loadEnvelopeBatchHistory('ALL_STATS')).filter(item => isFixedEnvelopeStatisticsVersion(item.version)); if (mounted.current && current === sourceRequest) { setSources(value); const chosen = preferred ?? selectedSource; if (value.some(item => item.id === chosen)) { if (preferred) onSelectSource(chosen); } else onSelectSource(value[0]?.id ?? ''); } }
+      try { const value = (await loadEnvelopeBatchHistory('ALL_STATS')).filter(item => isReclaimStatisticsVersion(item.version)); if (mounted.current && current === sourceRequest) { setSources(value); const chosen = preferred ?? selectedSource; if (value.some(item => item.id === chosen)) { if (preferred) onSelectSource(chosen); } else onSelectSource(value[0]?.id ?? ''); } }
       catch { if (mounted.current && current === sourceRequest) setError('전체통계 이력을 불러오지 못했습니다.'); }
     };
     if (kind === 'VIRTUAL') void refreshSources();
@@ -78,7 +99,7 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
     return () => { mounted.current = false; unsubscribe(); unsubscribeSources(); };
   }, [kind, onSelectSource]);
   const start = (resume = false): void => {
-    try { if (!resume && kind === 'ALL_STATS') validateSearch(settings); if (!resume && kind === 'VIRTUAL' && !selectedSource) throw new Error('완료된 전체통계 결과를 먼저 선택해 주세요.');
+    try { if (!resume && kind === 'ALL_STATS') validateSearch(settings); if (!resume && kind === 'VIRTUAL') { validateVirtualSettings(settings); if (!source) throw new Error('새 매매 조건으로 완료한 전체통계 결과를 먼저 선택해 주세요.'); }
       if (resume && latest && isFixedEnvelopeStatisticsVersion(latest.version)) { onRestore(latest.settings); if (latest.sourceId) onSelectSource(latest.sourceId); }
       startEnvelopeBatch(kind, settings, resume ? latest?.id : undefined, selectedSource); request.current += 1; setHistoryOpen(false); setError(null); setRunning(true); if (!resume) setView(null);
     } catch (failure) { setError(failure instanceof Error ? failure.message : '분석을 시작하지 못했습니다.'); }
@@ -106,12 +127,11 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
   const source = sources.find(value => value.id === selectedSource);
   return <section className="surface-card form-card envelope-batch" aria-label={label}>
     {kind === 'VIRTUAL' ? <><label className="field-label">전체통계 결과 선택<select value={selectedSource} disabled={busy || loading} onChange={event => onSelectSource(event.target.value)}><option value="">완료된 전체통계를 선택하세요</option>{sources.map(item => <option key={item.id} value={item.id}>{new Date(item.at).toLocaleString('ko-KR')} · {statisticsIntervalLabel(item.settings)} · {item.optimized}/{item.symbols}종목 · {item.settings.startDate}~{item.settings.endDate}</option>)}</select></label>
-      {!sources.length ? <p className="notice">고정 레버리지 전체통계분석을 먼저 완료해야 가상매매를 실행할 수 있습니다. 이전 이력은 전체통계 이력보기에서 확인할 수 있습니다.</p> : null}
-      {source ? <p className="muted small">통계 주기 {statisticsIntervalLabel(source.settings)} · 초기자금 {source.settings.initialCapitalUsdt} USDT · 종목당 고정 베팅 {source.settings.betAmountUsdt} USDT · 레버리지 {source.settings.leverage}배 고정 · {source.settings.startDate} {source.settings.startTime} ~ {source.settings.endDate} {source.settings.endTime}</p> : null}
-      {source && isDirectionalStatisticsVersion(source.version) ? <p className="notice small">{source.settings.side === 'BOTH' ? '저장된 롱·숏 최적 세팅을 함께 적용합니다.' : `저장된 ${source.settings.side === 'LONG' ? '롱' : '숏'} 최적 세팅을 적용합니다.`} 종목당 한 포지션을 유지하고 각 방향의 원주기·SMA·이격·청산 조건을 따릅니다. 중앙선 터치시 SL 변경: {source.settings.envelopeMoveSlOnCenter ? '사용' : '사용 안 함'}</p> : null}
-      {source && !isDirectionalStatisticsVersion(source.version) && source.settings.side === 'BOTH' ? <p className="notice small">선택한 이력은 이전 롱·숏 합산 세팅입니다. 방향별 최적 세팅을 함께 쓰려면 새 전체통계를 완료해 주세요.</p> : null}
-      <p className="notice">동일 기간에서 고른 최적값을 다시 사용하는 사후 분석입니다. 미래 성과 검증이 아닙니다. 15분봉으로 중심선 주기를 유지해 시간순으로 재검증하고 모든 종목이 한 계좌의 자금을 공유하므로 개별 수익률 합계와 다릅니다.</p></> : null}
-    <button className="primary-button" type="button" disabled={busy || loading || kind === 'VIRTUAL' && !selectedSource} onClick={() => start()}>{running ? `${label} 진행 중` : `${label} 분석 시작`}</button>
+      {!sources.length ? <p className="notice">새 고정 매매 조건으로 전체통계를 먼저 완료해 주세요. 이전 조건의 이력은 그대로 보존됩니다.</p> : null}
+      {source ? <><p className="muted small">세팅 선정 기간: {source.settings.startDate} {source.settings.startTime} ~ {source.settings.endDate} {source.settings.endTime} · 통계 주기 {statisticsIntervalLabel(source.settings)}</p><VirtualPeriodNotice evaluation={settings} training={source.settings} /></> : null}
+      {source && !source.optimized ? <p className="notice">선택한 전체통계에는 최적 기준을 충족한 세팅이 없습니다. 다른 이력을 선택하거나 전체통계를 다시 실행해 주세요.</p> : null}
+      <p className="notice small">종목·방향별로 선정한 중심선·이격만 고정해 적용합니다. 검증 기간에는 다시 최적화하지 않습니다. 15분봉 시간축·종목당 한 포지션·공유 계좌로 수익 누적을 계산합니다.</p></> : null}
+    <button className="primary-button" type="button" disabled={busy || loading || kind === 'VIRTUAL' && (!source || !source.optimized)} onClick={() => start()}>{running ? `${label} 진행 중` : `${label} 분석 시작`}</button>
     {running ? <button className="danger-button" type="button" onClick={pauseEnvelopeBatch}>{label} 일시정지</button> : null}
     {!running && latest?.status === 'PAUSED' ? <button className="outline-button" type="button" disabled={busy || loading || !canResumeEnvelopeBatch(latest)} onClick={() => start(true)}>{label} 이어하기</button> : null}
     <button className="outline-button" type="button" disabled={busy || loading} aria-expanded={historyOpen} onClick={() => { void toggleHistory(); }}>{historyOpen ? `${label} 이력 닫기` : `${label} 이력보기`}</button>
@@ -119,6 +139,9 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
     {error && error !== view?.message ? <p className="error" role="alert">{error}</p> : null}
     {view ? <><h2>{label} {view.status === 'COMPLETED' ? '결과' : view.status === 'PAUSED' ? '일시정지' : '진행 중'}</h2><p className="muted small">{view.settings.startDate} {view.settings.startTime} ~ {view.settings.endDate} {view.settings.endTime} (한국시간)</p>
       <p className="notice small">{statisticsIntervalLabel(view.settings)} · {isFixedEnvelopeStatisticsVersion(view.version) ? `적용 레버리지 ${view.settings.leverage}배 고정` : '이전 자동 레버리지 탐색 방식의 저장 결과입니다. 새 분석은 입력 배율을 고정 적용합니다.'}</p>
+      {isReclaimStatisticsVersion(view.version) && kind === 'ALL_STATS' ? <p className="notice small">최적 세팅 필수 기준: {optimalSettingCriteria}</p> : null}
+      {!isReclaimStatisticsVersion(view.version) ? <p className="notice small">이전 매매 조건·선정 기준의 저장 결과입니다. 새 분석은 재돌파 진입·중앙선 SL 이동·반대 밴드 청산을 적용합니다.</p> : null}
+      {kind === 'VIRTUAL' && view.trainingSettings ? <><p className="muted small">세팅 선정 기간: {view.trainingSettings.startDate} {view.trainingSettings.startTime} ~ {view.trainingSettings.endDate} {view.trainingSettings.endTime}</p><VirtualPeriodNotice evaluation={view.settings} training={view.trainingSettings} /></> : null}
       {kind === 'ALL_STATS' && !isDirectionalStatisticsVersion(view.version) && view.settings.side === 'BOTH' ? <p className="notice">이전 롱·숏 합산 결과입니다. 방향별 최고 세팅은 새 전체통계를 실행해 확인해 주세요.</p> : null}
       {view.status !== 'COMPLETED' ? <ProgressBar completed={view.completed} total={view.total} label={view.status === 'PAUSED' ? `${label} 일시정지` : view.message} /> : <p className="notice">{view.message}</p>}
       {view.status === 'PAUSED' ? <p className="notice">{view.message}</p> : null}
@@ -133,11 +156,14 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
 function StatisticsPage({ all, onChoose, selectedSource, onSelectSource }: { all: boolean; onChoose: (settings: BacktestSettings) => void; selectedSource: string; onSelectSource: (id: string) => void }) {
   const id = all ? 'ALL_STATS' : 'SINGLE_STATS'; const [settings, setSettings] = useState(() => readSettings(id)); const busy = useAnalysisBusy(); const [loading, setLoading] = useState(false);
   const [kind, setKind] = useState<EnvelopeBatchKind>('ALL_STATS');
-  const update = (next: BacktestSettings): void => { const value = { ...next, mode: all ? 'ALL' as const : 'SINGLE' as const, envelopeRisk: undefined }; setSettings(value); storeSettings(id, value); };
+  const [virtualSettings, setVirtualSettings] = useState(() => readSettings('VIRTUAL'));
+  const update = (next: BacktestSettings): void => { const value = currentEnvelopeSettings({ ...next, mode: all ? 'ALL' as const : 'SINGLE' as const }); setSettings(value); storeSettings(id, value); };
+  const updateVirtual = (next: BacktestSettings): void => { const value = currentEnvelopeSettings({ ...next, mode: 'ALL' }); setVirtualSettings(value); storeSettings('VIRTUAL', value); };
   return <div className="strategy-content envelope-statistics-page">
     {all ? <div className="segmented"><button type="button" className={kind === 'ALL_STATS' ? 'selected' : ''} onClick={() => setKind('ALL_STATS')}>전체통계분석</button><button type="button" className={kind === 'VIRTUAL' ? 'selected' : ''} onClick={() => setKind('VIRTUAL')}>가상매매</button></div> : null}
     {!all || kind === 'ALL_STATS' ? <SearchFields settings={settings} onChange={update} disabled={busy || loading} single={!all} /> : null}
-    {all ? <BatchPanel key={kind} kind={kind} settings={settings} onRestore={update} selectedSource={selectedSource} onSelectSource={onSelectSource} onChoose={onChoose} /> : <section className="surface-card form-card"><EnvelopeStatisticsPanel settings={settings} disabled={busy} validate={() => validateSearch(settings)} onBusyChange={setLoading} onChoose={(next, source) => { if (source === 'history') update(next); else onChoose(next); }} /></section>}
+    {all && kind === 'VIRTUAL' ? <VirtualEvaluationFields settings={virtualSettings} onChange={updateVirtual} disabled={busy || loading} /> : null}
+    {all ? <BatchPanel key={kind} kind={kind} settings={kind === 'VIRTUAL' ? virtualSettings : settings} onRestore={kind === 'VIRTUAL' ? updateVirtual : update} selectedSource={selectedSource} onSelectSource={onSelectSource} onChoose={onChoose} /> : <section className="surface-card form-card"><EnvelopeStatisticsPanel settings={settings} disabled={busy} validate={() => validateSearch(settings)} onBusyChange={setLoading} onChoose={(next, source) => { if (source === 'history') update(next); else onChoose(next); }} /></section>}
   </div>;
 }
 

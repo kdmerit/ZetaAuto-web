@@ -35,7 +35,7 @@ import { chartTimestamp, mergeChartPages } from '../chartData';
 import { chartAtInterval, withChartExecutionTimes } from '../chartIntervals';
 import { serverSettingsSnapshot, volatilityParameters } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
-import { envelopeExitLabels, envelopeExitModes, envelopeParameters, envelopePeriods } from '../envelope';
+import { currentEnvelopeSettings, envelopeParameters, envelopePeriods } from '../envelope';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
@@ -78,8 +78,9 @@ export function defaultSettings(): BacktestSettings {
     volatilityNextCloseEnabled: false,
     envelopeDeviationPercent: '0.5',
     envelopeMaPeriod: '20',
-    envelopeExitMode: 'CENTER',
-    envelopeMoveSlOnCenter: false,
+    envelopeExitMode: 'OPPOSITE',
+    envelopeMoveSlOnCenter: true,
+    envelopeEntryMode: 'RECLAIM',
   };
 }
 
@@ -193,7 +194,10 @@ function restoredServerJob(entry: BacktestHistoryEntry): ServerJob {
 
 export function StrategyBacktest({ strategy, context, embedded = false, forcedMode, preferredSettings }: StrategyBacktestProps) {
   const defaults = useMemo(defaultSettings, []);
-  const [settings, setSettings] = useState<BacktestSettings>(() => ({ ...(preferredSettings ?? loadSettings(strategy, defaults)), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) }));
+  const [settings, setSettings] = useState<BacktestSettings>(() => {
+    const value = { ...(preferredSettings ?? loadSettings(strategy, defaults)), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
+    return strategy === 'ENVELOPE' ? currentEnvelopeSettings(value) : value;
+  });
   const [expanded, setExpanded] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(() => forcedMode ? null : loadCachedResult(strategy));
   const [serverJob, setServerJob] = useState<ServerJob | null>(null);
@@ -675,16 +679,15 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>중심선은 선택 주기의 SMA5·10·20·40·60·80·100·120입니다. 봉 시작 전 확정된 N개 종가 평균을 사용하며 봉 안에서는 밴드를 고정합니다.</p>
                 <p>상단 = 중심선 × (1 + 이격%/100), 하단 = 중심선 × (1 − 이격%/100)</p>
                 <strong>롱 포지션</strong>
-                <p>하단 접촉 시 진입 · SL = 실제 매수가 × (1 − 이격%/100)</p>
-                <p>① 중심선 전량 ② 상단 전량 ③ 중심선 50% + 상단 나머지 전량 중 선택합니다.</p>
+                <p>하단 아래로 이탈한 봉 다음의 다른 봉에서 하단을 위로 재돌파할 때 하단 라인에 진입합니다. 같은 봉 안에서 이탈·복귀한 경우는 진입하지 않습니다.</p>
+                <p>이미 복귀한 시가라면 하단 ≤ 현재가 ≤ (하단 + 중앙선) ÷ 2일 때만 그 시가에 진입합니다. 허용 범위를 넘은 갭은 추격하지 않습니다. 초기 SL = 실제 매수가 × (1 − 이격%/100). 상단 접촉에 전량 청산합니다.</p>
                 <strong>숏 포지션</strong>
-                <p>상단 접촉 시 진입 · SL = 실제 매수가 × (1 + 이격%/100)</p>
-                <p>① 중심선 전량 ② 하단 전량 ③ 중심선 50% + 하단 나머지 전량 중 선택합니다.</p>
-                <p>보유 중 중심선·밴드는 매 봉 시작에 갱신합니다. ‘중앙선 터치시 SL 변경’을 켜면 진입 후 유리한 방향으로 중앙선에 처음 닿을 때 SL을 (실제 매수가 + 접촉 당시 중앙선) ÷ 2로 한 번 이동합니다. 롱은 올리고 숏은 낮추며 기존 SL을 불리하게 되돌리지 않습니다. 절반 청산은 남은 수량에 적용하고 중심선 전량 청산은 그대로 전량 청산합니다. 끄면 SL은 실제 진입가 기준 고정입니다. SL 갭은 시가에 손절하며 진입·손절 시장가에 0.02% 슬리피지, 편도 0.055% 수수료를 반영합니다.</p>
+                <p>상단 위로 이탈한 봉 다음의 다른 봉에서 상단을 아래로 재돌파할 때 상단 라인에 진입합니다. 이미 복귀한 시가라면 (상단 + 중앙선) ÷ 2 ≤ 현재가 ≤ 상단일 때만 진입합니다. 초기 SL = 실제 매수가 × (1 + 이격%/100). 하단 접촉에 전량 청산합니다.</p>
+                <p>중앙선 첫 유리한 접촉 시 SL을 (실제 매수가 + 접촉 당시 중앙선) ÷ 2로 한 번 옮기는 조건은 항상 적용합니다. 추가 매수는 없습니다. 롱은 SL을 올리고 숏은 내리며 이후 불리하게 되돌리지 않습니다. 중심선·밴드는 매 봉 시작에 확정된 과거 종가로 갱신합니다. SL 갭은 시가에 손절하며 진입·손절 시장가에 0.02% 슬리피지, 편도 0.055% 수수료를 반영합니다.</p>
                 <p>선택 봉의 시가→고가→저가→종가와 시가→저가→고가→종가 두 경로 중 보수적인 결과를 사용합니다. 양쪽 밴드가 모두 닿는 봉은 진입 방향도 경로에 따라 비교합니다. 봉 중간 체결 시각은 봉 시작 시각의 추정치이며 정확한 틱 재현은 아닙니다.</p>
                 <p>한 종목은 봉당 한 번만 진입하고 봉 시작에 보유했다면 같은 봉에 재진입하지 않습니다. 전체종목은 종목명 순서·봉 시작 가용자금 한도로 배분하며 미래 청산 자금을 재사용하지 않습니다. 기간 말 미청산분은 평가액에 포함합니다.</p>
-                <p>개별통계·전체통계는 15m·1h·4h·1d·전체 중 선택한 주기만 분석합니다. 기본은 전체이며 방향당 한 주기 최대 4,800조합, 전체 주기 최대 19,200조합입니다. 롱 + 숏은 두 방향을 독립 계산하고 최고 수익률 세팅을 각각 저장합니다. 입력 레버리지와 중앙선 SL 변경 체크 상태를 고정해 8개 SMA·이격 0.1~20.0%(0.1 단위)·3개 청산 방식을 같은 자금·기간으로 비교합니다. 자동 레버리지 탐색·최대 한도·위험한도 조회는 하지 않습니다. 밴드 접촉이 없는 이격부터 더 넓은 이격은 방향별로 건너뜁니다.</p>
-                <p>전체통계는 슬리피지 필터 없이 모든 활성 USDT 종목의 롱·숏 최적 세팅을 각각 저장합니다. 가상매매는 두 방향의 세팅을 함께 사용해 15분봉·한 계좌의 공유 자금으로 같은 기간을 재검증합니다. 종목당 한 포지션을 유지하며 진입 방향의 원주기·중심선·이격·청산 방식으로 관리합니다. 과거 최적값의 사후 분석이며 미래 성과를 보장하지 않습니다.</p>
+                <p>개별통계·전체통계는 15m·1h·4h·1d·전체 중 선택한 주기만 분석합니다. 방향당 한 주기 최대 1,600조합, 전체 주기 최대 6,400조합입니다. 롱·숏을 독립 계산하고 입력 배율을 고정해 8개 SMA·이격 0.1~20.0%(0.1 단위)만 비교합니다. 최적 세팅은 진입 2회 이상·승률 60% 이상·수익률 2% 이상을 모두 충족해야 합니다. 실제 접촉 없는 더 넓은 이격은 건너뛰며 자동 배율 탐색은 하지 않습니다.</p>
+                <p>전체통계는 슬리피지 필터 없이 모든 활성 USDT 종목에서 조건을 충족한 방향별 세팅을 저장합니다. 가상매매는 선정한 중심선·이격을 고정하고 별도로 입력한 기간·초기자금·베팅액·레버리지로 검증합니다. 검증 기간으로 다시 최적화하지 않습니다. 선정 기간과 겹치거나 그 이전을 검증하면 화면에 표시하며 실제 미래 성과를 보장하지 않습니다.</p>
                 {settings.envelopeRisk ? <p className="notice">통계에서 불러온 세팅은 현재 공개 위험한도에 따른 격리 LIQ 예상치를 사용합니다. 시가 갭이 SL과 LIQ를 모두 넘으면 남은 포지션 증거금을 소진하는 추정 청산으로 처리합니다. 실제 계좌·과거 거래소 청산가와 다를 수 있습니다.</p> : null}
               </div>
             ) : (
@@ -771,9 +774,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <h2>엔벨로프 중심선 봉수</h2>
               <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
               <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '0.5'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용 · SL도 같은 비율</small></label>
-              <label className="field-label">청산 방식<select value={settings.envelopeExitMode ?? 'CENTER'} onChange={event => update('envelopeExitMode', event.target.value as BacktestSettings['envelopeExitMode'])}>{envelopeExitModes.map(mode => <option value={mode} key={mode}>{envelopeExitLabels[mode]}</option>)}</select></label>
-              <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeMoveSlOnCenter === true} onChange={event => update('envelopeMoveSlOnCenter', event.target.checked)} /><span>중앙선 터치시 SL 변경</span></label>
-              <p className="muted small">진입 후 유리한 방향으로 중앙선에 처음 닿으면 매수가와 접촉 당시 중앙선의 중간값으로 SL을 한 번 이동합니다. 중심선 전량 청산에서는 전량 청산이 우선입니다.</p>
+              <p className="notice small">고정 조건: 서로 다른 봉의 이탈 후 재돌파 진입 · 중앙선 첫 접촉에 SL을 매수가와 중앙선의 중간값으로 이동 · 반대 밴드 전량 청산</p>
             </>
           ) : (
             <>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { EnvelopeBestSettings, EnvelopeStatisticsStatus } from './EnvelopeStatisticsPanel';
-import { EnvelopeSymbolSettings } from './EnvelopeWorkspace';
+import { EnvelopeSymbolSettings, VirtualEvaluationFields, VirtualPeriodNotice } from './EnvelopeWorkspace';
 import type { EnvelopeStatisticsJob } from '../envelopeStatistics';
 import type { BacktestSettings } from '../types';
 
@@ -62,5 +62,24 @@ describe('envelope fixed-leverage statistics status', () => {
     const html = renderToStaticMarkup(<EnvelopeBestSettings job={job({ version: '2.10.42', status: 'COMPLETED', settings: { side: 'BOTH' } as BacktestSettings, bestBySide: { LONG: null, SHORT: null } })} disabled={false} onChoose={() => {}} />);
     expect(html).toContain('롱 해당 기간 최고 수익률 —'); expect(html).toContain('숏 해당 기간 최고 수익률 —'); expect(html).not.toContain('0%');
     expect((html.match(/disabled/g) ?? []).length).toBe(2);
+  });
+  it('shows the reduced fixed-exit total and the required trade/win-loss counts', () => {
+    const current = job({ version: '2.10.43', settings: { side: 'BOTH', leverage: '5', envelopeStatisticsInterval: '1h' } as BacktestSettings });
+    expect(renderToStaticMarkup(<EnvelopeStatisticsStatus job={current} />)).toContain('3,200');
+    const row = { interval: '1h' as const, side: 'LONG' as const, maPeriod: 5, deviationPercent: 1, exitMode: 'OPPOSITE' as const, leverage: 5,
+      returnPercent: 3, profitUsdt: 30, realizedProfitUsdt: 30, feesUsdt: 1, entryCount: 5, closedTradeCount: 5, winCount: 3, lossCount: 2, winRatePercent: 60, maxDrawdownPercent: 1, openPositionCount: 0 };
+    const html = renderToStaticMarkup(<EnvelopeBestSettings job={{ ...current, status: 'COMPLETED', rows: [row], bestBySide: { LONG: row, SHORT: null } }} disabled={false} onChoose={() => {}} />);
+    expect(html).toContain('진입 5회'); expect(html).toContain('승/패 3/2'); expect(html).toContain('승률 60%');
+    const all = renderToStaticMarkup(<EnvelopeSymbolSettings settings={current.settings} row={{ symbol: 'BTCUSDT', launchAt: 0, status: 'OK', best: row, bestBySide: { LONG: row, SHORT: null }, tradedSides: { SHORT: true } }} disabled={false} onChoose={() => {}} />);
+    expect(all).toContain('진입 5회'); expect(all).toContain('승/패 3/2'); expect(all).toContain('최적 기준 미달');
+  });
+  it('renders independent evaluation inputs and labels overlapping or backward-looking evaluations', () => {
+    const training = { startDate: '2026-02-01', startTime: '09:00', endDate: '2026-02-11', endTime: '09:00', envelopeStatisticsInterval: '1h' } as BacktestSettings;
+    const evaluation = { ...training, startDate: '2026-03-01', endDate: '2026-03-11', initialCapitalUsdt: '1500', betAmountUsdt: '50', leverage: '3' };
+    const html = renderToStaticMarkup(<VirtualEvaluationFields settings={evaluation} disabled={false} onChange={() => {}} />);
+    for (const marker of ['가상매매 분석 기간', '2026-03-01', '가상 초기자금', '1500', '고정 베팅액', '50', '레버리지']) expect(html).toContain(marker);
+    expect(renderToStaticMarkup(<VirtualPeriodNotice evaluation={evaluation} training={training} />)).toContain('선정 이후');
+    expect(renderToStaticMarkup(<VirtualPeriodNotice evaluation={training} training={training} />)).toContain('겹칩니다');
+    expect(renderToStaticMarkup(<VirtualPeriodNotice evaluation={{ ...evaluation, startDate: '2026-01-01', endDate: '2026-01-11' }} training={training} />)).toContain('선정 이전');
   });
 });

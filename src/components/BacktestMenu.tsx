@@ -31,7 +31,7 @@ export function BacktestMenu({ onOpen, onSignOut, email }: BacktestMenuProps) {
     {
       strategy: 'ENVELOPE' as const,
       title: '엔벨로프 백테스트',
-      description: '선택한 주기·SMA의 밴드 접촉 진입과 이격 비율 SL·세 가지 청산 방식을 분석하고 개별종목 최적 조건을 비교합니다.',
+      description: '밴드 이탈 후 다른 봉의 재돌파 진입·중앙선 SL 이동·반대 밴드 청산을 고정해 적격 세팅을 찾고 별도 기간에서 검증합니다.',
     },
   ];
 

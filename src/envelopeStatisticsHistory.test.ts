@@ -79,4 +79,12 @@ describe('statistics history browsing', () => {
     expect(cards[0]).toMatchObject({ version: '2.10.42', bestBySide: { LONG: -4.5, SHORT: 18 } });
     expect(cards[0]!.settings.envelopeMoveSlOnCenter).toBe(true); expect(await loadEnvelopeStatisticsReport(done.id)).toEqual(done);
   });
+  it('does not publish non-qualifying returns as current optimal history summaries', async () => {
+    const done = report('qualified'); done.version = '2.10.43'; const base = done.rows[0]!;
+    done.rows = [{ ...base, side: 'LONG', returnPercent: 99, entryCount: 1 }, { ...base, side: 'LONG', returnPercent: 2.1, entryCount: 5, winRatePercent: 60 },
+      { ...base, side: 'SHORT', returnPercent: 4, entryCount: 5, winRatePercent: 59.9 }];
+    done.bestBySide = { LONG: done.rows[1], SHORT: null }; await saveEnvelopeStatisticsHistory(done);
+    expect((await loadEnvelopeStatisticsHistory('BTC'))[0]).toMatchObject({ bestReturnPercent: 2.1, bestBySide: { LONG: 2.1, SHORT: null } });
+    expect((await loadEnvelopeStatisticsReport(done.id))!.rows).toHaveLength(3);
+  });
 });

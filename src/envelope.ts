@@ -8,6 +8,11 @@ export const envelopeExitLabels: Record<EnvelopeExitMode, string> = {
   CENTER: '중심선 전량 청산', OPPOSITE: '반대 밴드 전량 청산', HALF: '중심선 50% · 반대 밴드 나머지',
 };
 
+/** Current strategy only; archived settings without this marker retain their original replay. */
+export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSettings {
+  return { ...settings, envelopeEntryMode: 'RECLAIM', envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: true, envelopeRisk: undefined };
+}
+
 export function envelopeParameters(settings: BacktestSettings): { percent: number; exit: EnvelopeExitMode; period: number } {
   const value = settings.envelopeDeviationPercent ?? '0.5';
   const percent = Number(value);

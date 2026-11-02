@@ -952,7 +952,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
-  if (strategy === 'ENVELOPE') return '선택한 주기·SMA의 하단 접촉에 롱, 상단 접촉에 숏으로 진입하며 이격 비율 SL과 세 가지 밴드 청산 방식을 비교합니다.';
+  if (strategy === 'ENVELOPE') return '서로 다른 봉의 밴드 이탈 후 재돌파에 진입하고 중앙선 SL 이동·반대 밴드 전량 청산을 고정해 중심선·이격을 비교합니다.';
   if (strategy === 'PULLBACK') {
     return '공통 몸통 파동의 고점·저점 상승과 MA10·MA20·간격의 3봉 연속 증가를 확인한 반전 첫 봉을 2분할 매수합니다.';
   }

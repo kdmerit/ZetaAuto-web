@@ -5,6 +5,7 @@ import { prepareSymbolBlock, type PreparedSymbol, type WaveState } from './engin
 import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateMinuteCandles } from './intrabar';
+import { currentEnvelopeSettings } from './envelope';
 import type { BacktestResult, BacktestSettings, Strategy } from './types';
 import { loadWeeklyUniverse, saveWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
 
@@ -18,10 +19,10 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'ENVELOPE' ? '2.10.42' : strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
+  return strategy === 'ENVELOPE' ? '2.10.43' : strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
-  return job.version === engineVersionFor(job.strategy) || job.strategy === 'ENVELOPE' && job.version === '2.10.36' && job.settings.envelopeMoveSlOnCenter !== true;
+  return job.version === engineVersionFor(job.strategy);
 }
 export interface LocalJob {
   id: string;
@@ -161,7 +162,7 @@ async function executeWithLease(
       savedSnapshotKey = `checkpoint:${job.id}:${job.blockStart}`;
     } else {
       if (!options.settings) throw new Error('분석 설정이 없습니다.');
-      const settings = structuredClone(options.settings);
+      const settings = options.strategy === 'ENVELOPE' ? currentEnvelopeSettings(structuredClone(options.settings)) : structuredClone(options.settings);
       const { start, end } = analysisWindow(settings);
       previousJob = await readValue<SavedJob>('jobs', options.strategy);
       job = {

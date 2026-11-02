@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { intervalSeconds } from './api';
 import { cacheCandles, openCacheDatabase, readValue, writeValue } from './database';
 import { prepareSymbolBlock } from './engine';
-import { envelopePeriods } from './envelope';
-import { executeEnvelopeStatistics, loadEnvelopeStatistics, selectedStatisticsIntervals, statisticsAnalysisWindow, statisticsIntervals, statisticsProgress, statisticsTotal, statisticsTotalFor, type EnvelopeStatisticsJob } from './envelopeStatistics';
+import { currentEnvelopeSettings, envelopePeriods } from './envelope';
+import { betterEnvelopeSetting, executeEnvelopeStatistics, loadEnvelopeStatistics, qualifiesEnvelopeSetting, selectedStatisticsIntervals, statisticsAnalysisWindow, statisticsIntervals, statisticsProgress, statisticsTotalFor, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow } from './envelopeStatistics';
 import { analysisWindow } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import type { BacktestSettings, Candle } from './types';
@@ -22,7 +22,8 @@ function rows(interval: typeof settings.interval): Candle[] {
   const { start, end } = analysisWindow({ ...settings, interval });
   return Array.from({ length: (end - start) / seconds + 200 }, (_, index) => ({
     openTime: start + (index - 200) * seconds, closeTime: start + (index - 199) * seconds,
-    open: 100, high: 100.15, low: 99.85, close: 100, volume: 10,
+    open: index < 200 ? 100 : [100, 99.86, 100, 100.14][(index - 200) % 4]!, high: index < 200 ? 100 : 100.14, low: index < 200 ? 100 : 99.86,
+    close: index < 200 ? 100 : [99.86, 100, 100.14, 100][(index - 200) % 4]!, volume: 10,
   }));
 }
 
@@ -41,18 +42,19 @@ beforeEach(async () => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('persisted envelope parameter search', () => {
-  it('searches all periods/timeframes/exit modes, skips untouchable wider bands, and matches the ordinary engine', async () => {
+  it('searches periods/timeframes with one fixed exit, skips wider bands, and matches ordinary reclaim replay', async () => {
     let final: EnvelopeStatisticsJob | null = null;
     await executeEnvelopeStatistics({ settings }, job => { final = structuredClone(job); }, new AbortController().signal);
     const job = final as unknown as EnvelopeStatisticsJob;
-    expect(job.status).toBe('COMPLETED'); expect(statisticsProgress(job)).toBe(statisticsTotal * 2); expect(statisticsTotal).toBe(19200);
-    expect(job.rows).toHaveLength(4 * 8 * 3 * 2);
+    expect(job.status).toBe('COMPLETED'); expect(statisticsProgress(job)).toBe(12800);
+    expect(job.rows).toHaveLength(4 * 8 * 2);
+    expect(job.rows.every(row => row.exitMode === 'OPPOSITE')).toBe(true);
     expect(job.settings.envelopeStatisticsInterval).toBe('ALL');
     expect(job.rows.every(row => row.leverage === 5)).toBe(true); expect(job.risk).toBeUndefined();
     expect(new Set(job.rows.map(row => row.maPeriod))).toEqual(new Set(envelopePeriods));
     expect(Object.values(job.maxSteps).every(step => step === 1)).toBe(true);
-    const row = job.rows.find(value => value.side === 'LONG' && value.interval === '1h' && value.maPeriod === 10 && value.exitMode === 'CENTER')!;
-    const parameters = { ...settings, side: 'LONG' as const, interval: '1h' as const, envelopeMaPeriod: '10' };
+    const row = job.rows.find(value => value.side === 'LONG' && value.interval === '1h' && value.maPeriod === 10)!;
+    const parameters = currentEnvelopeSettings({ ...settings, side: 'LONG' as const, interval: '1h' as const, envelopeMaPeriod: '10' });
     const { start, end } = analysisWindow(parameters);
     const document = prepareSymbolBlock('BTCUSDT', rows('1h'), parameters, 'ENVELOPE', start, end);
     const state = initialPortfolio(1000);
@@ -61,8 +63,9 @@ describe('persisted envelope parameter search', () => {
     expect(row.returnPercent).toBe(result.returnPercent); expect(row.winCount).toBe(result.winCount);
     expect(row.profitUsdt).toBeCloseTo(result.finalEquityUsdt - 1000, 10);
     for (const side of ['LONG', 'SHORT'] as const) {
-      const candidates = job.rows.filter(row => row.side === side && row.entryCount > 0).sort((a, b) => b.returnPercent - a.returnPercent || a.maxDrawdownPercent - b.maxDrawdownPercent);
-      expect(job.bestBySide![side]).toEqual(candidates[0]);
+      const candidates = job.rows.filter(row => row.side === side && qualifiesEnvelopeSetting(row));
+      const best = candidates.reduce<EnvelopeStatisticsRow | null>((best, row) => betterEnvelopeSetting(row, best) ? row : best, null);
+      expect(job.bestBySide![side]).toEqual(best);
     }
     expect((await loadEnvelopeStatistics())?.rows).toEqual(job.rows);
     expect(await readValue('results', `envelope-statistics:${job.id}`)).not.toBeNull();
@@ -77,8 +80,8 @@ describe('persisted envelope parameter search', () => {
     expect(paused.status).toBe('PAUSED'); expect(paused.rows).toHaveLength(3); expect(paused.sideIndex).toBe(1);
     await executeEnvelopeStatistics({ resumeId: paused.id }, () => undefined, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
-    expect(done.status).toBe('COMPLETED'); expect(done.id).toBe(paused.id); expect(done.rows).toHaveLength(192);
-    expect(new Set(done.rows.map(row => `${row.side}:${row.interval}:${row.maPeriod}:${row.deviationPercent}:${row.exitMode}`)).size).toBe(192);
+    expect(done.status).toBe('COMPLETED'); expect(done.id).toBe(paused.id); expect(done.rows).toHaveLength(64);
+    expect(new Set(done.rows.map(row => `${row.side}:${row.interval}:${row.maPeriod}:${row.deviationPercent}:${row.exitMode}`)).size).toBe(64);
     expect(done.rows.slice(0, 3)).toEqual(paused.rows);
     expect(fetch).not.toHaveBeenCalled();
   }, 30000);
@@ -93,7 +96,7 @@ describe('persisted envelope parameter search', () => {
     expect(job?.status).toBe('PAUSED'); expect(job?.rows).toEqual([]);
     expect(job?.settings.symbol).toBe('BTC'); expect(fetch).not.toHaveBeenCalled();
   });
-  it('converts a v2.10.38 zero-percent job to the entered 5x without risk queries or changing its id', async () => {
+  it('requires a new job after the trading model change, preserving old zero-percent work without risk queries', async () => {
     const controller = new AbortController(); controller.abort();
     await executeEnvelopeStatistics({ settings }, () => undefined, controller.signal);
     const paused = (await loadEnvelopeStatistics())!;
@@ -101,10 +104,8 @@ describe('persisted envelope parameter search', () => {
       message: 'BTCUSDT의 위험한도 1단계 증거금 비율 단위(initialMargin·maxLeverage) 자료가 없거나 올바르지 않습니다.' });
     await executeEnvelopeStatistics({ resumeId: paused.id, settings: { ...settings, envelopeStatisticsInterval: '1h' } }, () => undefined, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
-    expect(done.id).toBe(paused.id); expect(done.version).toBe('2.10.42'); expect(done.status).toBe('COMPLETED');
-    expect(done.settings.leverage).toBe('5'); expect(done.risk).toBeUndefined(); expect(done.rows).toHaveLength(48);
-    expect(done.settings.envelopeStatisticsInterval).toBe('1h');
-    expect(done.rows.every(row => row.leverage === 5 && row.interval === '1h')).toBe(true); expect(fetch).not.toHaveBeenCalled();
+    expect(done.id).toBe(paused.id); expect(done.version).toBe('2.10.38'); expect(done.status).toBe('PAUSED');
+    expect(done.settings.leverage).toBe('1'); expect(done.rows).toEqual([]); expect(done.message).toContain('새 개별통계'); expect(fetch).not.toHaveBeenCalled();
   }, 30000);
   it('keeps the saved 5x and 1h selection when resuming a current partially completed job', async () => {
     const controller = new AbortController();
@@ -113,7 +114,7 @@ describe('persisted envelope parameter search', () => {
     await executeEnvelopeStatistics({ resumeId: paused.id, settings: { ...settings, leverage: '8', envelopeStatisticsInterval: '4h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
     expect(done.rows.every(row => row.leverage === 5)).toBe(true); expect(done.settings.leverage).toBe('5');
-    expect(done.settings.envelopeStatisticsInterval).toBe('1h'); expect(done.rows).toHaveLength(48);
+    expect(done.settings.envelopeStatisticsInterval).toBe('1h'); expect(done.rows).toHaveLength(16);
     expect(done.rows.every(row => row.interval === '1h')).toBe(true);
   }, 30000);
   it('does not combine partial old auto-leverage rows with fixed-leverage rows', async () => {
@@ -125,15 +126,15 @@ describe('persisted envelope parameter search', () => {
     const saved = (await loadEnvelopeStatistics())!;
     expect(saved.status).toBe('PAUSED'); expect(saved.rows).toEqual(paused.rows); expect(saved.message).toContain('새 개별통계');
   }, 30000);
-  it.each(statisticsIntervals)('loads only the selected %s candles and compares independent directions on a 9,600-case scale', async interval => {
+  it.each(statisticsIntervals)('loads only the selected %s candles and compares independent directions on a 3,200-case scale', async interval => {
     const db = await openCacheDatabase();
     await new Promise<void>(resolve => { const tx = db.transaction(['pages', 'pageMetadata'], 'readwrite'); tx.objectStore('pages').clear(); tx.objectStore('pageMetadata').clear(); tx.oncomplete = () => resolve(); });
     await cacheCandles('BTCUSDT', interval, rows(interval));
     await executeEnvelopeStatistics({ settings: { ...settings, envelopeStatisticsInterval: interval } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
-    expect(done.status).toBe('COMPLETED'); expect(done.rows).toHaveLength(48);
+    expect(done.status).toBe('COMPLETED'); expect(done.rows).toHaveLength(16);
     expect(done.rows.every(row => row.interval === interval && row.leverage === 5)).toBe(true);
-    expect(statisticsTotalFor(done.settings)).toBe(9600); expect(statisticsProgress(done)).toBe(9600);
+    expect(statisticsTotalFor(done.settings)).toBe(3200); expect(statisticsProgress(done)).toBe(3200);
     expect(fetch).not.toHaveBeenCalled();
   }, 30000);
   it('requires ten completed candles of the selected period and rejects unknown period values', async () => {
@@ -157,11 +158,11 @@ describe('persisted envelope parameter search', () => {
   it.each(['LONG', 'SHORT'] as const)('calculates only %s when that direction is selected', async side => {
     await executeEnvelopeStatistics({ settings: { ...settings, side, envelopeStatisticsInterval: '1h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
-    expect(done.rows).toHaveLength(24); expect(done.rows.every(row => row.side === side)).toBe(true);
-    expect(statisticsProgress(done)).toBe(4800); expect(done.bestBySide![side]?.side).toBe(side);
+    expect(done.rows).toHaveLength(8); expect(done.rows.every(row => row.side === side)).toBe(true);
+    expect(statisticsProgress(done)).toBe(1600); expect(done.bestBySide![side]?.side).toBe(side);
     expect(done.bestBySide![side === 'LONG' ? 'SHORT' : 'LONG']).toBeUndefined();
   }, 30000);
-  it('preserves a partial old single-direction search, its entered leverage and selected period', async () => {
+  it('does not mix even a previous single-direction search with the new reclaim model', async () => {
     const controller = new AbortController();
     await executeEnvelopeStatistics({ settings: { ...settings, side: 'SHORT', envelopeStatisticsInterval: '1h' } }, job => { if (job.rows.length >= 3) controller.abort(); }, controller.signal);
     const paused = (await loadEnvelopeStatistics())!;
@@ -170,9 +171,9 @@ describe('persisted envelope parameter search', () => {
       maxSteps: Object.fromEntries(Object.entries(paused.maxSteps).map(([key, value]) => [key.replace(/:SHORT$/, ''), value])) });
     await executeEnvelopeStatistics({ resumeId: paused.id, settings: { ...settings, leverage: '8', envelopeStatisticsInterval: '4h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
-    expect(done.id).toBe(paused.id); expect(done.version).toBe('2.10.42'); expect(done.rows).toHaveLength(24);
-    expect(done.rows.slice(0, 3)).toEqual(paused.rows); expect(done.settings.leverage).toBe('5');
-    expect(done.settings.envelopeStatisticsInterval).toBe('1h'); expect(done.rows.every(row => row.side === 'SHORT')).toBe(true);
+    expect(done.id).toBe(paused.id); expect(done.version).toBe('2.10.41'); expect(done.rows).toHaveLength(3); expect(done.status).toBe('PAUSED');
+    expect(done.rows.map(row => row.returnPercent)).toEqual(paused.rows.map(row => row.returnPercent)); expect(done.settings.leverage).toBe('5');
+    expect(done.settings.envelopeStatisticsInterval).toBe('1h');
   }, 30000);
   it('applies the saved center-touch stop option to both independent directions, matching ordinary replay', async () => {
     const input = { ...settings, envelopeStatisticsInterval: '1h' as const, envelopeMoveSlOnCenter: true };
@@ -181,7 +182,7 @@ describe('persisted envelope parameter search', () => {
     expect(done.settings.envelopeMoveSlOnCenter).toBe(true);
     for (const side of ['LONG', 'SHORT'] as const) {
       const row = done.rows.find(row => row.side === side && row.maPeriod === 5 && row.exitMode === 'OPPOSITE')!;
-      const p = { ...input, side, interval: '1h' as const, envelopeMaPeriod: '5', envelopeDeviationPercent: '0.1', envelopeExitMode: 'OPPOSITE' as const };
+      const p = currentEnvelopeSettings({ ...input, side, interval: '1h' as const, envelopeMaPeriod: '5', envelopeDeviationPercent: '0.1' });
       const { start, end } = analysisWindow(p); const state = initialPortfolio(1000);
       replayPortfolioBlock(state, [prepareSymbolBlock('BTCUSDT', rows('1h'), p, 'ENVELOPE', start, end)], p, start, end, 3600);
       expect(row.returnPercent).toBe(portfolioResult(state, p).returnPercent);
@@ -193,7 +194,7 @@ describe('persisted envelope parameter search', () => {
     await executeEnvelopeStatistics({ settings: { ...settings, envelopeStatisticsInterval: '1h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
     expect(done.maxSteps['1h:5:LONG']).toBe(3); expect(done.maxSteps['1h:5:SHORT']).toBe(1);
-    expect(done.rows.filter(row => row.side === 'LONG')).toHaveLength(72); expect(done.rows.filter(row => row.side === 'SHORT')).toHaveLength(24);
+    expect(done.rows.filter(row => row.side === 'LONG')).toHaveLength(24); expect(done.rows.filter(row => row.side === 'SHORT')).toHaveLength(8);
   }, 30000);
   it('keeps the unavailable direction empty when only one orderbook direction is eligible', async () => {
     await writeValue('publicData', 'orderbook:BTCUSDT', { expiresAt: Date.now() + 300000, data: { b: [['99.99', '10000']], a: [['100.01', '0.1']] } });
