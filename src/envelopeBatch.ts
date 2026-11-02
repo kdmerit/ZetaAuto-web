@@ -1,6 +1,6 @@
 /** All-symbol optimization and a separate, cash-constrained hourly portfolio revalidation. */
 import { deletePrefix, deleteValue, lease, maintainCache, readValue, retentionMs, writeValue } from './database';
-import { envelopeOptimizerVersion, isCurrentEnvelopeStatisticsVersion, searchEnvelopeInstrument, statisticsAnalysisWindow, statisticsProgress, statisticsTotalFor, type DirectionalBests, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from './envelopeStatistics';
+import { envelopeOptimizerVersion, isCurrentEnvelopeStatisticsVersion, isFilteredEnvelopeStatisticsVersion, searchEnvelopeInstrument, statisticsAnalysisWindow, statisticsProgress, statisticsTotalFor, type DirectionalBests, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from './envelopeStatistics';
 import { currentEnvelopeSettings } from './envelope';
 import { defaultEnvelopeResultOptions, envelopeBests, matchesEnvelopeFilters, retainEnvelopeCandidates, validateEnvelopeResultOptions } from './envelopeResults';
 import { analysisWindow, ensureCandles, listInstruments, type Instrument } from './marketData';
@@ -36,7 +36,7 @@ const selectionKey = (id: string): string => `envelope-result-selection:${id}`;
 interface ResultSelection { options: EnvelopeResultOptions; optimized: number; longOptimized: number; shortOptimized: number }
 
 async function selectBatchResults(job: EnvelopeBatchJob, options?: EnvelopeResultOptions): Promise<EnvelopeBatchJob> {
-  if (job.kind !== 'ALL_STATS' || !isCurrentEnvelopeStatisticsVersion(job.version)) return job;
+  if (job.kind !== 'ALL_STATS' || !isFilteredEnvelopeStatisticsVersion(job.version)) return job;
   const saved = options ? null : await readValue<ResultSelection>('publicData', selectionKey(job.id));
   const selected = options ?? saved?.options ?? job.settings.envelopeResultOptions ?? defaultEnvelopeResultOptions;
   validateEnvelopeResultOptions(selected);
@@ -63,7 +63,7 @@ export async function saveEnvelopeBatchSelection(id: string, options: EnvelopeRe
 export function envelopeBatchView(job: EnvelopeBatchJob): EnvelopeBatchView {
   const { state: _state, universe, activeSearch, rows, ...view } = job;
   const perSymbolTotal = statisticsTotalFor(job.settings, job.version);
-  const seconds = isCurrentEnvelopeStatisticsVersion(job.version) ? 3600 : 900;
+  const seconds = isFilteredEnvelopeStatisticsVersion(job.version) ? 3600 : 900;
   const total = job.kind === 'ALL_STATS' ? Math.max(1, universe.length) * perSymbolTotal : Math.max(1, ((job.end ?? 0) - (job.start ?? 0)) / seconds);
   const completed = job.status === 'COMPLETED' ? total : job.kind === 'ALL_STATS'
     ? job.cursor * perSymbolTotal + (activeSearch ? statisticsProgress(activeSearch) : 0) : Math.max(0, ((job.blockStart ?? 0) - (job.start ?? 0)) / seconds);

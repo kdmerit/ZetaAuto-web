@@ -62,7 +62,7 @@ describe('hourly envelope with causal daily MA20 trend', () => {
     const direction = side === 'LONG' ? 1 : -1;
     expect(run(document([0, direction * .5, -direction], side), side).entryCount).toBe(1);
     const result = run(document([0, direction * .5, -direction], side), side);
-    expect(result.closedTradeCount).toBe(1); expect(result.recentTrades[0]!.reason).toBe('ENVELOPE_OPPOSITE');
+    expect(result.closedTradeCount).toBe(1); expect(result.recentTrades[0]!.reason).toBe('ENVELOPE_CENTER');
     for (const invalid of [null, undefined, direction * .49, -direction]) expect(run(document([direction, invalid, invalid], side), side).entryCount).toBe(0);
   });
   it('allows the ordinary reclaim entry without any daily history when the checkbox is off', () => {

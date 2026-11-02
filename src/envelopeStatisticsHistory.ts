@@ -1,6 +1,6 @@
 /** Small history cards reference full reports in IndexedDB, including original v2.10.36 archives. */
 import { deleteValue, readValue, retentionMs, writeValue } from './database';
-import { isCurrentEnvelopeStatisticsVersion, isReclaimStatisticsVersion, qualifiesEnvelopeSetting, type EnvelopeStatisticsJob } from './envelopeStatistics';
+import { isFilteredEnvelopeStatisticsVersion, isReclaimStatisticsVersion, qualifiesEnvelopeSetting, type EnvelopeStatisticsJob } from './envelopeStatistics';
 import { envelopeBests } from './envelopeResults';
 import type { BacktestSettings } from './types';
 
@@ -22,7 +22,7 @@ interface IndexEntry { id: string; at: number; summary?: EnvelopeStatisticsHisto
 function summaryFor(job: EnvelopeStatisticsJob): EnvelopeStatisticsHistoryEntry {
   let best: number | null = null;
   const bestBySide: EnvelopeStatisticsHistoryEntry['bestBySide'] = job.bestBySide ? Object.fromEntries(Object.keys(job.bestBySide).map(side => [side, null])) : {};
-  if (isCurrentEnvelopeStatisticsVersion(job.version)) {
+  if (isFilteredEnvelopeStatisticsVersion(job.version)) {
     const selected = envelopeBests(job.rows, job.settings.envelopeResultOptions);
     return { id: job.id, version: job.version, savedAt: job.updatedAt, settings: job.settings, comparedCount: job.rows.length,
       bestReturnPercent: selected.best?.returnPercent ?? null,

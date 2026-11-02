@@ -19,7 +19,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'ENVELOPE' ? '2.10.44' : strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
+  return strategy === 'ENVELOPE' ? '2.10.45' : strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);

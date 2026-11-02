@@ -955,7 +955,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
-  if (strategy === 'ENVELOPE') return '1h 재돌파 진입·중앙선 SL 이동·반대 밴드 청산에 일봉 MA20 추세 필터를 선택 적용하고, SMA·이격을 사용자 필터와 수익률·승률 정렬로 비교합니다.';
+  if (strategy === 'ENVELOPE') return '1h 재돌파 진입·중심선 전량 청산에 일봉 MA20 추세 필터를 선택 적용하고, SMA·이격을 사용자 필터와 수익률·승률 정렬로 비교합니다.';
   if (strategy === 'PULLBACK') {
     return '공통 몸통 파동의 고점·저점 상승과 MA10·MA20·간격의 3봉 연속 증가를 확인한 반전 첫 봉을 2분할 매수합니다.';
   }

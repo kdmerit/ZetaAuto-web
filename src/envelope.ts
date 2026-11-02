@@ -11,7 +11,7 @@ export const envelopeExitLabels: Record<EnvelopeExitMode, string> = {
 /** Current strategy only; archived settings without this marker retain their original replay. */
 export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSettings {
   return { ...settings, interval: '1h', envelopeStatisticsInterval: '1h', envelopeDailyTrend: settings.envelopeDailyTrend ?? true,
-    envelopeEntryMode: 'RECLAIM', envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: true, envelopeRisk: undefined };
+    envelopeEntryMode: 'RECLAIM', envelopeExitMode: 'CENTER', envelopeMoveSlOnCenter: false, envelopeRisk: undefined };
 }
 
 /** MA20 of the last closed daily candle versus five daily candles earlier, never the live daily bar. */

@@ -87,4 +87,13 @@ describe('statistics history browsing', () => {
     expect((await loadEnvelopeStatisticsHistory('BTC'))[0]).toMatchObject({ bestReturnPercent: 2.1, bestBySide: { LONG: 2.1, SHORT: null } });
     expect((await loadEnvelopeStatisticsReport(done.id))!.rows).toHaveLength(3);
   });
+  it.each(['2.10.44', '2.10.45'])('preserves %s user-filtered summaries without applying the old fixed 60%% win-rate gate', async version => {
+    const done = report('filtered'); done.version = version;
+    done.settings = { ...done.settings, envelopeExitMode: version === '2.10.44' ? 'OPPOSITE' : 'CENTER', envelopeMoveSlOnCenter: version === '2.10.44',
+      envelopeResultOptions: { minTrades: '2', minReturnPercent: '2', minProfitRatioPercent: '80', sort: 'winRatePercent' } };
+    done.rows = [{ ...done.rows[0]!, side: 'LONG', returnPercent: 3, winRatePercent: 40, profitRatioPercent: 90 }];
+    await saveEnvelopeStatisticsHistory(done);
+    expect((await loadEnvelopeStatisticsHistory('BTC'))[0]).toMatchObject({ bestReturnPercent: 3, bestBySide: { LONG: 3, SHORT: null } });
+    expect(await loadEnvelopeStatisticsReport(done.id)).toEqual(done);
+  });
 });

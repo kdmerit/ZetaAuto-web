@@ -79,8 +79,8 @@ export function defaultSettings(): BacktestSettings {
     volatilityNextCloseEnabled: false,
     envelopeDeviationPercent: '0.5',
     envelopeMaPeriod: '20',
-    envelopeExitMode: 'OPPOSITE',
-    envelopeMoveSlOnCenter: true,
+    envelopeExitMode: 'CENTER',
+    envelopeMoveSlOnCenter: false,
     envelopeEntryMode: 'RECLAIM',
   };
 }
@@ -688,10 +688,10 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>상단 = 중심선 × (1 + 이격%/100), 하단 = 중심선 × (1 − 이격%/100)</p>
                 <strong>롱 포지션</strong>
                 <p>하단 아래로 이탈한 봉 다음의 다른 봉에서 하단을 위로 재돌파할 때 하단 라인에 진입합니다. 같은 봉 안에서 이탈·복귀한 경우는 진입하지 않습니다.</p>
-                <p>이미 복귀한 시가라면 하단 ≤ 현재가 ≤ (하단 + 중앙선) ÷ 2일 때만 그 시가에 진입합니다. 허용 범위를 넘은 갭은 추격하지 않습니다. 초기 SL = 실제 매수가 × (1 − 이격%/100). 상단 접촉에 전량 청산합니다.</p>
+                <p>이미 복귀한 시가라면 하단 ≤ 현재가 ≤ (하단 + 중앙선) ÷ 2일 때만 그 시가에 진입합니다. 허용 범위를 넘은 갭은 추격하지 않습니다. 초기 SL = 실제 매수가 × (1 − 이격%/100). 중심선 접촉에 전량 청산합니다.</p>
                 <strong>숏 포지션</strong>
-                <p>상단 위로 이탈한 봉 다음의 다른 봉에서 상단을 아래로 재돌파할 때 상단 라인에 진입합니다. 이미 복귀한 시가라면 (상단 + 중앙선) ÷ 2 ≤ 현재가 ≤ 상단일 때만 진입합니다. 초기 SL = 실제 매수가 × (1 + 이격%/100). 하단 접촉에 전량 청산합니다.</p>
-                <p>중앙선 첫 유리한 접촉 시 SL을 (실제 매수가 + 접촉 당시 중앙선) ÷ 2로 한 번 옮기는 조건은 항상 적용합니다. 추가 매수는 없습니다. 롱은 SL을 올리고 숏은 내리며 이후 불리하게 되돌리지 않습니다. 중심선·밴드는 매 봉 시작에 확정된 과거 종가로 갱신합니다. SL 갭은 시가에 손절하며 진입·손절 시장가에 0.02% 슬리피지, 편도 0.055% 수수료를 반영합니다.</p>
+                <p>상단 위로 이탈한 봉 다음의 다른 봉에서 상단을 아래로 재돌파할 때 상단 라인에 진입합니다. 이미 복귀한 시가라면 (상단 + 중앙선) ÷ 2 ≤ 현재가 ≤ 상단일 때만 진입합니다. 초기 SL = 실제 매수가 × (1 + 이격%/100). 중심선 접촉에 전량 청산합니다.</p>
+                <p>중심선에 닿으면 봉 마감을 기다리지 않고 전량 청산합니다. 반대 밴드까지 기다리거나 중심선 접촉 후 SL을 옮기지 않습니다. 초기 SL은 청산까지 유지하며 추가 매수는 없습니다. 중심선·밴드는 매 봉 시작에 확정된 과거 종가로 갱신합니다. SL 갭은 시가에 손절하며 진입·손절 시장가에 0.02% 슬리피지, 편도 0.055% 수수료를 반영합니다.</p>
                 <p>선택 봉의 시가→고가→저가→종가와 시가→저가→고가→종가 두 경로 중 보수적인 결과를 사용합니다. 양쪽 밴드가 모두 닿는 봉은 진입 방향도 경로에 따라 비교합니다. 봉 중간 체결 시각은 봉 시작 시각의 추정치이며 정확한 틱 재현은 아닙니다.</p>
                 <p>한 종목은 봉당 한 번만 진입하고 봉 시작에 보유했다면 같은 봉에 재진입하지 않습니다. 전체종목은 종목명 순서·봉 시작 가용자금 한도로 배분하며 미래 청산 자금을 재사용하지 않습니다. 기간 말 미청산분은 평가액에 포함합니다.</p>
                 <p>개별통계·전체통계는 1h에서 방향당 최대 1,600조합, 롱+숏 최대 3,200조합을 비교합니다. 입력 배율을 고정해 8개 SMA·이격 0.1~20.0%(0.1 단위)만 비교합니다. 매매횟수·수익률·최소수익비 필터를 모두 통과한 결과만 표시하며 수익률 또는 승률 내림차순의 최상위 세팅을 방향별로 선정합니다. 이전 승률 60% 고정 조건은 사용하지 않습니다. 수익비 = 수익금 ÷ (수익금 + 손실금의 절댓값) × 100이며 수수료를 뺀 완료 매매 기준입니다. 실제 접촉 없는 더 넓은 이격은 건너뛰며 자동 배율 탐색은 하지 않습니다.</p>
@@ -783,7 +783,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <h2>엔벨로프 중심선 봉수</h2>
               <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
               <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '0.5'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용 · SL도 같은 비율</small></label>
-              <p className="notice small">고정 조건: 서로 다른 봉의 이탈 후 재돌파 진입 · 중앙선 첫 접촉에 SL을 매수가와 중앙선의 중간값으로 이동 · 반대 밴드 전량 청산</p>
+              <p className="notice small">고정 조건: 서로 다른 봉의 이탈 후 재돌파 진입 · 중심선 터치 시 전량 청산 · 초기 SL 유지</p>
             </>
           ) : (
             <>
