@@ -31,7 +31,7 @@ export function BacktestMenu({ onOpen, onSignOut, email }: BacktestMenuProps) {
     {
       strategy: 'ENVELOPE' as const,
       title: '엔벨로프 백테스트',
-      description: '밴드 이탈 후 다른 봉의 재돌파 진입·중앙선 SL 이동·반대 밴드 청산을 고정해 적격 세팅을 찾고 별도 기간에서 검증합니다.',
+      description: '1h 재돌파·선택형 일봉 MA20 추세 조건으로 SMA·이격을 비교하고, 사용자 필터와 수익률·승률 정렬로 최적 세팅을 찾아 별도 기간에서 검증합니다.',
     },
   ];
 

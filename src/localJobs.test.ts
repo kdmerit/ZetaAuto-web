@@ -5,6 +5,7 @@ import { canResumeLocalJob, engineVersionFor, executeLocalJob, loadLocalJob, loa
 import { ensureCandles, instrumentEligibility, listInstruments } from './marketData';
 import type { BacktestSettings, Candle } from './types';
 import { universeRetentionMs, weeklyUniverseDatabaseKey, type WeeklyUniverseSnapshot } from './universeCache';
+import { dailyTrendRows } from './test/envelopeFixtures';
 
 vi.mock('./marketData', async importOriginal => {
   const actual = await importOriginal<typeof import('./marketData')>();
@@ -30,6 +31,7 @@ beforeEach(async () => {
   vi.mocked(listInstruments).mockResolvedValue([{ symbol: 'AAAUSDT', launchAt: origin - 200 * 3600 }, { symbol: 'ZZZUSDT', launchAt: origin - 200 * 3600 }]);
   vi.mocked(instrumentEligibility).mockImplementation(async instrument => ({ ...instrument, LONG: true, SHORT: true }));
   vi.mocked(ensureCandles).mockImplementation(async (_instrument, interval, from, end) => {
+    if (interval === '1d') return dailyTrendRows(settings).filter(row => row.openTime >= from && row.openTime < end);
     const rows: Candle[] = [];
     const step = interval === '1m' ? 60 : 3600;
     for (let at = from; at < end; at += step) {
@@ -58,7 +60,17 @@ describe('durable local analysis', () => {
     await expect(executeLocalJob({ strategy: 'ENVELOPE', resumeId: paused.id }, () => {}, new AbortController().signal)).rejects.toThrow('새 분석');
     expect((await loadLocalJob('ENVELOPE'))!.id).toBe(paused.id);
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, () => {}, new AbortController().signal);
-    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.43');
+    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.44');
+  });
+  it('normalizes single/all analysis to 1h, requests daily history only when checked, and saves the checkbox value', async () => {
+    for (const mode of ['SINGLE', 'ALL'] as const) for (const envelopeDailyTrend of [true, false]) {
+      vi.mocked(ensureCandles).mockClear();
+      await executeLocalJob({ strategy: 'ENVELOPE', settings: { ...settings, mode, interval: '4h', envelopeDailyTrend } }, () => {}, new AbortController().signal);
+      const done = (await loadLocalJob('ENVELOPE'))!;
+      expect(done.status).toBe('COMPLETED'); expect(done.settings.interval).toBe('1h'); expect(done.settings.envelopeDailyTrend).toBe(envelopeDailyTrend);
+      const intervals = new Set(vi.mocked(ensureCandles).mock.calls.map(call => call[1]));
+      expect(intervals).toEqual(new Set(envelopeDailyTrend ? ['1h', '1d'] : ['1h']));
+    }
   });
   it('reuses one direction-neutral weekly universe across all four strategies and refreshes after seven days', async () => {
     const candidates = ['AAAUSDT', 'ZZZUSDT', 'NONEUSDT'].map(symbol => ({ symbol, launchAt: origin - 200 * 3600 }));

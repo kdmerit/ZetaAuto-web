@@ -7,19 +7,21 @@ import { currentEnvelopeSettings, envelopePeriods } from './envelope';
 import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, type EligibleInstrument } from './marketData';
 import type { BacktestInterval, BacktestResult, BacktestSettings, ContractRisk, EnvelopeExitMode } from './types';
 import { fixedEnvelopeSettings, replayFixedEnvelope } from './envelopeReplay';
+import { betterFilteredEnvelopeSetting, defaultEnvelopeResultOptions, profitRatio, validateEnvelopeResultOptions } from './envelopeResults';
 
 export const statisticsIntervals: BacktestInterval[] = ['15m', '1h', '4h', '1d'];
 const jobKey = 'ENVELOPE_STATISTICS';
-export const envelopeOptimizerVersion = '2.10.43';
+export const envelopeOptimizerVersion = '2.10.44';
 const version = envelopeOptimizerVersion;
 
 export type StatisticsSide = 'LONG' | 'SHORT';
 export type DirectionalBests = Partial<Record<StatisticsSide, EnvelopeStatisticsRow | null>>;
 export const statisticsSideLabel = (side: StatisticsSide): string => side === 'LONG' ? '롱' : '숏';
 export const selectedStatisticsSides = (settings: Pick<BacktestSettings, 'side'>): StatisticsSide[] => settings.side === 'LONG' ? ['LONG'] : settings.side === 'SHORT' ? ['SHORT'] : ['LONG', 'SHORT'];
-export const isReclaimStatisticsVersion = (value: string | undefined): boolean => value === '2.10.43';
+export const isCurrentEnvelopeStatisticsVersion = (value: string | undefined): boolean => value === version;
+export const isReclaimStatisticsVersion = (value: string | undefined): boolean => value === '2.10.43' || isCurrentEnvelopeStatisticsVersion(value);
 export const isDirectionalStatisticsVersion = (value: string | undefined): boolean => value === '2.10.42' || isReclaimStatisticsVersion(value);
-export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.40', '2.10.41', '2.10.42', version].includes(value ?? '');
+export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.40', '2.10.41', '2.10.42', '2.10.43', version].includes(value ?? '');
 export const optimalSettingCriteria = '진입 2회 이상 · 승률 60% 이상 · 수익률 2% 이상';
 export function qualifiesEnvelopeSetting(row: Pick<EnvelopeStatisticsRow, 'entryCount' | 'winRatePercent' | 'returnPercent'>): boolean {
   return row.entryCount >= 2 && row.winRatePercent !== null && Number.isFinite(row.winRatePercent) && row.winRatePercent >= 60
@@ -36,7 +38,7 @@ export const statisticsIntervalLabel = (settings: Pick<BacktestSettings, 'envelo
   return selected.length === 4 ? '전체 주기' : selected[0]!;
 };
 export function statisticsAnalysisWindow(settings: BacktestSettings): { start: number; end: number } {
-  try { return analysisWindow({ ...settings, interval: selectedStatisticsIntervals(settings)[0]! }); }
+  try { return analysisWindow({ ...settings, interval: '1h' }); }
   catch (failure) { throw new Error(`${statisticsIntervalLabel(settings)} 통계: ${failure instanceof Error ? failure.message : '기간을 확인해 주세요.'}`); }
 }
 
@@ -58,6 +60,9 @@ export interface EnvelopeStatisticsRow {
   maxDrawdownPercent: number;
   openPositionCount: number;
   leverage?: number;
+  winningProfitUsdt?: number;
+  losingLossUsdt?: number;
+  profitRatioPercent?: number | null;
 }
 export function settingsForStatisticsRow(settings: BacktestSettings, row: EnvelopeStatisticsRow, risk?: ContractRisk): BacktestSettings {
   return { ...settings, mode: 'SINGLE', side: row.side ?? settings.side, interval: row.interval,
@@ -89,7 +94,7 @@ export interface EnvelopeStatisticsJob {
 }
 
 export const statisticsTotal = 4 * envelopePeriods.length * 200 * 3;
-export const statisticsTotalFor = (settings: Pick<BacktestSettings, 'envelopeStatisticsInterval' | 'side'>, calculationVersion = version): number => selectedStatisticsIntervals(settings).length * envelopePeriods.length * 200 * (isReclaimStatisticsVersion(calculationVersion) ? 1 : 3) * (isDirectionalStatisticsVersion(calculationVersion) ? selectedStatisticsSides(settings).length : 1);
+export const statisticsTotalFor = (settings: Pick<BacktestSettings, 'envelopeStatisticsInterval' | 'side'>, calculationVersion = version): number => (isCurrentEnvelopeStatisticsVersion(calculationVersion) ? 1 : selectedStatisticsIntervals(settings).length) * envelopePeriods.length * 200 * (isReclaimStatisticsVersion(calculationVersion) ? 1 : 3) * (isDirectionalStatisticsVersion(calculationVersion) ? selectedStatisticsSides(settings).length : 1);
 export const statisticsProgress = (job: EnvelopeStatisticsJob): number => {
   const total = statisticsTotalFor(job.settings, job.version);
   const sides = isDirectionalStatisticsVersion(job.version) ? selectedStatisticsSides(job.settings).length : 1;
@@ -115,7 +120,8 @@ function resultRow(result: BacktestResult, interval: BacktestInterval, maPeriod:
     realizedProfitUsdt: result.realizedProfitUsdt, feesUsdt: result.feesUsdt, entryCount: result.entryCount,
     closedTradeCount: result.closedTradeCount, winCount: result.winCount, lossCount: result.lossCount,
     winRatePercent: result.winRatePercent, maxDrawdownPercent: result.maxDrawdownPercent,
-    openPositionCount: result.openPositionCount };
+    openPositionCount: result.openPositionCount, winningProfitUsdt: result.winningProfitUsdt ?? 0, losingLossUsdt: result.losingLossUsdt ?? 0,
+    profitRatioPercent: profitRatio(result.winningProfitUsdt ?? 0, result.losingLossUsdt ?? 0) };
 }
 
 /** First untouchable offset implies every wider offset is also untouchable; money/position state is irrelevant. */
@@ -139,6 +145,7 @@ export function betterEnvelopeSetting(row: EnvelopeStatisticsRow, previous?: Env
 export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, checkpoint: (force?: boolean) => Promise<void>, signal: AbortSignal): Promise<void> {
   if (!job.instrument) throw new Error('통계 종목 정보가 없습니다.');
   job.settings = currentEnvelopeSettings(fixedEnvelopeSettings(job.settings));
+  validateEnvelopeResultOptions(job.settings.envelopeResultOptions ?? defaultEnvelopeResultOptions);
   delete job.risk;
   const intervals = selectedStatisticsIntervals(job.settings);
   const sides = selectedStatisticsSides(job.settings);
@@ -157,12 +164,13 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
     const { start, end } = window; const seconds = intervalSeconds(interval);
     job.message = `${interval} 캔들 확인`; await checkpoint(true);
     const candles = await ensureCandles(job.instrument, interval, start - 200 * seconds, end, end, signal);
+    const daily = job.settings.envelopeDailyTrend ? await ensureCandles(job.instrument, '1d', Math.floor(start / 86400) * 86400 - 25 * 86400, Math.floor((end - seconds) / 86400) * 86400, undefined, signal) : undefined;
     while (job.periodIndex < envelopePeriods.length) {
       const maPeriod = envelopePeriods[job.periodIndex]!;
       while (job.sideIndex < sides.length) {
         const side: StatisticsSide = sides[job.sideIndex]!;
         const directional = { ...settings, side };
-        const document = prepareSymbolBlock(job.instrument.symbol, candles, { ...directional, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: '0.1' }, 'ENVELOPE', start, end);
+        const document = prepareSymbolBlock(job.instrument.symbol, candles, { ...directional, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: '0.1' }, 'ENVELOPE', start, end, undefined, undefined, daily);
         for (const bar of document.bars) if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }
         const key = `${interval}:${maPeriod}:${side}`;
         const maximum = job.maxSteps[key] ?? maximumTouchedStep(document); job.maxSteps[key] = maximum;
@@ -178,8 +186,8 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
             const row = { ...resultRow(result, interval, maPeriod, job.step, exit), side, leverage: Number(parameters.leverage) };
             if (job.keepRows !== false) job.rows.push(row);
             if (row.entryCount > 0) job.tradedSides[side] = true;
-            if (betterEnvelopeSetting(row, job.best)) job.best = row;
-            if (betterEnvelopeSetting(row, job.bestBySide[side])) job.bestBySide[side] = row;
+            if (betterFilteredEnvelopeSetting(row, job.best, job.settings.envelopeResultOptions)) job.best = row;
+            if (betterFilteredEnvelopeSetting(row, job.bestBySide[side], job.settings.envelopeResultOptions)) job.bestBySide[side] = row;
           }
           job.exitIndex = 0; job.step += 1; await checkpoint();
         }
@@ -225,12 +233,14 @@ async function execute(
     } else {
       if (!options.settings || options.settings.mode !== 'SINGLE') throw new Error('개별통계는 개별종목에서만 가능합니다.');
       // Freeze "now" once, so every case uses the same requested end time.
-      const settings = { ...currentEnvelopeSettings(fixedEnvelopeSettings(structuredClone(options.settings))), envelopeStatisticsInterval: options.settings.envelopeStatisticsInterval ?? 'ALL' as const };
+      const settings = currentEnvelopeSettings(fixedEnvelopeSettings(structuredClone(options.settings)));
+      settings.envelopeResultOptions ??= { ...defaultEnvelopeResultOptions };
       if (!settings.endDate) {
         const end = new Date(Date.now() + 9 * 3600_000).toISOString();
         settings.endDate = end.slice(0, 10); settings.endTime = end.slice(11, 16);
       }
       statisticsAnalysisWindow(settings);
+      validateEnvelopeResultOptions(settings.envelopeResultOptions ?? defaultEnvelopeResultOptions);
       job = { id: crypto.randomUUID(), version, settings, status: 'RUNNING', intervalIndex: 0, periodIndex: 0, step: 1,
         exitIndex: 0, updatedAt: Date.now(), message: '개별통계 준비', rows: [], maxSteps: {}, skippedIntervals: {} };
     }

@@ -16,6 +16,12 @@ export interface EnvelopeBand {
 }
 export type BacktestInterval = '15m' | '1h' | '4h' | '1d';
 export type EnvelopeStatisticsInterval = BacktestInterval | 'ALL';
+export interface EnvelopeResultOptions {
+  minTrades: string;
+  minReturnPercent: string;
+  minProfitRatioPercent: string;
+  sort: 'returnPercent' | 'winRatePercent';
+}
 export type CandleInterval = BacktestInterval | '1m';
 export type BacktestMode = 'SINGLE' | 'ALL';
 export type BacktestSide = 'BOTH' | 'LONG' | 'SHORT';
@@ -49,6 +55,8 @@ export interface BacktestSettings {
   envelopeStatisticsInterval?: EnvelopeStatisticsInterval;
   envelopeMoveSlOnCenter?: boolean;
   envelopeEntryMode?: 'RECLAIM';
+  envelopeDailyTrend?: boolean;
+  envelopeResultOptions?: EnvelopeResultOptions;
 }
 
 export interface Candle {
@@ -217,6 +225,8 @@ export interface BacktestResult {
   lossCount: number;
   breakevenCount: number;
   winRatePercent: number | null;
+  winningProfitUsdt?: number;
+  losingLossUsdt?: number;
   openPositionCount: number;
   insufficientFundsCount: number;
   betAmountUsdt: number;

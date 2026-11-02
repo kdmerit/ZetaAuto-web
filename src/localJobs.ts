@@ -19,7 +19,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'ENVELOPE' ? '2.10.43' : strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
+  return strategy === 'ENVELOPE' ? '2.10.44' : strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);
@@ -231,7 +231,9 @@ async function executeWithLease(
         signal.throwIfAborted();
         const instrument = job.universe[job.cursor]!;
         const candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - 200 * seconds, blockEnd, job.end, signal);
-        const prepared = prepareSymbolBlock(instrument.symbol, candles, job.settings, job.strategy, job.blockStart, blockEnd, job.waveStates[instrument.symbol]);
+        const daily = job.strategy === 'ENVELOPE' && job.settings.envelopeDailyTrend
+          ? await ensureCandles(instrument, '1d', Math.floor(job.blockStart / 86400) * 86400 - 25 * 86400, Math.floor((blockEnd - seconds) / 86400) * 86400, undefined, signal) : undefined;
+        const prepared = prepareSymbolBlock(instrument.symbol, candles, job.settings, job.strategy, job.blockStart, blockEnd, job.waveStates[instrument.symbol], undefined, daily);
         for (const bar of prepared.bars) if (bar.signal && !instrument[bar.signal.side]) bar.signal = null;
         for (const bar of prepared.bars) if (bar.envelope) {
           bar.envelope.long &&= instrument.LONG;

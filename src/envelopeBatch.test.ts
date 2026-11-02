@@ -1,11 +1,13 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cacheCandles, openCacheDatabase, readValue, writeValue } from './database';
-import { executeEnvelopeBatch, loadEnvelopeBatch, loadEnvelopeBatchHistory, loadEnvelopeBatchReport, validateVirtualSettings, virtualPeriodRelation, type EnvelopeBatchJob } from './envelopeBatch';
+import { executeEnvelopeBatch, loadEnvelopeBatch, loadEnvelopeBatchHistory, loadEnvelopeBatchReport, saveEnvelopeBatchSelection, validateVirtualSettings, virtualPeriodRelation, type EnvelopeBatchJob } from './envelopeBatch';
 import { intervalSeconds } from './api';
 import { analysisWindow } from './marketData';
 import { currentEnvelopeSettings } from './envelope';
-import { qualifiesEnvelopeSetting, type EnvelopeStatisticsRow } from './envelopeStatistics';
+import type { EnvelopeStatisticsRow } from './envelopeStatistics';
+import { matchesEnvelopeFilters } from './envelopeResults';
+import { dailyTrendRows } from './test/envelopeFixtures';
 import type { BacktestSettings, Candle } from './types';
 
 const settings: BacktestSettings = currentEnvelopeSettings({ mode: 'ALL', symbol: 'AAA', interval: '15m', side: 'BOTH', startDate: '2026-02-01', startTime: '09:00', endDate: '2026-02-11', endTime: '09:00', initialCapitalUsdt: '101', betAmountUsdt: '100', leverage: '5', partialTpEnabled: false, fullTpWavePercent: '100', minDisparityPercent: '1', ma20HalfCloseEnabled: false, roiClosePercent: '100', minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1', volatilityTpEnabled: true, volatilityNextCloseEnabled: false });
@@ -26,14 +28,18 @@ beforeEach(async () => {
     await cacheCandles(instrument.symbol, interval, candles(evaluation, interval, interval === '15m'));
     await cacheCandles(instrument.symbol, interval, candles(settings, interval));
   }
+  for (const instrument of instruments) {
+    await cacheCandles(instrument.symbol, '1d', dailyTrendRows(evaluation));
+    await cacheCandles(instrument.symbol, '1d', dailyTrendRows(settings));
+  }
 });
 afterEach(() => vi.unstubAllGlobals());
 function best(side: 'LONG' | 'SHORT'): EnvelopeStatisticsRow {
-  return { side, interval: side === 'LONG' ? '1h' : '4h', maPeriod: side === 'LONG' ? 5 : 60, deviationPercent: .1, exitMode: 'OPPOSITE', leverage: 5,
+  return { side, interval: '1h', maPeriod: side === 'LONG' ? 5 : 60, deviationPercent: .1, exitMode: 'OPPOSITE', leverage: 5, profitRatioPercent: 80, winningProfitUsdt: 4, losingLossUsdt: 1,
     returnPercent: 3, profitUsdt: 3.03, realizedProfitUsdt: 3.03, feesUsdt: .5, entryCount: 3, closedTradeCount: 3, winCount: 2, lossCount: 1, winRatePercent: 66.67, maxDrawdownPercent: 1, openPositionCount: 0 };
 }
 async function sourceReport(): Promise<EnvelopeBatchJob> {
-  const source: EnvelopeBatchJob = { id: 'source', version: '2.10.43', kind: 'ALL_STATS', status: 'COMPLETED', updatedAt: Date.now(), message: 'complete', settings,
+  const source: EnvelopeBatchJob = { id: 'source', version: '2.10.44', kind: 'ALL_STATS', status: 'COMPLETED', updatedAt: Date.now(), message: 'complete', settings,
     universe: ['AAAUSDT', 'BBBUSDT'].map(symbol => ({ symbol, launchAt: 0 })), cursor: 2,
     rows: ['AAAUSDT', 'BBBUSDT'].map(symbol => ({ symbol, launchAt: 0, status: 'OK', best: best('LONG'), bestBySide: { LONG: best('LONG'), SHORT: best('SHORT') } })) };
   await writeValue('results', 'envelope-batch:source', source); return source;
@@ -45,18 +51,20 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     const first = (await loadEnvelopeBatch('ALL_STATS'))!; expect(first.status).toBe('PAUSED');
     await executeEnvelopeBatch({ kind: 'ALL_STATS', resumeId: first.id }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('ALL_STATS'))!;
-    expect(done.status).toBe('COMPLETED'); expect(done.rows).toHaveLength(2); expect(done.rows[0]).toEqual(first.rows[0]); expect(done.version).toBe('2.10.43');
-    for (const row of done.rows) for (const side of ['LONG', 'SHORT'] as const) expect(qualifiesEnvelopeSetting(row.bestBySide![side]!)).toBe(true);
+    expect(done.status).toBe('COMPLETED'); expect(done.rows).toHaveLength(2); expect(done.rows[0]).toEqual(first.rows[0]); expect(done.version).toBe('2.10.44');
+    for (const row of done.rows) for (const side of ['LONG', 'SHORT'] as const) expect(matchesEnvelopeFilters(row.bestBySide![side]!)).toBe(true);
     expect((await loadEnvelopeBatchHistory('ALL_STATS'))[0]).toMatchObject({ optimized: 2, longOptimized: 2, shortOptimized: 2 }); expect(fetch).not.toHaveBeenCalled();
   }, 60000);
   it('uses only the selected-period cache and the reduced one-exit case count', async () => {
     const db = await openCacheDatabase();
     await new Promise<void>(resolve => { const tx = db.transaction(['pages', 'pageMetadata'], 'readwrite'); tx.objectStore('pages').clear(); tx.objectStore('pageMetadata').clear(); tx.oncomplete = () => resolve(); });
-    for (const symbol of ['AAAUSDT', 'BBBUSDT']) await cacheCandles(symbol, '4h', candles(settings, '4h'));
+    for (const symbol of ['AAAUSDT', 'BBBUSDT']) {
+      await cacheCandles(symbol, '1h', candles(settings, '1h')); await cacheCandles(symbol, '1d', dailyTrendRows(settings));
+    }
     await executeEnvelopeBatch({ kind: 'ALL_STATS', settings: { ...settings, envelopeStatisticsInterval: '4h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('ALL_STATS'))!;
     expect(done.status).toBe('COMPLETED'); expect(done.total).toBe(6400); expect(done.completed).toBe(6400);
-    expect(done.rows.every(row => row.best?.interval === '4h' && row.best.leverage === 5)).toBe(true); expect(fetch).not.toHaveBeenCalled();
+    expect(done.rows.every(row => row.best?.interval === '1h' && row.best.leverage === 5)).toBe(true); expect(fetch).not.toHaveBeenCalled();
   });
   it('distinguishes trades failing the optimal thresholds from symbols with no trades', async () => {
     await executeEnvelopeBatch({ kind: 'ALL_STATS', settings: { ...settings, initialCapitalUsdt: '1000000', envelopeStatisticsInterval: '1d' } }, () => {}, new AbortController().signal);
@@ -89,10 +97,10 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     expect(new Set(done.result!.recentTrades.map(trade => trade.side))).toEqual(new Set(['LONG', 'SHORT']));
     for (const trade of done.result!.recentTrades) {
       expect(trade.entryAt).toBeGreaterThanOrEqual(done.start!); expect(trade.entryAt).toBeLessThan(done.end!);
-      expect(trade.signal.envelopeSourceInterval).toBe(trade.side === 'LONG' ? '1h' : '4h'); expect(trade.signal.envelopeMaPeriod).toBe(trade.side === 'LONG' ? 5 : 60);
+      expect(trade.signal.envelopeSourceInterval).toBe('1h'); expect(trade.signal.envelopeMaPeriod).toBe(trade.side === 'LONG' ? 5 : 60);
       const fill = trade.executions[0]!; expect(fill.price * fill.quantity).toBeCloseTo(50 * 3, 8);
     }
-    expect((await loadEnvelopeBatchReport(source.id))!).toEqual(source); expect(done.trainingSettings).toEqual(source.settings);
+    expect((await readValue('results', 'envelope-batch:source'))!).toEqual(source); expect(done.trainingSettings).toMatchObject(source.settings);
     const history = (await loadEnvelopeBatchHistory('VIRTUAL'))[0]!; expect(history.settings.startDate).toBe('2026-03-01'); expect(history.trainingSettings!.startDate).toBe('2026-02-01'); expect(fetch).not.toHaveBeenCalled();
   }, 30000);
   it('resumes the same evaluation inputs, reclaim state and shared account to identical final results', async () => {
@@ -104,10 +112,10 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     await executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: 'source', settings: evaluation }, () => {}, new AbortController().signal);
     expect((await loadEnvelopeBatch('VIRTUAL'))!.result).toEqual(done.result); expect(fetch).not.toHaveBeenCalled();
   }, 30000);
-  it('keeps the 15-minute evaluation window independent of the selected training timeframe', async () => {
+  it('normalizes the evaluation window to hourly candles even when old input preferences differ', async () => {
     const source = await sourceReport(); source.settings = { ...source.settings, envelopeStatisticsInterval: '1h' }; await writeValue('results', 'envelope-batch:source', source);
     const p = { ...evaluation, startTime: '09:17', endTime: '09:17' };
-    for (const symbol of ['AAAUSDT', 'BBBUSDT']) await cacheCandles(symbol, '15m', candles(p, '15m', true));
+    for (const symbol of ['AAAUSDT', 'BBBUSDT']) await cacheCandles(symbol, '1h', candles(p, '1h'));
     await executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: 'source', settings: p }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('VIRTUAL'))!;
     expect(done.status).toBe('COMPLETED'); expect(done.start).toBe(analysisWindow(p).start); expect(done.end).toBe(analysisWindow(p).end); expect(fetch).not.toHaveBeenCalled();
@@ -132,12 +140,51 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     const done = (await loadEnvelopeBatch('VIRTUAL'))!;
     expect(done.status).toBe('COMPLETED'); expect(done.result!.entryCount).toBeGreaterThan(0); expect(done.result!.returnPercent).toBeLessThan(0);
     expect(done.rows[0]!.bestBySide!.LONG).toEqual(source.rows[0]!.bestBySide!.LONG);
-    expect((await loadEnvelopeBatchReport(source.id))!).toEqual(source); expect(fetch).not.toHaveBeenCalled();
+    expect((await readValue('results', 'envelope-batch:source'))!).toEqual(source); expect(fetch).not.toHaveBeenCalled();
   }, 30000);
   it('validates money fields and labels after-training, overlapping and backward-looking periods truthfully', () => {
     expect(() => validateVirtualSettings(evaluation)).not.toThrow();
     for (const invalid of [{ initialCapitalUsdt: '0' }, { betAmountUsdt: '1501' }, { betAmountUsdt: 'NaN' }, { leverage: '0' }, { leverage: '101' }]) expect(() => validateVirtualSettings({ ...evaluation, ...invalid })).toThrow();
     expect(virtualPeriodRelation(evaluation, settings)).toBe('AFTER'); expect(virtualPeriodRelation(settings, settings)).toBe('OVERLAP');
     expect(virtualPeriodRelation({ ...evaluation, startDate: '2026-01-01', endDate: '2026-01-11' }, settings)).toBe('BEFORE');
+  });
+  it('refilters a completed ALL report without market requests, and uses the persisted ordering for virtual source selection', async () => {
+    const source = await sourceReport();
+    const maximumReturn = { ...best('LONG'), returnPercent: 40, winRatePercent: 65, maPeriod: 5 };
+    const maximumWin = { ...best('LONG'), returnPercent: 10, winRatePercent: 95, maPeriod: 120 };
+    const excluded = { ...best('SHORT'), returnPercent: 999, winRatePercent: 100, profitRatioPercent: 79.9 };
+    for (const row of source.rows) {
+      row.candidatesKey = `checkpoint:envelope-candidates:source:${row.symbol}`;
+      await writeValue('results', row.candidatesKey, [maximumReturn, maximumWin, excluded]);
+      row.tradedSides = { LONG: true, SHORT: true };
+    }
+    await writeValue('results', 'envelope-batch:source', source);
+    const options = { minTrades: '2', minReturnPercent: '2', minProfitRatioPercent: '80', sort: 'winRatePercent' as const };
+    const selected = await saveEnvelopeBatchSelection(source.id, options);
+    expect(selected.rows.every(row => row.best?.maPeriod === 120 && !row.bestBySide?.SHORT)).toBe(true);
+    expect((await loadEnvelopeBatchReport(source.id))!.rows).toEqual(selected.rows);
+    await executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: source.id, settings: evaluation }, () => {}, new AbortController().signal);
+    const done = (await loadEnvelopeBatch('VIRTUAL'))!;
+    expect(done.status).toBe('COMPLETED'); expect(done.rows.every(row => row.bestBySide?.LONG?.maPeriod === 120 && !row.bestBySide?.SHORT)).toBe(true);
+    expect(done.trainingSettings!.envelopeResultOptions).toEqual(options);
+    expect((await readValue('results', 'envelope-batch:source'))!).toEqual(source);
+    const none = await saveEnvelopeBatchSelection(source.id, { ...options, minTrades: '100' });
+    expect(none.rows.every(row => !row.best)).toBe(true);
+    await expect(executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: source.id, settings: evaluation }, () => {}, new AbortController().signal)).rejects.toThrow('최적 세팅이 없습니다');
+    const restored = await saveEnvelopeBatchSelection(source.id, { ...options, sort: 'returnPercent' });
+    expect(restored.rows.every(row => row.best?.maPeriod === 5)).toBe(true); expect(fetch).not.toHaveBeenCalled();
+  });
+  it('honors the daily-trend checkbox in ALL and virtual modes without requesting daily data when off', async () => {
+    const db = await openCacheDatabase();
+    await new Promise<void>(resolve => { const tx = db.transaction(['pages', 'pageMetadata'], 'readwrite'); tx.objectStore('pages').clear(); tx.objectStore('pageMetadata').clear(); tx.oncomplete = () => resolve(); });
+    for (const symbol of ['AAAUSDT', 'BBBUSDT']) {
+      await cacheCandles(symbol, '1h', candles(settings, '1h')); await cacheCandles(symbol, '1h', candles(evaluation, '1h'));
+    }
+    await executeEnvelopeBatch({ kind: 'ALL_STATS', settings: { ...settings, envelopeDailyTrend: false } }, () => {}, new AbortController().signal);
+    const source = (await loadEnvelopeBatch('ALL_STATS'))!;
+    expect(source.status).toBe('COMPLETED'); expect(source.settings.envelopeDailyTrend).toBe(false);
+    await executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: source.id, settings: { ...evaluation, envelopeDailyTrend: false } }, () => {}, new AbortController().signal);
+    const done = (await loadEnvelopeBatch('VIRTUAL'))!;
+    expect(done.status).toBe('COMPLETED'); expect(done.settings.envelopeDailyTrend).toBe(false); expect(done.result!.entryCount).toBeGreaterThan(0); expect(fetch).not.toHaveBeenCalled();
   });
 });

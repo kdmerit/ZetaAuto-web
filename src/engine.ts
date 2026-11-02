@@ -1,7 +1,7 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { volatilityParameters } from './backtestSettings';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
-import { bandFor, envelopeParameters, priorMovingAverages, projectEnvelopeBands } from './envelope';
+import { bandFor, envelopeParameters, priorMovingAverages, projectDailyTrend, projectEnvelopeBands } from './envelope';
 import type {
   BacktestResult,
   BacktestSettings,
@@ -389,7 +389,7 @@ function volatilitySignals(
   return signals;
 }
 
-export interface PreparedEnvelope extends EnvelopeBand { long: boolean; short: boolean; parentOpenTime?: number; sourceInterval?: BacktestInterval }
+export interface PreparedEnvelope extends EnvelopeBand { long: boolean; short: boolean; parentOpenTime?: number; sourceInterval?: BacktestInterval; dailyTrendChangePercent?: number | null }
 export interface PreparedBar {
   candle: Candle;
   signal: Signal | null;
@@ -416,16 +416,19 @@ export function prepareSymbolBlock(
   end: number,
   previousWaveState?: WaveState,
   minuteCandles?: Candle[],
+  dailyCandles?: Candle[],
 ): PreparedSymbol {
   if (strategy === 'ENVELOPE') {
     const { percent, period } = envelopeParameters(settings);
     const centers = priorMovingAverages(candles, period);
+    const dailyTrend = settings.envelopeDailyTrend ? projectDailyTrend(dailyCandles ?? [], candles) : null;
     return { symbol, bars: candles.flatMap((candle, index) => {
       if (candle.openTime < start || candle.openTime >= end) return [];
       const center = centers[index];
       return [{ candle, signal: null, ma20: center ?? null, ma60Exit: null,
         ...(center === null || center === undefined ? {} : { envelope: {
           ...bandFor(center, percent), long: settings.side !== 'SHORT', short: settings.side !== 'LONG',
+          ...(dailyTrend ? { dailyTrendChangePercent: dailyTrend.get(candle.openTime) ?? null } : {}),
         } }),
       }];
     }) };
@@ -952,7 +955,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
-  if (strategy === 'ENVELOPE') return '서로 다른 봉의 밴드 이탈 후 재돌파에 진입하고 중앙선 SL 이동·반대 밴드 전량 청산을 고정해 중심선·이격을 비교합니다.';
+  if (strategy === 'ENVELOPE') return '1h 재돌파 진입·중앙선 SL 이동·반대 밴드 청산에 일봉 MA20 추세 필터를 선택 적용하고, SMA·이격을 사용자 필터와 수익률·승률 정렬로 비교합니다.';
   if (strategy === 'PULLBACK') {
     return '공통 몸통 파동의 고점·저점 상승과 MA10·MA20·간격의 3봉 연속 증가를 확인한 반전 첫 봉을 2분할 매수합니다.';
   }

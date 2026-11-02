@@ -6,9 +6,9 @@ import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portf
 import type { BacktestSettings, Candle } from './types';
 
 const start = Date.UTC(2026, 1, 1) / 1000;
-const settings: BacktestSettings = currentEnvelopeSettings({ mode: 'SINGLE', symbol: 'BTC', interval: '15m', side: 'LONG', startDate: '2026-02-01', startTime: '09:00', endDate: '2026-02-13', endTime: '09:00',
+const settings: BacktestSettings = { ...currentEnvelopeSettings({ mode: 'SINGLE', symbol: 'BTC', interval: '15m', side: 'LONG', startDate: '2026-02-01', startTime: '09:00', endDate: '2026-02-13', endTime: '09:00',
   initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '5', partialTpEnabled: false, fullTpWavePercent: '100', minDisparityPercent: '1', ma20HalfCloseEnabled: false, roiClosePercent: '100', minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1', volatilityTpEnabled: true, volatilityNextCloseEnabled: false,
-  envelopeMaPeriod: '5', envelopeDeviationPercent: '1' });
+  envelopeMaPeriod: '5', envelopeDeviationPercent: '1' }), envelopeDailyTrend: false }; // Isolate the existing reclaim path from the new daily entry gate.
 function document(prices: number[][], side: 'LONG' | 'SHORT' = 'LONG', parents?: number[]): PreparedSymbol {
   return { symbol: 'BTCUSDT', bars: prices.map((p, i) => {
     const q = side === 'LONG' ? p : [200 - p[0]!, 200 - p[2]!, 200 - p[1]!, 200 - p[3]!];
@@ -79,7 +79,8 @@ describe('qualified optimal settings and fixed-case counts', () => {
   });
   it('removes the three-way exit dimension while retaining legacy report totals', () => {
     const p = { ...settings, side: 'BOTH' as const, envelopeStatisticsInterval: '1h' as const };
-    expect(statisticsTotalFor(p)).toBe(3200); expect(statisticsTotalFor({ ...p, envelopeStatisticsInterval: 'ALL' })).toBe(12800);
+    expect(statisticsTotalFor(p)).toBe(3200); expect(statisticsTotalFor({ ...p, envelopeStatisticsInterval: 'ALL' })).toBe(3200);
+    expect(statisticsTotalFor({ ...p, envelopeStatisticsInterval: 'ALL' }, '2.10.43')).toBe(12800);
     expect(statisticsTotalFor(p, '2.10.42')).toBe(9600); expect(statisticsTotalFor(p, '2.10.41')).toBe(4800);
     expect(currentEnvelopeSettings({ ...settings, envelopeExitMode: 'HALF', envelopeMoveSlOnCenter: false })).toMatchObject({ envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: true, envelopeEntryMode: 'RECLAIM' });
   });

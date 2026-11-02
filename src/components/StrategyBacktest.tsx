@@ -36,6 +36,7 @@ import { chartAtInterval, withChartExecutionTimes } from '../chartIntervals';
 import { serverSettingsSnapshot, volatilityParameters } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
 import { currentEnvelopeSettings, envelopeParameters, envelopePeriods } from '../envelope';
+import { EnvelopeTrendControl } from './EnvelopeTrendControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
@@ -260,7 +261,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
 
   useEffect(() => {
     const requestId = ++resultRequestRef.current;
-    const fallback = { ...(preferredSettings ?? loadSettings(strategy, defaults)), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
+    const stored = { ...(preferredSettings ?? loadSettings(strategy, defaults)), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
+    const fallback = strategy === 'ENVELOPE' ? currentEnvelopeSettings(stored) : stored;
     analysisSettingsRef.current = fallback;
     setSettings(fallback);
     setResult(forcedMode ? null : loadCachedResult(strategy));
@@ -275,7 +277,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
       if (forcedMode && view.settings.mode !== forcedMode) return;
       setLocalJob(view);
       const snapshot = { ...defaults, ...view.settings };
-      if (view.status !== 'COMPLETED') setSettings(snapshot);
+      if (view.status !== 'COMPLETED') setSettings(strategy === 'ENVELOPE' ? currentEnvelopeSettings(snapshot) : snapshot);
       setRunning(view.status === 'RUNNING' && isLocalBacktestRunning(strategy));
       analysisSettingsRef.current = snapshot;
       if (view.result) setResult(view.result);
@@ -361,7 +363,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
   }, [historyOpen, settings.mode, settings.symbol, strategy]);
 
   const update = <K extends keyof BacktestSettings>(key: K, value: BacktestSettings[K]) => {
-    const next = { ...settings, [key]: value, ...(key === 'symbol' ? { envelopeRisk: undefined } : {}) };
+    const changed = { ...settings, [key]: value, ...(key === 'symbol' ? { envelopeRisk: undefined } : {}) };
+    const next = strategy === 'ENVELOPE' ? currentEnvelopeSettings(changed) : changed;
     setSettings(next);
     saveSettings(strategy, next);
   };
@@ -369,7 +372,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
   useEffect(() => {
     const refreshSharedStorage = (): void => {
       if (document.visibilityState === 'hidden' || running || (serverJob && ['QUEUED', 'RUNNING'].includes(serverJob.status))) return;
-      const shared = { ...loadSettings(strategy, defaults), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
+      const stored = { ...loadSettings(strategy, defaults), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
+      const shared = strategy === 'ENVELOPE' ? currentEnvelopeSettings(stored) : stored;
       setSettings(current => JSON.stringify(current) === JSON.stringify(shared) ? current : shared);
       if (historyOpen) setHistoryEntries(loadBacktestHistory(strategy, shared.mode, historyScopeSymbol(shared)));
     };
@@ -498,8 +502,9 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     const snapshot = { ...defaults, ...entry.settings };
     analysisSettingsRef.current = snapshot;
     restoringHistoryRef.current = true;
-    setSettings(snapshot);
-    saveSettings(strategy, snapshot);
+    const displaySettings = strategy === 'ENVELOPE' ? currentEnvelopeSettings(snapshot) : snapshot;
+    setSettings(displaySettings);
+    saveSettings(strategy, displaySettings);
     saveCachedResult(strategy, restored);
     setResult(restored);
     setServerJob(entry.serverJobId ? restoredServerJob(entry) : null);
@@ -508,7 +513,9 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     setChart(null);
     setSelectedTrade(null);
     setError(null);
-    setNotice(strategy === 'VOLATILITY' && (entry.serverJobId || typeof entry.settings.volatilityTpEnabled !== 'boolean')
+    setNotice(strategy === 'ENVELOPE' && (entry.settings.interval !== '1h' || typeof entry.settings.envelopeDailyTrend !== 'boolean')
+      ? '이전 엔벨로프 조건의 저장 결과입니다. 차트는 당시 설정으로 표시하며 새 분석은 1h·현재 추세 체크 상태로 계산합니다.'
+      : strategy === 'VOLATILITY' && (entry.serverJobId || typeof entry.settings.volatilityTpEnabled !== 'boolean')
       ? '이전 변동성 돌파 조건의 이력입니다. 새 분석을 시작하면 변경된 조건으로 계산합니다.'
       : '저장된 분석 이력을 불러왔습니다.');
   };
@@ -676,7 +683,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               </div>
             ) : strategy === 'ENVELOPE' ? (
               <div className="condition-copy">
-                <p>중심선은 선택 주기의 SMA5·10·20·40·60·80·100·120입니다. 봉 시작 전 확정된 N개 종가 평균을 사용하며 봉 안에서는 밴드를 고정합니다.</p>
+                <p>모든 탭의 중심선·매매·통계는 1h로 고정합니다. 중심선은 1h SMA5·10·20·40·60·80·100·120입니다. 봉 시작 전 확정된 N개 종가 평균을 사용하며 봉 안에서는 밴드를 고정합니다.</p>
+                <p>‘일봉 MA20 5봉 추세 필터’를 켜면 진입 전 일봉 MA20의 5봉 변화율 = (최근 확정 일봉 MA20 ÷ 5일봉 전 MA20 − 1) × 100을 확인합니다. 롱은 +0.5% 이상 상승, 숏은 −0.5% 이하 하락일 때만 진입합니다. 진행 중인 일봉은 사용하지 않으며 확정 일봉 25개가 없으면 신규 진입하지 않습니다. 체크를 끄면 이 조건과 분석용 일봉 조회를 생략합니다.</p>
                 <p>상단 = 중심선 × (1 + 이격%/100), 하단 = 중심선 × (1 − 이격%/100)</p>
                 <strong>롱 포지션</strong>
                 <p>하단 아래로 이탈한 봉 다음의 다른 봉에서 하단을 위로 재돌파할 때 하단 라인에 진입합니다. 같은 봉 안에서 이탈·복귀한 경우는 진입하지 않습니다.</p>
@@ -686,7 +694,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>중앙선 첫 유리한 접촉 시 SL을 (실제 매수가 + 접촉 당시 중앙선) ÷ 2로 한 번 옮기는 조건은 항상 적용합니다. 추가 매수는 없습니다. 롱은 SL을 올리고 숏은 내리며 이후 불리하게 되돌리지 않습니다. 중심선·밴드는 매 봉 시작에 확정된 과거 종가로 갱신합니다. SL 갭은 시가에 손절하며 진입·손절 시장가에 0.02% 슬리피지, 편도 0.055% 수수료를 반영합니다.</p>
                 <p>선택 봉의 시가→고가→저가→종가와 시가→저가→고가→종가 두 경로 중 보수적인 결과를 사용합니다. 양쪽 밴드가 모두 닿는 봉은 진입 방향도 경로에 따라 비교합니다. 봉 중간 체결 시각은 봉 시작 시각의 추정치이며 정확한 틱 재현은 아닙니다.</p>
                 <p>한 종목은 봉당 한 번만 진입하고 봉 시작에 보유했다면 같은 봉에 재진입하지 않습니다. 전체종목은 종목명 순서·봉 시작 가용자금 한도로 배분하며 미래 청산 자금을 재사용하지 않습니다. 기간 말 미청산분은 평가액에 포함합니다.</p>
-                <p>개별통계·전체통계는 15m·1h·4h·1d·전체 중 선택한 주기만 분석합니다. 방향당 한 주기 최대 1,600조합, 전체 주기 최대 6,400조합입니다. 롱·숏을 독립 계산하고 입력 배율을 고정해 8개 SMA·이격 0.1~20.0%(0.1 단위)만 비교합니다. 최적 세팅은 진입 2회 이상·승률 60% 이상·수익률 2% 이상을 모두 충족해야 합니다. 실제 접촉 없는 더 넓은 이격은 건너뛰며 자동 배율 탐색은 하지 않습니다.</p>
+                <p>개별통계·전체통계는 1h에서 방향당 최대 1,600조합, 롱+숏 최대 3,200조합을 비교합니다. 입력 배율을 고정해 8개 SMA·이격 0.1~20.0%(0.1 단위)만 비교합니다. 매매횟수·수익률·최소수익비 필터를 모두 통과한 결과만 표시하며 수익률 또는 승률 내림차순의 최상위 세팅을 방향별로 선정합니다. 이전 승률 60% 고정 조건은 사용하지 않습니다. 수익비 = 수익금 ÷ (수익금 + 손실금의 절댓값) × 100이며 수수료를 뺀 완료 매매 기준입니다. 실제 접촉 없는 더 넓은 이격은 건너뛰며 자동 배율 탐색은 하지 않습니다.</p>
                 <p>전체통계는 슬리피지 필터 없이 모든 활성 USDT 종목에서 조건을 충족한 방향별 세팅을 저장합니다. 가상매매는 선정한 중심선·이격을 고정하고 별도로 입력한 기간·초기자금·베팅액·레버리지로 검증합니다. 검증 기간으로 다시 최적화하지 않습니다. 선정 기간과 겹치거나 그 이전을 검증하면 화면에 표시하며 실제 미래 성과를 보장하지 않습니다.</p>
                 {settings.envelopeRisk ? <p className="notice">통계에서 불러온 세팅은 현재 공개 위험한도에 따른 격리 LIQ 예상치를 사용합니다. 시가 갭이 SL과 LIQ를 모두 넘으면 남은 포지션 증거금을 소진하는 추정 청산으로 처리합니다. 실제 계좌·과거 거래소 청산가와 다를 수 있습니다.</p> : null}
               </div>
@@ -742,10 +750,10 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             {(['BOTH', 'LONG', 'SHORT'] as const).map((side) => <button key={side} type="button" className={settings.side === side ? 'selected' : ''} onClick={() => update('side', side)}>{side === 'BOTH' ? '롱 + 숏' : side === 'LONG' ? '롱' : '숏'}</button>)}
           </div>
 
-          <h2>{strategy === 'ENVELOPE' ? '엔벨로프 중심선 주기' : '캔들 주기'}</h2>
-          <div className="segmented four">
+          <h2>{strategy === 'ENVELOPE' ? '중심선 · 매매 기준 1h' : '캔들 주기'}</h2>
+          {strategy === 'ENVELOPE' ? <p className="notice small">1시간봉 고정</p> : <div className="segmented four">
             {(['15m', '1h', '4h', '1d'] as const).map((interval) => <button key={interval} type="button" className={settings.interval === interval ? 'selected' : ''} onClick={() => update('interval', interval)}>{interval.toUpperCase()}</button>)}
-          </div>
+          </div>}
 
           <h2>분석 기간 (한국시간)</h2>
           <div className="field-grid two">
@@ -771,6 +779,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             </>
           ) : strategy === 'ENVELOPE' ? (
             <>
+              <EnvelopeTrendControl enabled={settings.envelopeDailyTrend !== false} onChange={enabled => update('envelopeDailyTrend', enabled)} />
               <h2>엔벨로프 중심선 봉수</h2>
               <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
               <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '0.5'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용 · SL도 같은 비율</small></label>

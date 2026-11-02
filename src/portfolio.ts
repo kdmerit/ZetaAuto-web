@@ -2,7 +2,7 @@
 import type { PreparedBar, PreparedSymbol } from './engine';
 import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, ContractRisk, Execution, PriceLine, Signal } from './types';
 import { validateMinuteCandles } from './intrabar';
-import { envelopeParameters } from './envelope';
+import { dailyTrendAllows, envelopeParameters } from './envelope';
 import { estimatedLiquidation } from './contractRisk';
 
 const feeRate = 0.00055;
@@ -43,6 +43,8 @@ export interface PortfolioState {
   closed: number;
   wins: number;
   losses: number;
+  winningProfit?: number;
+  losingLoss?: number;
   breakeven: number;
   signals: number;
   insufficientFunds: number;
@@ -61,7 +63,7 @@ export interface PortfolioState {
 export function initialPortfolio(capital: number): PortfolioState {
   return {
     cash: capital, realized: 0, fees: 0, positions: {}, trades: [], entries: 0, closed: 0,
-    wins: 0, losses: 0, breakeven: 0, signals: 0, insufficientFunds: 0, secondFills: 0,
+    wins: 0, losses: 0, winningProfit: 0, losingLoss: 0, breakeven: 0, signals: 0, insufficientFunds: 0, secondFills: 0,
     exitReasons: {}, peak: capital, maxDrawdown: 0, observedBars: 0,
     dataStartAt: null, dataEndAt: null, equityCurve: [],
   };
@@ -144,6 +146,8 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
     state.wins += Number(p.net > 0);
     state.losses += Number(p.net < 0);
     state.breakeven += Number(p.net === 0);
+    state.winningProfit = (state.winningProfit ?? 0) + Math.max(0, p.net);
+    state.losingLoss = (state.losingLoss ?? 0) + Math.max(0, -p.net);
     delete state.positions[p.symbol];
   }
 }
@@ -378,6 +382,7 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
   const eligible = (side: 'LONG' | 'SHORT'): boolean => {
     const { band, parameters } = definition(side);
     return !!band && (side === 'LONG' ? band.long : band.short) && (parameters.side === 'BOTH' || parameters.side === side)
+      && (!parameters.envelopeDailyTrend || dailyTrendAllows(band.dailyTrendChangePercent, side))
       && (parameters.envelopeEntryMode !== 'RECLAIM' || reclaimAllowed?.[side] === true);
   };
   const candle = bar.candle;
@@ -433,6 +438,8 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
 function mergePath(state: PortfolioState, selected: PortfolioState, symbol: string, baseline = 0): void {
   state.cash += selected.cash - baseline;
   for (const field of ['realized', 'fees', 'closed', 'wins', 'losses', 'breakeven', 'secondFills', 'entries', 'signals', 'insufficientFunds'] as const) state[field] += selected[field];
+  state.winningProfit = (state.winningProfit ?? 0) + (selected.winningProfit ?? 0);
+  state.losingLoss = (state.losingLoss ?? 0) + (selected.losingLoss ?? 0);
   for (const [reason, count] of Object.entries(selected.exitReasons)) state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + count;
   state.trades = [...state.trades, ...selected.trades].slice(-100);
   if (selected.positions[symbol]) state.positions[symbol] = selected.positions[symbol];
@@ -568,6 +575,7 @@ export function portfolioResult(state: PortfolioState, settings: BacktestSetting
     feesUsdt: state.fees, maxDrawdownPercent: state.maxDrawdown, entryCount: state.entries,
     closedTradeCount: state.closed, winCount: state.wins, lossCount: state.losses, breakevenCount: state.breakeven,
     winRatePercent: state.closed ? state.wins / state.closed * 100 : null,
+    winningProfitUsdt: state.winningProfit ?? 0, losingLossUsdt: state.losingLoss ?? 0,
     openPositionCount: Object.keys(state.positions).length, insufficientFundsCount: state.insufficientFunds,
     betAmountUsdt: Number(settings.betAmountUsdt), secondFillCount: state.secondFills,
     signalCount: state.signals, observedBars: state.observedBars, dataStartAt: state.dataStartAt, dataEndAt: state.dataEndAt,

@@ -10,7 +10,31 @@ export const envelopeExitLabels: Record<EnvelopeExitMode, string> = {
 
 /** Current strategy only; archived settings without this marker retain their original replay. */
 export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSettings {
-  return { ...settings, envelopeEntryMode: 'RECLAIM', envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: true, envelopeRisk: undefined };
+  return { ...settings, interval: '1h', envelopeStatisticsInterval: '1h', envelopeDailyTrend: settings.envelopeDailyTrend ?? true,
+    envelopeEntryMode: 'RECLAIM', envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: true, envelopeRisk: undefined };
+}
+
+/** MA20 of the last closed daily candle versus five daily candles earlier, never the live daily bar. */
+export function projectDailyTrend(rows: Candle[], targets: Candle[]): Map<number, number | null> {
+  const averages: (number | null)[] = [];
+  let sum = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    sum += rows[index]!.close;
+    if (index >= 20) sum -= rows[index - 20]!.close;
+    averages.push(index >= 19 ? sum / 20 : null);
+  }
+  const changes = new Map<number, number | null>();
+  let cursor = 0;
+  for (const target of targets) {
+    while (cursor < rows.length && rows[cursor]!.closeTime <= target.openTime) cursor += 1;
+    const latest = averages[cursor - 1]; const previous = averages[cursor - 6];
+    changes.set(target.openTime, latest != null && previous != null && previous > 0 ? (latest / previous - 1) * 100 : null);
+  }
+  return changes;
+}
+
+export function dailyTrendAllows(change: number | null | undefined, side: 'LONG' | 'SHORT'): boolean {
+  return change != null && Number.isFinite(change) && (side === 'LONG' ? change >= 0.5 - 1e-10 : change <= -0.5 + 1e-10);
 }
 
 export function envelopeParameters(settings: BacktestSettings): { percent: number; exit: EnvelopeExitMode; period: number } {
