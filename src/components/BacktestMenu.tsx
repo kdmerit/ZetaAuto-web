@@ -1,37 +1,29 @@
-import { useState } from 'react';
 import type { Strategy } from '../types';
 
 interface BacktestMenuProps {
   onOpen: (strategy: Strategy) => void;
+  onOpenChart: () => void;
   onSignOut: () => void;
   email: string | null;
 }
 
-export function BacktestMenu({ onOpen, onSignOut, email }: BacktestMenuProps) {
-  const [expanded, setExpanded] = useState(false);
+export function BacktestMenu({ onOpen, onOpenChart, onSignOut, email }: BacktestMenuProps) {
   const items = [
     {
       strategy: 'PULLBACK' as const,
       title: '눌림목 백테스트',
-      description:
-        '반전 첫 봉과 1차가·SL의 중간에서 분할매수하며, 파동폭 비율 TP·2차 체결 후 매수봉 종가 TP를 분석합니다.',
     },
     {
       strategy: 'DISPARITY' as const,
       title: '이격매매 백테스트',
-      description:
-        'MA20·MA60 사이 이격과 직전 10봉 MA20 조건으로 진입하고, 직전 10봉 SL·MA60 청산을 분석합니다.',
     },
     {
       strategy: 'VOLATILITY' as const,
       title: '변동성 돌파 백테스트',
-      description:
-        '직전봉 몸통 변동폭과 K1 돌파에 봉 중간 진입하며, 진입 시점 SL·선택형 K1 TP·다음 봉 종가 청산을 분석합니다.',
     },
     {
       strategy: 'ENVELOPE' as const,
       title: '엔벨로프 백테스트',
-      description: '1h 재돌파 진입·중심선 전량 청산과 선택형 일봉 MA20 추세 조건으로 SMA·이격을 비교하고, 사용자 필터·정렬로 최적 세팅을 찾아 별도 기간에서 검증합니다.',
     },
   ];
 
@@ -49,21 +41,10 @@ export function BacktestMenu({ onOpen, onSignOut, email }: BacktestMenuProps) {
           </div>
         </header>
 
-        <button
-          className="outline-button detail-toggle"
-          type="button"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          {expanded ? '상세설명접기' : '상세설명보기'}
-        </button>
-        {expanded ? (
-          <p className="muted menu-description">
-            분석할 전략을 선택해 과거 매매 성적을 확인합니다. 개별·전체 종목 모두 저장된 캔들을 우선 사용해 이 기기에서 계산합니다.
-          </p>
-        ) : null}
-
         <div className="menu-cards">
+          <button className="menu-card market-menu-card" type="button" onClick={onOpenChart}>
+            <span className="menu-card-copy"><strong>차트 보기</strong></span><span className="chevron" aria-hidden="true">›</span>
+          </button>
           {items.map((item) => (
             <button
               className="menu-card"
@@ -73,7 +54,6 @@ export function BacktestMenu({ onOpen, onSignOut, email }: BacktestMenuProps) {
             >
               <span className="menu-card-copy">
                 <strong>{item.title}</strong>
-                {expanded ? <span>{item.description}</span> : null}
               </span>
               <span className="chevron" aria-hidden="true">›</span>
             </button>

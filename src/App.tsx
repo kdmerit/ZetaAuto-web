@@ -5,10 +5,12 @@ import { ALLOWED_WEB_EMAIL, useAuth } from './auth';
 import { BacktestMenu } from './components/BacktestMenu';
 import { StrategyBacktest } from './components/StrategyBacktest';
 import { EnvelopeWorkspace } from './components/EnvelopeWorkspace';
+import { ChartBrowser } from './components/ChartBrowser';
+import type { ApiContext } from './api';
 import type { Strategy } from './types';
 import { sendNativeMessage, subscribeNativeBack } from './nativeBridge';
 
-type Screen = { kind: 'MENU' } | { kind: 'STRATEGY'; strategy: Strategy };
+type Screen = { kind: 'MENU' } | { kind: 'CHARTS' } | { kind: 'STRATEGY'; strategy: Strategy };
 
 function LoginScreen() {
   const auth = useAuth();
@@ -53,8 +55,7 @@ function AccessDeniedScreen() {
   );
 }
 
-function SignedInApp() {
-  const auth = useAuth();
+export function BacktestNavigation({ context, email, onSignOut }: { context: ApiContext; email: string | null; onSignOut: () => void }) {
   const [screen, setScreen] = useState<Screen>({ kind: 'MENU' });
   const screenRef = useRef<Screen>({ kind: 'MENU' });
 
@@ -68,6 +69,10 @@ function SignedInApp() {
     window.history.replaceState({ ...baseState, zetaautoApp: true, screen: 'MENU' }, '');
 
     const handlePopState = (event: PopStateEvent) => {
+      if (event.state?.screen === 'CHARTS') {
+        if (screenRef.current.kind !== 'CHARTS') setScreen({ kind: 'CHARTS' });
+        return;
+      }
       // Closing a chart with its X button removes the dialog before popstate.
       // The destination is still the same strategy, not the menu; use history
       // state instead of relying only on the dialog remaining in the DOM.
@@ -92,7 +97,7 @@ function SignedInApp() {
   }, []);
 
   useEffect(() => subscribeNativeBack(() => {
-    if (document.querySelector('.chart-modal') || window.history.state?.zetaautoChart || screenRef.current.kind === 'STRATEGY') {
+    if (document.querySelector('.chart-modal') || window.history.state?.zetaautoChart || screenRef.current.kind !== 'MENU') {
       window.history.back();
     } else {
       sendNativeMessage('EXIT_BACKTEST');
@@ -104,27 +109,29 @@ function SignedInApp() {
     setScreen({ kind: 'STRATEGY', strategy });
   };
 
-  if (!auth.config || !auth.accessToken || auth.email !== ALLOWED_WEB_EMAIL) return <LoginScreen />;
   return (
     <div className="app-shell">
       {screen.kind === 'MENU' ? (
         <BacktestMenu
-          email={auth.email}
-          onSignOut={() => void auth.signOut()}
+          email={email}
+          onSignOut={onSignOut}
           onOpen={openStrategy}
+          onOpenChart={() => { window.history.pushState({ zetaautoApp: true, screen: 'CHARTS' }, ''); setScreen({ kind: 'CHARTS' }); }}
         />
-      ) : (
-        screen.strategy === 'ENVELOPE' ? <EnvelopeWorkspace context={{ apiBaseUrl: auth.config.apiBaseUrl, accessToken: auth.accessToken, refreshAccessToken: auth.refreshAccessToken }} /> : <StrategyBacktest
+      ) : screen.kind === 'CHARTS' ? <ChartBrowser /> : (
+        screen.strategy === 'ENVELOPE' ? <EnvelopeWorkspace context={context} /> : <StrategyBacktest
           strategy={screen.strategy}
-          context={{
-            apiBaseUrl: auth.config.apiBaseUrl,
-            accessToken: auth.accessToken,
-            refreshAccessToken: auth.refreshAccessToken,
-          }}
+          context={context}
         />
       )}
     </div>
   );
+}
+
+function SignedInApp() {
+  const auth = useAuth();
+  if (!auth.config || !auth.accessToken || auth.email !== ALLOWED_WEB_EMAIL) return <LoginScreen />;
+  return <BacktestNavigation email={auth.email} onSignOut={() => void auth.signOut()} context={{ apiBaseUrl: auth.config.apiBaseUrl, accessToken: auth.accessToken, refreshAccessToken: auth.refreshAccessToken }} />;
 }
 
 export function App() {

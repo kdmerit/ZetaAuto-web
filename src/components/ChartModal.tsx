@@ -3,6 +3,8 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { chartTimestamp, entryCandleIndex, firstEntryTime, movingAverageAngle, tradeChartFills, visibleCandleRange } from '../chartData';
 import { chartIntervals } from '../chartIntervals';
 import { chartMaStorageKey, loadChartMas, saveChartMas } from '../storage';
+import { loadMarketIndicators, marketIndicatorStorageKey, saveMarketIndicators, withMarketIndicators } from '../marketIndicators';
+import { MarketIndicatorControls } from './MarketIndicatorControls';
 import type { BacktestInterval, ChartData, ChartMarker, EnrichedCandle, PriceLine } from '../types';
 
 interface ChartModalProps {
@@ -138,22 +140,23 @@ function ChartSvg({
   const { min, max, maxVolume } = useMemo(
     () => {
       const range = visibleCandleRange(chart.candles, rangeStart, rangeEnd);
-      if (!chart.envelope) return range;
+      if (!chart.envelope && !chart.atrEnvelope) return range;
       const first = chart.candles[rangeStart]?.openTime ?? 0;
       const last = chart.candles[rangeEnd]?.openTime ?? 0;
       let low = range.min; let high = range.max;
-      for (const band of chart.envelope.bands) if (band.openTime >= first && band.openTime <= last) {
+      for (const band of [...(chart.envelope?.bands ?? []), ...(chart.atrEnvelope?.bands ?? [])]) if (band.openTime >= first && band.openTime <= last) {
         low = Math.min(low, band.lower); high = Math.max(high, band.upper);
       }
       const padding = (high - low) * 0.02;
       return { min: low - padding, max: high + padding, maxVolume: range.maxVolume };
     },
-    [chart.candles, chart.envelope, rangeStart, rangeEnd],
+    [chart.candles, chart.envelope, chart.atrEnvelope, rangeStart, rangeEnd],
   );
   const drawStart = Math.max(0, rangeStart - 1);
   const drawEnd = Math.min(chart.candles.length - 1, rangeEnd + 1);
   const drawnCandles = chart.candles.slice(drawStart, drawEnd + 1);
   const envelopeByTime = useMemo(() => new Map(chart.envelope?.bands.map(band => [band.openTime, band]) ?? []), [chart.envelope]);
+  const atrByTime = useMemo(() => new Map(chart.atrEnvelope?.bands.map(band => [band.openTime, band]) ?? []), [chart.atrEnvelope]);
   const reportViewTime = (): void => {
     const host = scrollRef.current;
     if (!host) return;
@@ -276,7 +279,7 @@ function ChartSvg({
       <svg
         className="chart-svg"
         role="img"
-        aria-label="백테스트 캔들 차트"
+        aria-label={chart.market ? '종목 캔들 차트' : '백테스트 캔들 차트'}
         viewBox={`0 0 ${width} ${height}`}
         width={width}
         height={height}
@@ -355,6 +358,11 @@ function ChartSvg({
           }).join(' ')} fill="none" stroke="#CFB1FF" strokeWidth={key === 'center' ? 1 : 1.8} opacity={key === 'center' ? 0.6 : 0.95} strokeDasharray={key === 'center' ? '3 4' : undefined}>
           <title>{`엔벨로프 ${key === 'upper' ? '상단' : key === 'lower' ? '하단' : '중심선'} · ${chart.envelope!.interval} SMA${chart.envelope!.period} ±${chart.envelope!.deviationPercent}%`}</title>
         </polyline>) : null}
+        {chart.atrEnvelope ? (['upper', 'center', 'lower'] as const).map(key => <polyline key={`atr-${key}`} className={`atr-band atr-${key}`}
+          points={drawnCandles.flatMap((candle, offset) => { const band = atrByTime.get(candle.openTime); return band ? [`${(drawStart + offset + .5) * step},${yFor(band[key])}`] : []; }).join(' ')}
+          fill="none" stroke={key === 'center' ? '#F2C66D' : '#64D8E8'} strokeWidth={key === 'center' ? 1.2 : 1.8} opacity=".95" strokeDasharray={key === 'center' ? '3 4' : undefined}>
+          <title>{`ATR 엔벨로프 ${key === 'upper' ? '상단' : key === 'lower' ? '하단' : '중심선'} · EMA${chart.atrEnvelope!.emaPeriod} · ATR${chart.atrEnvelope!.atrPeriod} ×${chart.atrEnvelope!.multiplier}`}</title>
+        </polyline>) : null}
         {chart.waves.filter((wave) => wave.startIndex <= drawEnd && wave.endIndex >= drawStart).map((wave) => {
           const x = Math.max(0, wave.startIndex) * step;
           const w = Math.max(step, (wave.endIndex - wave.startIndex + 1) * step);
@@ -413,7 +421,9 @@ function ChartSvg({
   );
 }
 
-export function ChartModal({ chart, onClose, onLoadOlder, onFocusCandle, onIntervalChange, loadingOlder, historyError }: ChartModalProps) {
+export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCandle, onIntervalChange, loadingOlder, historyError }: ChartModalProps) {
+  const [indicatorSettings, setIndicatorSettings] = useState(loadMarketIndicators);
+  const chart = useMemo(() => withMarketIndicators(sourceChart, indicatorSettings), [sourceChart, indicatorSettings]);
   const backdropPointer = useRef<number | null>(null);
   const viewTimeRef = useRef<number | null>(null);
   const rememberViewTime = useCallback((openTime: number) => { viewTimeRef.current = openTime; }, []);
@@ -458,9 +468,9 @@ export function ChartModal({ chart, onClose, onLoadOlder, onFocusCandle, onInter
     }
   };
   useEffect(() => {
-    const refresh = () => setVisibleMas(loadChartMas());
+    const refresh = () => { setVisibleMas(loadChartMas()); setIndicatorSettings(loadMarketIndicators()); };
     const onStorage = (event: StorageEvent) => {
-      if (event.key === null || event.key === chartMaStorageKey) refresh();
+      if (event.key === null || event.key === chartMaStorageKey || event.key === marketIndicatorStorageKey) refresh();
     };
     window.addEventListener('storage', onStorage);
     window.addEventListener('focus', refresh);
@@ -491,11 +501,11 @@ export function ChartModal({ chart, onClose, onLoadOlder, onFocusCandle, onInter
       }}
       onPointerCancel={() => { backdropPointer.current = null; }}
     >
-      <section className="chart-modal" role="dialog" aria-modal="true" aria-label="백테스트 차트">
+      <section className={`chart-modal${chart.market ? ' market-chart-modal' : ''}`} role="dialog" aria-modal="true" aria-label={chart.market ? '종목 차트' : '백테스트 차트'}>
         <div className="chart-header">
           <div>
-            <p className="eyebrow">{chart.interval.toUpperCase()} · BACKTEST</p>
-            <h2>{chart.symbol} <span className={chart.side === 'LONG' ? 'long-text' : 'short-text'}>{chart.side === 'LONG' ? '롱' : '숏'}</span></h2>
+            <p className="eyebrow">{chart.interval.toUpperCase()} · {chart.market ? 'CHART' : 'BACKTEST'}</p>
+            <h2>{chart.symbol} {!chart.market ? <span className={chart.side === 'LONG' ? 'long-text' : 'short-text'}>{chart.side === 'LONG' ? '롱' : '숏'}</span> : null}</h2>
             <p className="muted chart-reference">{formatDate(fills.entry?.sourceOpenTime ?? firstEntryTime(chart) ?? chart.referenceAt)}</p>
           </div>
           <button className="close-button" type="button" onClick={onClose} aria-label="차트 닫기">×</button>
@@ -521,25 +531,27 @@ export function ChartModal({ chart, onClose, onLoadOlder, onFocusCandle, onInter
               onClick={() => { void changeInterval(interval); }}>{interval}</button>
           ))}
         </div>
-        {chart.envelope ? <p className="envelope-chart-caption">엔벨로프 {chart.envelope.interval} · SMA{chart.envelope.period} · ±{chart.envelope.deviationPercent}%</p> : null}
+        {chart.market ? <MarketIndicatorControls value={indicatorSettings} onApply={value => { saveMarketIndicators(value); setIndicatorSettings(value); }} /> : null}
+        {chart.envelope && !chart.market ? <p className="envelope-chart-caption">엔벨로프 {chart.envelope.interval} · SMA{chart.envelope.period} · ±{chart.envelope.deviationPercent}%</p> : null}
         <ChartSvg chart={chart} visibleMas={visibleMas} selection={selection} onSelect={setSelection} onClear={() => setSelection(null)} focusRequest={focusRequest} onLoadOlder={onLoadOlder} loadingOlder={loadingOlder || focusing || switching !== null} onViewTime={rememberViewTime} />
         <div className="chart-readout">
           <div className="candle-info-heading">
             <strong className={selected ? undefined : 'candle-info-hidden'} aria-hidden={!selected}>{infoCandle ? formatDate(infoCandle.openTime) : ''}</strong>
-            <div className="trade-price-links" role="group" aria-label="체결 가격 이동">
+            {!chart.market ? <div className="trade-price-links" role="group" aria-label="체결 가격 이동">
               {([['entry', '매수가', fills.entry], ['close', '청산가', fills.close]] as const).map(([kind, label, fill]) => (
                 <button className={`trade-price-link ${kind}`} key={kind} type="button" disabled={!fill || focusing || switching !== null || loadingOlder}
                   aria-label={fill ? `${label} ${formatPrice(fill.price)} · ${kind === 'entry' ? '최초 매수' : '최종 청산'} 지점으로 이동` : `${label} 정보 없음`}
                   onClick={() => { if (fill) void focusExecution(fill); }}>{label} {fill ? formatPrice(fill.price) : '—'}</button>
               ))}
-            </div>
+            </div> : null}
           </div>
           {infoCandle ? (
             <div className={`candle-info${selected ? '' : ' candle-info-hidden'}`} aria-hidden={!selected}>
+              {chart.market && infoCandle.marketMetrics ? <span className="market-true-range positive" title="TR=max(고가−저가, |고가−이전 종가|, |저가−이전 종가|) · 비율=TR/선택 캔들 종가×100">TR {formatPrice(infoCandle.marketMetrics.trueRange)} ({infoCandle.marketMetrics.trueRangePercent === null ? '—' : `${infoCandle.marketMetrics.trueRangePercent.toFixed(2)}%`})</span> : null}
               <span>시가 {formatPrice(infoCandle.open)} · 고가 {formatPrice(infoCandle.high)}</span>
               <span>저가 {formatPrice(infoCandle.low)} · 종가 {formatPrice(infoCandle.close)}</span>
               <div className="candle-change-row"><span>몸통 <em className={infoCandle.close >= infoCandle.open ? 'positive' : 'negative'}>{signedPercent(bodyPercent(infoCandle))}</em></span><span>최대 {signedPercent(rangePercent(infoCandle))}</span></div>
-              <span>거래량 {formatPrice(infoCandle.volume)}</span>
+              <span className={chart.market ? 'market-volume' : undefined} title={infoCandle.marketMetrics ? `현재 캔들 제외 · 직전 120일 ${infoCandle.marketMetrics.volumeSamples.toLocaleString()}/${infoCandle.marketMetrics.expectedVolumeSamples.toLocaleString()}봉${infoCandle.marketMetrics.volumeSamples < infoCandle.marketMetrics.expectedVolumeSamples ? ' · 120일 미만: 확보된 실제 봉 평균' : ''}` : undefined}>거래량 {formatPrice(infoCandle.volume)}{chart.market && infoCandle.marketMetrics ? <> / {infoCandle.marketMetrics.averageVolume120d === null ? '—' : formatPrice(infoCandle.marketMetrics.averageVolume120d)} ({infoCandle.marketMetrics.volumePercent === null ? '—' : `${infoCandle.marketMetrics.volumePercent.toFixed(1)}%`})</> : null}</span>
               <div className="candle-ma-grid">
                 {selectedReadings.map((reading) => (
                   <span key={reading.key} style={{ color: reading.color }} title="현재봉·이전 2봉의 고정 각도 · 1봉당 1% 상승=45° · 확대/축소와 무관">{reading.label} {signedPercent(reading.deviation)} <em>({reading.angle === null ? '—' : `${reading.angle >= 0 ? '+' : ''}${reading.angle.toFixed(1)}°`})</em></span>

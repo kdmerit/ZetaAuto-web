@@ -75,6 +75,14 @@ export interface EnrichedCandle extends Candle {
   ma20: number | null;
   ma60: number | null;
   ma120: number | null;
+  marketMetrics?: {
+    trueRange: number;
+    trueRangePercent: number | null;
+    averageVolume120d: number | null;
+    volumePercent: number | null;
+    volumeSamples: number;
+    expectedVolumeSamples: number;
+  };
 }
 
 export interface Wave {
@@ -124,7 +132,7 @@ export interface PriceLine {
 export interface ChartData {
   symbol: string;
   interval: BacktestInterval;
-  side: 'LONG' | 'SHORT';
+  side: 'LONG' | 'SHORT' | null;
   referenceAt: string;
   referenceIndex: number | null;
   candles: EnrichedCandle[];
@@ -138,6 +146,14 @@ export interface ChartData {
     interval: BacktestInterval;
     period: number;
     deviationPercent: number;
+    bands: { openTime: number; center: number; upper: number; lower: number }[];
+  };
+  /** Standalone public-market chart, never a trade or simulated account. */
+  market?: { sourceCandles: Candle[] };
+  atrEnvelope?: {
+    emaPeriod: number;
+    atrPeriod: number;
+    multiplier: number;
     bands: { openTime: number; center: number; upper: number; lower: number }[];
   };
 }
