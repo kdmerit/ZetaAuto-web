@@ -9,6 +9,7 @@ interface BacktestMenuProps {
 
 export function BacktestMenu({ onOpen, onOpenChart, onSignOut, email }: BacktestMenuProps) {
   const items = [
+    { strategy: 'NEW_HIGH' as const, title: '신고가 백테스트' },
     {
       strategy: 'PULLBACK' as const,
       title: '눌림목 백테스트',

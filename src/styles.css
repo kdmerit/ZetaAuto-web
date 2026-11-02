@@ -17,6 +17,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .screen { min-height: 100dvh; background: #0d1421; }
 .content { width: min(100%, 760px); margin: 0 auto; padding: 36px 16px 56px; }
 .menu-content { display: flex; flex-direction: column; gap: 24px; }
+.content.menu-content { gap: 16px; padding-top: clamp(16px, 3.5dvh, 28px); padding-bottom: 20px; }
 .strategy-content { display: flex; flex-direction: column; gap: 16px; }
 .centered { display: grid; place-items: center; padding: 24px; }
 
@@ -33,9 +34,13 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 
 .account-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; max-width: calc(100% - 50px); padding-right: 48px; color: #aab6c8; font-size: 12px; }
 .account-email { min-width: 0; max-width: 145px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-content .page-header h1 { white-space: nowrap; }
+.menu-content .account-actions { flex: 1; max-width: 45%; padding-right: 0; }
 .logout-button { flex: 0 0 auto; min-height: 32px; padding: 0 9px; border: 1px solid #34435b; border-radius: 9px; background: #151f30; color: #f4f7fb; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .icon-button, .close-button { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid #34435b; border-radius: 999px; background: #151f30; color: #f4f7fb; font-size: 22px; }
 .close-button { flex: 0 0 auto; font-size: 32px; line-height: 1; }
+.chart-symbol-close { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: inherit; letter-spacing: inherit; text-align: left; }
+.chart-symbol-close:focus-visible { outline: 2px solid #7ea2ff; outline-offset: 2px; border-radius: 3px; }
 .strategy-header { justify-content: flex-start; }
 
 .outline-button, .primary-button, .danger-button { width: 100%; min-height: 48px; border-radius: 12px; font-weight: 800; transition: opacity .15s, transform .15s; }
@@ -47,8 +52,8 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .full-width { width: 100%; }
 .menu-description { margin: -8px 8px 0; }
 
-.menu-cards { display: flex; flex-direction: column; gap: 12px; }
-.menu-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; min-height: 88px; padding: 16px 20px; border: 1px solid #7ea2ff; border-radius: 20px; background: #151f30; color: #f4f7fb; text-align: left; }
+.menu-cards { display: flex; flex-direction: column; gap: 10px; }
+.menu-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; min-height: clamp(48px, 8.5dvh, 70px); padding: 10px 20px; border: 1px solid #7ea2ff; border-radius: 18px; background: #151f30; color: #f4f7fb; text-align: left; }
 .menu-card-copy { display: flex; flex: 1; flex-direction: column; gap: 8px; }
 .menu-card-copy strong { font-size: clamp(22px, 5vw, 30px); line-height: 1.2; }
 .menu-card-copy span { color: #aab6c8; font-size: 16px; line-height: 1.45; }
@@ -194,7 +199,7 @@ button.envelope-best { background: transparent; text-align: left; font: inherit;
 .market-symbol span { color: #64d8e8; }
 .market-chart-modal .chart-intervals { gap: 6px; padding-top: 2px; padding-bottom: 3px; }
 .market-chart-modal .chart-intervals button { min-height: 27px; font-size: 12px; }
-.market-indicator-controls { flex: 0 0 auto; padding: 0 8px 3px; background: #202d42; }
+.market-indicator-controls { position: relative; flex: 0 0 auto; padding: 0 8px 3px; background: #202d42; }
 .market-indicator-row { display: grid; gap: 6px; align-items: center; margin-top: 3px; font-size: 11px; }
 .sma-controls { grid-template-columns: 80px repeat(2, minmax(0, 1fr)); }
 .atr-controls { grid-template-columns: 80px repeat(3, minmax(0, 1fr)); }
@@ -204,8 +209,7 @@ button.envelope-best { background: transparent; text-align: left; font: inherit;
 .market-indicator-row label span { white-space: nowrap; color: #c4cede; }
 .market-indicator-row input { width: 100%; min-width: 0; height: 25px; padding: 0 4px; border: 1px solid #526583; border-radius: 5px; background: #151f30; color: #f4f7fb; font-size: 12px; appearance: textfield; }
 .market-indicator-row input::-webkit-inner-spin-button, .market-indicator-row input::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
-.market-indicator-hint { min-height: 26px; margin: 2px 0 0; color: #aab6c8; font-size: 10px; line-height: 13px; }
-.market-indicator-hint.indicator-error { color: #ff8a8a; }
+.market-indicator-controls .indicator-error { position: absolute; top: 100%; left: 8px; right: 8px; z-index: 5; margin: 0; padding: 6px 8px; border: 1px solid #ff8a8a; border-radius: 5px; background: #302436; color: #ff8a8a; font-size: 11px; line-height: 15px; pointer-events: none; }
 .market-chart-modal .chart-readout { font-size: clamp(14px, 3.8vw, 17.28px); }
 .market-chart-modal .candle-info-heading { min-height: 21px; }
 .market-chart-modal .candle-info > span { white-space: nowrap; }

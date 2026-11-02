@@ -40,6 +40,10 @@ import { EnvelopeTrendControl } from './EnvelopeTrendControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
+import { currentNewHighSettings, newHighPeriod, newHighRules } from '../newHigh';
+
+const strategySettings = (strategy: Strategy, value: BacktestSettings): BacktestSettings => strategy === 'NEW_HIGH'
+  ? currentNewHighSettings(value) : strategy === 'ENVELOPE' ? currentEnvelopeSettings(value) : value;
 
 interface StrategyBacktestProps {
   strategy: Strategy;
@@ -82,6 +86,7 @@ export function defaultSettings(): BacktestSettings {
     envelopeExitMode: 'CENTER',
     envelopeMoveSlOnCenter: false,
     envelopeEntryMode: 'RECLAIM',
+    newHighLookback: '20',
   };
 }
 
@@ -132,12 +137,13 @@ const reasonLabels: Record<string, string> = {
   NEXT_CANDLE_CLOSE: '매수 다음 캔들 종가 청산',
   ENVELOPE_CENTER: '엔벨로프 중심선 청산',
   ENVELOPE_OPPOSITE: '엔벨로프 반대 밴드 청산',
+  NEW_HIGH_MA_EXIT: 'MA10·MA20 이탈 청산',
 };
 
 function defaultRequest(settings: BacktestSettings, strategy: Strategy): BacktestRequestBody {
   // The optional AWS fallback still runs VOLATILITY v1. Do not silently send a
   // v2 request to that incompatible calculation. Old server histories stay readable.
-  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE') throw new Error('이 전략은 이 기기에서 분석합니다.');
+  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH') throw new Error('이 전략은 이 기기에서 분석합니다.');
   const body: BacktestRequestBody = {
     strategy,
     mode: settings.mode,
@@ -194,10 +200,10 @@ function restoredServerJob(entry: BacktestHistoryEntry): ServerJob {
 }
 
 export function StrategyBacktest({ strategy, context, embedded = false, forcedMode, preferredSettings }: StrategyBacktestProps) {
-  const defaults = useMemo(defaultSettings, []);
+  const defaults = useMemo(() => strategySettings(strategy, defaultSettings()), [strategy]);
   const [settings, setSettings] = useState<BacktestSettings>(() => {
     const value = { ...(preferredSettings ?? loadSettings(strategy, defaults)), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
-    return strategy === 'ENVELOPE' ? currentEnvelopeSettings(value) : value;
+    return strategySettings(strategy, value);
   });
   const [expanded, setExpanded] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(() => forcedMode ? null : loadCachedResult(strategy));
@@ -262,7 +268,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
   useEffect(() => {
     const requestId = ++resultRequestRef.current;
     const stored = { ...(preferredSettings ?? loadSettings(strategy, defaults)), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
-    const fallback = strategy === 'ENVELOPE' ? currentEnvelopeSettings(stored) : stored;
+    const fallback = strategySettings(strategy, stored);
     analysisSettingsRef.current = fallback;
     setSettings(fallback);
     setResult(forcedMode ? null : loadCachedResult(strategy));
@@ -277,7 +283,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
       if (forcedMode && view.settings.mode !== forcedMode) return;
       setLocalJob(view);
       const snapshot = { ...defaults, ...view.settings };
-      if (view.status !== 'COMPLETED') setSettings(strategy === 'ENVELOPE' ? currentEnvelopeSettings(snapshot) : snapshot);
+      if (view.status !== 'COMPLETED') setSettings(strategySettings(strategy, snapshot));
       setRunning(view.status === 'RUNNING' && isLocalBacktestRunning(strategy));
       analysisSettingsRef.current = snapshot;
       if (view.result) setResult(view.result);
@@ -305,7 +311,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
         if (saved && requestId === resultRequestRef.current) { setResult(saved.result); analysisSettingsRef.current = { ...defaults, ...saved.settings }; }
         return;
       }
-      if (strategy === 'ENVELOPE') return;
+      if (strategy === 'ENVELOPE' || strategy === 'NEW_HIGH') return;
       const job = await getServerBacktest(contextRef.current, strategy);
       if (job && requestId === resultRequestRef.current) {
         setServerJob(job);
@@ -364,7 +370,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
 
   const update = <K extends keyof BacktestSettings>(key: K, value: BacktestSettings[K]) => {
     const changed = { ...settings, [key]: value, ...(key === 'symbol' ? { envelopeRisk: undefined } : {}) };
-    const next = strategy === 'ENVELOPE' ? currentEnvelopeSettings(changed) : changed;
+    const next = strategySettings(strategy, changed);
     setSettings(next);
     saveSettings(strategy, next);
   };
@@ -373,7 +379,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     const refreshSharedStorage = (): void => {
       if (document.visibilityState === 'hidden' || running || (serverJob && ['QUEUED', 'RUNNING'].includes(serverJob.status))) return;
       const stored = { ...loadSettings(strategy, defaults), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
-      const shared = strategy === 'ENVELOPE' ? currentEnvelopeSettings(stored) : stored;
+      const shared = strategySettings(strategy, stored);
       setSettings(current => JSON.stringify(current) === JSON.stringify(shared) ? current : shared);
       if (historyOpen) setHistoryEntries(loadBacktestHistory(strategy, shared.mode, historyScopeSymbol(shared)));
     };
@@ -399,6 +405,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     if (strategy === 'DISPARITY' && (!/^([1-9]|[1-9]\d|100)$/.test(settings.roiClosePercent))) throw new Error('ROI 손실 청산은 1~100 정수로 입력해 주세요.');
     if (strategy === 'VOLATILITY') volatilityParameters(settings);
     if (strategy === 'ENVELOPE') envelopeParameters(settings);
+    if (strategy === 'NEW_HIGH') newHighPeriod(settings);
     const start = Date.parse(`${settings.startDate}T${settings.startTime}:00+09:00`);
     const end = settings.endDate ? Date.parse(`${settings.endDate}T${settings.endTime}:00+09:00`) : Date.now();
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start > Date.now()) throw new Error('분석 기간을 확인해 주세요.');
@@ -502,7 +509,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     const snapshot = { ...defaults, ...entry.settings };
     analysisSettingsRef.current = snapshot;
     restoringHistoryRef.current = true;
-    const displaySettings = strategy === 'ENVELOPE' ? currentEnvelopeSettings(snapshot) : snapshot;
+    const displaySettings = strategySettings(strategy, snapshot);
     setSettings(displaySettings);
     saveSettings(strategy, displaySettings);
     saveCachedResult(strategy, restored);
@@ -638,7 +645,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
   };
 
   const activeServer = serverJob && ['QUEUED', 'RUNNING'].includes(serverJob.status);
-  const title = strategy === 'PULLBACK' ? '눌림목' : strategy === 'DISPARITY' ? '이격매매' : strategy === 'ENVELOPE' ? '엔벨로프' : '변동성 돌파';
+  const title = strategy === 'NEW_HIGH' ? '신고가' : strategy === 'PULLBACK' ? '눌림목' : strategy === 'DISPARITY' ? '이격매매' : strategy === 'ENVELOPE' ? '엔벨로프' : '변동성 돌파';
   const resultTrades = result?.recentTrades ? [...result.recentTrades].reverse() : [];
   const currentHistorySymbol = historyScopeSymbol(settings);
   const historyLabel = settings.mode === 'ALL'
@@ -661,7 +668,12 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
         {expanded ? (
           <section className="surface-card condition-card">
             <h3>검색 조건</h3>
-            {strategy === 'PULLBACK' ? (
+            {strategy === 'NEW_HIGH' ? (
+              <div className="condition-copy"><strong>롱 포지션</strong>{newHighRules.long.map((text, index) => <p key={text}>{index + 1}. {text}</p>)}
+                <strong>숏 포지션</strong>{newHighRules.short.map((text, index) => <p key={text}>{index + 1}. {text}</p>)}
+                <strong>공통 체결·자금 기준</strong><p>{newHighRules.common}</p>
+              </div>
+            ) : strategy === 'PULLBACK' ? (
               <div className="condition-copy">
                 <strong>롱 포지션</strong>
                 <p>1. 전파동 저점·고점 &gt; 전전파동 저점·고점</p>
@@ -751,8 +763,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           </div>
 
           <h2>{strategy === 'ENVELOPE' ? '중심선 · 매매 기준 1h' : '캔들 주기'}</h2>
-          {strategy === 'ENVELOPE' ? <p className="notice small">1시간봉 고정</p> : <div className="segmented four">
-            {(['15m', '1h', '4h', '1d'] as const).map((interval) => <button key={interval} type="button" className={settings.interval === interval ? 'selected' : ''} onClick={() => update('interval', interval)}>{interval.toUpperCase()}</button>)}
+          {strategy === 'ENVELOPE' ? <p className="notice small">1시간봉 고정</p> : <div className={`segmented${strategy === 'NEW_HIGH' ? '' : ' four'}`}>
+            {(strategy === 'NEW_HIGH' ? ['1h', '4h'] as const : ['15m', '1h', '4h', '1d'] as const).map((interval) => <button key={interval} type="button" className={settings.interval === interval ? 'selected' : ''} onClick={() => update('interval', interval)}>{interval.toUpperCase()}</button>)}
           </div>}
 
           <h2>분석 기간 (한국시간)</h2>
@@ -765,11 +777,15 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
 
           <div className="field-grid three">
             <label className="field-label">가상 초기자금<input inputMode="decimal" value={settings.initialCapitalUsdt} onChange={(event) => update('initialCapitalUsdt', event.target.value)} /></label>
-            <label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={(event) => update('betAmountUsdt', event.target.value)} /></label>
+            <label className="field-label">{strategy === 'NEW_HIGH' ? '고정 베팅액 (1Unit)' : '고정 베팅액'}<input inputMode="decimal" value={settings.betAmountUsdt} onChange={(event) => update('betAmountUsdt', event.target.value)} /></label>
             <label className="field-label">레버리지<input inputMode="decimal" value={settings.leverage} onChange={(event) => update('leverage', event.target.value)} /><small>1~{leverageMaximum}배</small></label>
           </div>
 
-          {strategy === 'PULLBACK' ? (
+          {strategy === 'NEW_HIGH' ? <>
+            <label className="field-label">신고가 기준 봉수<input type="number" inputMode="numeric" min="6" max="1000" step="1" value={settings.newHighLookback ?? '20'} onChange={event => update('newHighLookback', event.target.value)} /><small>6~1000 · 기본 20 · 현재 봉 제외 · 최근 5봉에 고가/저가가 있으면 제외</small></label>
+            <p className="notice small">돌파 즉시 진입 · 돌파선 ± 1ATR 이내만 매수 · 최초/추가매수가 ± 2ATR SL · ATR마다 최대 4회 불타기 · MA10·MA20 이탈 전량 청산</p>
+            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 최초 진입 외 추가매수 4회까지 가능합니다. 최초 SL도 매수가 ± 2ATR이며 이평선 역전 확인은 이전 20봉 고정입니다.</p>
+          </> : strategy === 'PULLBACK' ? (
             <label className="field-label">전체 TP 직전 파동폭 (%)<input inputMode="numeric" value={settings.fullTpWavePercent} onChange={(event) => update('fullTpWavePercent', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>1~100 · 기본 100</small></label>
           ) : strategy === 'DISPARITY' ? (
             <>
@@ -800,7 +816,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <label className="checkbox-row"><input type="checkbox" checked={settings.volatilityNextCloseEnabled} onChange={(event) => update('volatilityNextCloseEnabled', event.target.checked)} /><span>매수 다음 캔들 종가 청산</span></label>
               <p className="muted small">봉 중간 K1 돌파에 진입하며 SL은 진입 시점까지의 저가(롱)·고가(숏)로 고정합니다. 두 옵션은 먼저 충족한 조건으로 청산하며, 모두 끄면 SL만 적용합니다. 신호봉의 1분봉은 필요한 구간만 조회·캐시하며 1분봉 내부 경로는 보수적으로 추정합니다.</p>
             </>
-          ) : strategy !== 'ENVELOPE' ? (
+          ) : strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' ? (
             <>
               <label className="checkbox-row"><input type="checkbox" checked={settings.partialTpEnabled} onChange={(event) => update('partialTpEnabled', event.target.checked)} /><span>부분 TP 50%</span></label>
               <p className="muted small">{strategy === 'PULLBACK' ? '1차 매수가와 최초 TP의 중간에서 50% 청산합니다. 2차 체결 시 미체결 부분 TP는 취소됩니다.' : '매수가와 신호 시점 MA60의 중간에서 50% 청산하고 SL을 최초 매수가로 옮깁니다.'}</p>
@@ -814,7 +830,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           </div>
           {!running && !statisticsRunning && !activeServer && localJob?.status === 'PAUSED' && canResumeLocalJob(localJob) ? <button className="outline-button" type="button" onClick={() => run(true)}>분석 이어하기</button> : null}
           {localJob && localJob.status !== 'COMPLETED' ? <p className="muted small">화면을 끄거나 탭을 닫으면 분석이 정지될 수 있습니다. 다시 열어 ‘분석 이어하기’를 누르면 저장된 지점부터 계속합니다.</p> : null}
-          {error && strategy !== 'VOLATILITY' && strategy !== 'ENVELOPE' && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
+          {error && strategy !== 'VOLATILITY' && strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
           <button
             className="outline-button history-toggle"
             type="button"
@@ -892,7 +908,7 @@ function ResultCard({ result, onOpenTrade }: { result: BacktestResult; onOpenTra
         <div><span>수익 · 손실</span><strong>{result.winCount} · {result.lossCount}</strong></div>
         <div><span>최대 낙폭</span><strong>{percent(result.maxDrawdownPercent)}</strong></div>
       </div>
-      <p className="muted small">관찰 캔들 {result.observedBars.toLocaleString()}개 · 수수료 {money(result.feesUsdt)} USDT · 2차 체결 {result.secondFillCount}회</p>
+      <p className="muted small">관찰 캔들 {result.observedBars.toLocaleString()}개 · 수수료 {money(result.feesUsdt)} USDT · {result.pyramidFillCount === undefined ? `2차 체결 ${result.secondFillCount}회` : `불타기 ${result.pyramidFillCount}회`}</p>
       {Object.keys(result.exitReasons).length > 0 ? <div className="reason-list">{Object.entries(result.exitReasons).map(([reason, count]) => <span key={reason}>{reasonLabels[reason] ?? reason} {count}</span>)}</div> : null}
       {result.recentTrades.length > 0 ? (
         <div className="trade-list">

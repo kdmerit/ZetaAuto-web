@@ -31,6 +31,8 @@ interface Holding {
   risk?: ContractRisk;
   envelopeCenter?: number;
   centerStopMoved?: boolean;
+  pyramidCount?: number;
+  lastPyramidPrice?: number;
 }
 
 export interface PortfolioState {
@@ -49,6 +51,7 @@ export interface PortfolioState {
   signals: number;
   insufficientFunds: number;
   secondFills: number;
+  pyramidFills?: number;
   exitReasons: Record<string, number>;
   peak: number;
   maxDrawdown: number;
@@ -82,6 +85,8 @@ export function portfolioEquity(state: PortfolioState): number {
 }
 
 function priceLines(p: Holding): PriceLine[] {
+  if (p.signal.strategy === 'NEW_HIGH') return [{ kind: 'ENTRY', price: p.first }, { kind: 'AVERAGE_ENTRY', price: p.entry }, { kind: 'SL', price: p.stop },
+    ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
   if (p.signal.strategy === 'ENVELOPE') return [{ kind: 'ENTRY', price: p.first }, { kind: 'SL', price: p.stop },
     ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
   if (p.signal.strategy === 'VOLATILITY') return [
@@ -101,7 +106,7 @@ function priceLines(p: Holding): PriceLine[] {
 }
 
 function recordFill(p: Holding, kind: Execution['kind'], price: number, quantity: number, candle: Candle, opening = false, confirmedClose = false): void {
-  const intrabar = (p.signal.exitMode === 'VOLATILITY_TP' || p.signal.exitMode === 'ENVELOPE_TOUCH') && !opening && !confirmedClose;
+  const intrabar = (p.signal.exitMode === 'VOLATILITY_TP' || p.signal.exitMode === 'ENVELOPE_TOUCH' || p.signal.exitMode === 'NEW_HIGH_TOUCH') && !opening && !confirmedClose;
   const parentOpenTime = (candle as Candle & { parentOpenTime?: number }).parentOpenTime ?? candle.openTime;
   p.executions.push({ kind, price, quantity, at: opening || intrabar ? candle.openTime : candle.closeTime, candleOpenAt: parentOpenTime,
     ...(intrabar ? { timing: 'INTRABAR' as const } : confirmedClose ? { timing: 'BAR_CLOSE' as const } : {}) });
@@ -116,7 +121,7 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'NEXT_CANDLE_CLOSE'].includes(reason);
+  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_MA_EXIT'].includes(reason);
   const fill = market ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
   const qty = Math.min(p.qty, quantity);
   const profit = gross(p, fill, qty);
@@ -134,7 +139,7 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
     tradeId: `local:${p.symbol}:${p.opened}:${candle.openTime}:${p.executions.length}`,
     symbol: p.symbol, side: p.signal.side, entryAt: p.opened,
     exitAt: p.executions.at(-1)!.at,
-    entryPrice: p.entry, exitPrice: fill, quantity: qty, reason, netProfitUsdt: profit - fee,
+    entryPrice: p.entry, exitPrice: fill, quantity: qty, reason, netProfitUsdt: p.signal.strategy === 'NEW_HIGH' ? p.net : profit - fee,
     signalIndex: p.signal.index, entryIndex: p.signal.index, exitIndex: -1,
     signal: { ...p.signal, target: p.target, partial: p.partial ?? undefined, second: p.secondFill ?? p.second,
       initialStop: p.signal.stop, activeStop: p.stop, averageEntry: p.entry },
@@ -167,12 +172,12 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   const margin = split ? bet / 2 : bet;
   const fee = margin * leverage * feeRate;
   const p: Holding = {
-    symbol, signal, opened: signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'ENVELOPE_TOUCH' ? candle.openTime : candle.closeTime, first: entry, entry, qty: margin * leverage / entry,
+    symbol, signal, opened: signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH' ? candle.openTime : candle.closeTime, first: entry, entry, qty: margin * leverage / entry,
     margin, reserved: bet - margin, reservedFee: (bet - margin) * leverage * feeRate,
     pending: split, second: split ? (entry + signal.stop) / 2 : entry,
     ...(signal.strategy === 'ENVELOPE' && settings.envelopeRisk?.symbol === symbol ? { risk: settings.envelopeRisk } : {}),
     target,
-    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
+    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' && signal.strategy !== 'NEW_HIGH' ? (entry + signal.initialTarget) / 2 : null,
     partialDone: false, stop: signal.strategy === 'ENVELOPE' ? entry * (1 - direction * signal.envelopeDeviationPercent! / 100) : signal.stop, mark: candle.close, net: -fee, executions: [],
   };
   if (signal.strategy === 'ENVELOPE') {
@@ -440,6 +445,7 @@ function mergePath(state: PortfolioState, selected: PortfolioState, symbol: stri
   for (const field of ['realized', 'fees', 'closed', 'wins', 'losses', 'breakeven', 'secondFills', 'entries', 'signals', 'insufficientFunds'] as const) state[field] += selected[field];
   state.winningProfit = (state.winningProfit ?? 0) + (selected.winningProfit ?? 0);
   state.losingLoss = (state.losingLoss ?? 0) + (selected.losingLoss ?? 0);
+  if (selected.pyramidFills !== undefined) state.pyramidFills = (state.pyramidFills ?? 0) + selected.pyramidFills;
   for (const [reason, count] of Object.entries(selected.exitReasons)) state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + count;
   state.trades = [...state.trades, ...selected.trades].slice(-100);
   if (selected.positions[symbol]) state.positions[symbol] = selected.positions[symbol];
@@ -449,6 +455,7 @@ function mergePath(state: PortfolioState, selected: PortfolioState, symbol: stri
 function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, settings: BacktestSettings): void {
   const position = state.positions[symbol];
   if (!position) return;
+  if (position.signal.strategy === 'NEW_HIGH') return; // Replayed with entry/addition funding together below.
   if (position.signal.strategy === 'DISPARITY') {
     if (bar.ma60Exit === null) throw new Error(`${symbol}의 MA60 계산에 필요한 캔들이 부족합니다.`);
     position.target = bar.ma60Exit;
@@ -462,6 +469,127 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
   }
   const candidates = [replayPath(position, bar, settings, true), replayPath(position, bar, settings, false)];
   mergePath(state, worstPath(candidates), symbol);
+}
+
+interface NewHighPath { state: PortfolioState; spent: number }
+/** Causal price-dependent MA10/20; final candle.close is never an entry filter. */
+function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, holding: Holding | undefined, lowFirst: boolean): NewHighPath {
+  const state = initialPortfolio(available); const definition = bar.newHigh!; const candle = bar.candle;
+  state.pyramidFills = 0;
+  if (holding) state.positions[symbol] = structuredClone(holding);
+  let spent = 0; let attempted = holding !== undefined;
+  const cost = Number(settings.betAmountUsdt) * (1 + Number(settings.leverage) * feeRate);
+  const ma10 = (price: number) => (definition.sum9 + price) / 10;
+  const ma20 = (price: number) => (definition.sum19 + price) / 20;
+  const tolerance = (...values: number[]) => Math.max(Number.MIN_VALUE, ...values.map(value => Math.abs(value) * Number.EPSILON * 16));
+  const additionAllowed = (p: Holding, price: number): boolean => {
+    const direction = p.signal.side === 'LONG' ? 1 : -1;
+    return definition.atr !== null && definition.atr > 0 && (p.pyramidCount ?? 0) < 4
+      && direction * (ma10(price) - definition.previousMa10) > 0
+      && direction * (price - ma10(price)) > 0 && direction * (price - ma20(price)) > 0
+      && direction * (price - (p.lastPyramidPrice ?? p.first)) >= definition.atr - tolerance(price, p.lastPyramidPrice ?? p.first, definition.atr);
+  };
+  const add = (p: Holding, price: number, opening: boolean): void => {
+    if (!additionAllowed(p, price)) return;
+    if (state.cash + 1e-10 < cost) { state.insufficientFunds += 1; return; }
+    const direction = p.signal.side === 'LONG' ? 1 : -1;
+    const fill = price * (1 + direction * slippage); const stop = fill - direction * 2 * definition.atr!;
+    if (!(stop > 0)) return;
+    const margin = Number(settings.betAmountUsdt); const notional = margin * Number(settings.leverage); const fee = notional * feeRate;
+    const qty = notional / fill;
+    p.entry = (p.entry * p.qty + notional) / (p.qty + qty); p.qty += qty; p.margin += margin;
+    p.net -= fee; p.stop = stop; p.lastPyramidPrice = fill; p.pyramidCount = (p.pyramidCount ?? 0) + 1;
+    state.cash -= cost; state.realized -= fee; state.fees += fee; spent += cost;
+    state.pyramidFills = (state.pyramidFills ?? 0) + 1;
+    recordFill(p, 'PYRAMID_ENTRY', fill, qty, candle, opening);
+  };
+  const attempt = (side: 'LONG' | 'SHORT', price: number): void => {
+    attempted = true;
+    const direction = side === 'LONG' ? 1 : -1;
+    const fill = price * (1 + direction * slippage);
+    const boundary = side === 'LONG' ? definition.high : definition.low;
+    if (direction * (ma10(price) - ma20(price)) <= 0 || direction * (fill - boundary) > definition.atr! + tolerance(fill, boundary, definition.atr!)) return;
+    const stop = fill - direction * 2 * definition.atr!;
+    if (!(stop > 0) || (side === 'LONG' ? stop >= price : stop <= price)) return;
+    enter(state, symbol, { strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime),
+      entry: price, stop, target: price, initialTarget: price, exitMode: 'NEW_HIGH_TOUCH' }, candle, settings);
+    const p = state.positions[symbol];
+    if (p) {
+      spent += cost; p.pyramidCount = 0; p.lastPyramidPrice = p.first;
+      p.stop = stop; p.signal = { ...p.signal, stop, initialStop: stop, activeStop: stop };
+    }
+  };
+  const eligible = (side: 'LONG' | 'SHORT'): boolean => definition.atr !== null && definition.atr > 0 && (side === 'LONG' ? definition.long : definition.short);
+  const crossPrice = definition.sum19 - 2 * definition.sum9;
+  const longEntry = definition.high; const shortEntry = definition.low;
+  const atOpen = state.positions[symbol];
+  if (atOpen) {
+    const long = atOpen.signal.side === 'LONG';
+    if (long ? candle.open <= atOpen.stop : candle.open >= atOpen.stop) close(state, atOpen, candle.open, atOpen.qty, 'SL', candle, true);
+    else if (long ? candle.open < ma10(candle.open) && candle.open < ma20(candle.open) : candle.open > ma10(candle.open) && candle.open > ma20(candle.open)) close(state, atOpen, candle.open, atOpen.qty, 'NEW_HIGH_MA_EXIT', candle, true);
+    else add(atOpen, candle.open, true);
+  } else if (eligible('LONG') && candle.open > longEntry) attempt('LONG', candle.open);
+  else if (eligible('SHORT') && candle.open < shortEntry) attempt('SHORT', candle.open);
+  const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
+  for (let i = 1; i < path.length; i += 1) {
+    let before = path[i - 1]!; const after = path[i]!;
+    // Initial + four additions + one exit is the maximum possible sequence per segment.
+    for (let count = 0; count < 8; count += 1) {
+      const p = state.positions[symbol];
+      const events: { price: number; kind: 'SL' | 'EXIT' | 'ADD' | 'LONG' | 'SHORT' }[] = [];
+      if (p) {
+        const long = p.signal.side === 'LONG';
+        if (long ? before >= p.stop && after <= p.stop : before <= p.stop && after >= p.stop) events.push({ price: p.stop, kind: 'SL' });
+        const exit = long ? Math.min(definition.sum9 / 9, definition.sum19 / 19) : Math.max(definition.sum9 / 9, definition.sum19 / 19);
+        if (long ? before >= exit && after < exit : before <= exit && after > exit) events.push({ price: exit, kind: 'EXIT' });
+        if (definition.atr !== null && definition.atr > 0 && (p.pyramidCount ?? 0) < 4) {
+          const average10Boundary = 10 * definition.previousMa10 - definition.sum9;
+          const target = long ? Math.max((p.lastPyramidPrice ?? p.first) + definition.atr, definition.sum9 / 9, definition.sum19 / 19, average10Boundary)
+            : Math.min((p.lastPyramidPrice ?? p.first) - definition.atr, definition.sum9 / 9, definition.sum19 / 19, average10Boundary);
+          const touchingAllowed = additionAllowed(p, target);
+          if (long ? before <= target && (touchingAllowed ? after >= target : after > target) && after > before
+            : before >= target && (touchingAllowed ? after <= target : after < target) && after < before) events.push({ price: target, kind: 'ADD' });
+        }
+      } else if (!attempted) {
+        if (eligible('LONG') && before <= longEntry && after > longEntry) events.push({ price: longEntry, kind: 'LONG' });
+        if (eligible('SHORT') && before >= shortEntry && after < shortEntry) events.push({ price: shortEntry, kind: 'SHORT' });
+      }
+      events.sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
+      const event = events[0]; if (!event) break;
+      if (event.kind === 'SL' || event.kind === 'EXIT') { close(state, p!, event.price, p!.qty, event.kind === 'SL' ? 'SL' : 'NEW_HIGH_MA_EXIT', candle); break; }
+      if (event.kind === 'LONG' || event.kind === 'SHORT') {
+        const direction = event.kind === 'LONG' ? 1 : -1;
+        attempt(event.kind, event.price === crossPrice ? event.price + direction * tolerance(event.price) : event.price);
+      }
+      else {
+        const previousCount = p!.pyramidCount ?? 0;
+        // At a strict MA boundary use its infinitesimal crossing for eligibility, not final close.
+        const direction = p!.signal.side === 'LONG' ? 1 : -1;
+        const eligiblePrice = additionAllowed(p!, event.price) ? event.price : event.price + direction * tolerance(event.price);
+        add(p!, eligiblePrice, false);
+        if ((p!.pyramidCount ?? 0) === previousCount) break;
+      }
+      before = event.price;
+    }
+  }
+  if (state.positions[symbol]) state.positions[symbol]!.mark = candle.close;
+  return { state, spent };
+}
+
+function replayNewHighRows(state: PortfolioState, rows: { symbol: string; bar: PreparedBar }[], settings: BacktestSettings, budget: number): number {
+  for (const { symbol, bar } of rows) {
+    if (!bar.newHigh) {
+      if (state.positions[symbol]?.signal.strategy === 'NEW_HIGH') throw new Error(`${symbol}의 신고가 지표 계산에 필요한 캔들이 부족합니다.`);
+      continue;
+    }
+    const available = Math.max(0, Math.min(budget, state.cash));
+    const candidates = [true, false].map(lowFirst => newHighPath(symbol, bar, settings, available, state.positions[symbol], lowFirst));
+    // A profitable raised SL must not outrank the other path's earlier losing MA exit.
+    const selected = candidates.sort((a, b) => portfolioEquity(a.state) - portfolioEquity(b.state)
+      || Number(!!b.state.exitReasons.SL) - Number(!!a.state.exitReasons.SL))[0]!;
+    mergePath(state, selected.state, symbol, available); budget = Math.max(0, budget - selected.spent);
+  }
+  return budget;
 }
 
 /** Close-entry strategies reuse exits; intrabar entries use the opening cash budget only. */
@@ -501,6 +629,7 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
     // A later intrabar/close exit must not finance an earlier breakout touch.
     // No same-bar profit/margin recycling or exit-then-retroactive re-entry.
     let intrabarBudget = Math.max(0, state.cash);
+    intrabarBudget = replayNewHighRows(state, rows, settings, intrabarBudget);
     for (const { symbol, bar } of rows) {
       const side = state.positions[symbol]?.signal.side;
       const parameters = side && options.settingsForSymbolSide?.[symbol]?.[side] || options.settingsForSymbol?.[symbol] || settings;
@@ -578,6 +707,7 @@ export function portfolioResult(state: PortfolioState, settings: BacktestSetting
     winningProfitUsdt: state.winningProfit ?? 0, losingLossUsdt: state.losingLoss ?? 0,
     openPositionCount: Object.keys(state.positions).length, insufficientFundsCount: state.insufficientFunds,
     betAmountUsdt: Number(settings.betAmountUsdt), secondFillCount: state.secondFills,
+    ...(state.pyramidFills === undefined ? {} : { pyramidFillCount: state.pyramidFills }),
     signalCount: state.signals, observedBars: state.observedBars, dataStartAt: state.dataStartAt, dataEndAt: state.dataEndAt,
     exitReasons: state.exitReasons, recentTrades: state.trades, equityCurve: state.equityCurve, candles: [],
   };

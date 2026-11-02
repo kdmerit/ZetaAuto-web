@@ -21,6 +21,6 @@ export function MarketIndicatorControls({ value, onApply }: { value: MarketIndic
     <div className="market-indicator-row atr-controls" role="group" aria-label="ATR 엔벨로프 설정"><strong>ATR 엔벨로프</strong>
       {field('emaPeriod', 'EMA', 'ATR 중심 EMA', 'ATR', 120, true)}{field('atrPeriod', 'ATR', 'ATR 기간', 'ATR', 120, true)}{field('atrMultiplier', '×', 'ATR 승수', 'ATR', 20)}
     </div>
-    <p className={`market-indicator-hint${error ? ' indicator-error' : ''}`} role={error ? 'alert' : undefined}>{error ?? '입력 후 다른 곳을 터치하면 적용 · 각 지표의 값이 하나라도 0이면 숨김'}</p>
+    {error ? <p className="indicator-error" role="alert">{error}</p> : null}
   </div>;
 }

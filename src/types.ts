@@ -1,4 +1,4 @@
-export type Strategy = 'PULLBACK' | 'DISPARITY' | 'VOLATILITY' | 'ENVELOPE';
+export type Strategy = 'PULLBACK' | 'DISPARITY' | 'VOLATILITY' | 'ENVELOPE' | 'NEW_HIGH';
 export type EnvelopeExitMode = 'CENTER' | 'OPPOSITE' | 'HALF';
 
 export interface ContractRisk {
@@ -57,6 +57,7 @@ export interface BacktestSettings {
   envelopeEntryMode?: 'RECLAIM';
   envelopeDailyTrend?: boolean;
   envelopeResultOptions?: EnvelopeResultOptions;
+  newHighLookback?: string;
 }
 
 export interface Candle {
@@ -78,6 +79,10 @@ export interface EnrichedCandle extends Candle {
   marketMetrics?: {
     trueRange: number;
     trueRangePercent: number | null;
+    averageTrueRange20d?: number | null;
+    atrPercent?: number | null;
+    atrSamples?: number;
+    expectedAtrSamples?: number;
     averageVolume120d: number | null;
     volumePercent: number | null;
     volumeSamples: number;
@@ -97,7 +102,7 @@ export interface Wave {
   high: number;
 }
 
-export type MarkerKind = 'ENTRY' | 'SPLIT_ENTRY' | 'PARTIAL_TP' | 'CLOSE';
+export type MarkerKind = 'ENTRY' | 'SPLIT_ENTRY' | 'PYRAMID_ENTRY' | 'PARTIAL_TP' | 'CLOSE';
 
 export interface ChartMarker {
   id: string;
@@ -216,7 +221,7 @@ export interface Signal {
   breakoutRangePercent?: number;
   breakoutRange?: number;
   breakoutLevel?: number;
-  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'ENVELOPE_TOUCH';
+  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'ENVELOPE_TOUCH' | 'NEW_HIGH_TOUCH';
   envelopeDeviationPercent?: number;
   envelopeExitMode?: EnvelopeExitMode;
   envelopeMaPeriod?: number;
@@ -247,6 +252,7 @@ export interface BacktestResult {
   insufficientFundsCount: number;
   betAmountUsdt: number;
   secondFillCount: number;
+  pyramidFillCount?: number;
   signalCount: number;
   observedBars: number;
   dataStartAt: number | null;

@@ -1,4 +1,6 @@
 import { enrichCandles, intervalSeconds } from './api';
+import { calendarAtr, trueRange } from './atr';
+export { trueRange } from './atr';
 import type { BacktestInterval, Candle, ChartData, EnrichedCandle } from './types';
 
 export interface MarketIndicatorSettings {
@@ -36,21 +38,19 @@ export function saveMarketIndicators(settings: MarketIndicatorSettings): void {
   try { localStorage.setItem(marketIndicatorStorageKey, JSON.stringify(settings)); } catch { /* Indicators still work without persistence. */ }
 }
 
-export function trueRange(candle: Candle, previousClose?: number): number {
-  const range = candle.high - candle.low;
-  return previousClose === undefined ? range : Math.max(range, Math.abs(candle.high - previousClose), Math.abs(candle.low - previousClose));
-}
-
 /** Average same-resolution volumes in [t - 120 days, t); never include the selected candle. */
 export function enrichMarketCandles(rows: Candle[], interval: BacktestInterval): EnrichedCandle[] {
   let left = 0; let volume = 0;
   const expectedVolumeSamples = volumeWindowSeconds / intervalSeconds(interval);
+  const atr = calendarAtr(rows, interval, true);
   return enrichCandles(rows).map((candle, index) => {
     while (left < index && rows[left]!.openTime < candle.openTime - volumeWindowSeconds) volume -= rows[left++]!.volume;
     const samples = index - left;
     const average = samples ? Math.max(0, volume) / samples : null;
     const tr = trueRange(candle, rows[index - 1]?.close);
     const enriched = { ...candle, marketMetrics: { trueRange: tr, trueRangePercent: candle.close > 0 ? tr / candle.close * 100 : null,
+      averageTrueRange20d: atr[index]!.value, atrPercent: candle.close > 0 && atr[index]!.value !== null ? atr[index]!.value! / candle.close * 100 : null,
+      atrSamples: atr[index]!.samples, expectedAtrSamples: atr[index]!.expected,
       averageVolume120d: average, volumePercent: average !== null && average > 0 ? candle.volume / average * 100 : null,
       volumeSamples: samples, expectedVolumeSamples } };
     volume += candle.volume;

@@ -6,6 +6,7 @@ import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, 
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateMinuteCandles } from './intrabar';
 import { currentEnvelopeSettings } from './envelope';
+import { currentNewHighSettings, newHighWarmup } from './newHigh';
 import type { BacktestResult, BacktestSettings, Strategy } from './types';
 import { loadWeeklyUniverse, saveWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
 
@@ -19,7 +20,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'ENVELOPE' ? '2.10.45' : strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
+  return strategy === 'NEW_HIGH' ? '2.10.47' : strategy === 'ENVELOPE' ? '2.10.45' : strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);
@@ -162,7 +163,8 @@ async function executeWithLease(
       savedSnapshotKey = `checkpoint:${job.id}:${job.blockStart}`;
     } else {
       if (!options.settings) throw new Error('분석 설정이 없습니다.');
-      const settings = options.strategy === 'ENVELOPE' ? currentEnvelopeSettings(structuredClone(options.settings)) : structuredClone(options.settings);
+      const copied = structuredClone(options.settings);
+      const settings = options.strategy === 'NEW_HIGH' ? currentNewHighSettings(copied) : options.strategy === 'ENVELOPE' ? currentEnvelopeSettings(copied) : copied;
       const { start, end } = analysisWindow(settings);
       previousJob = await readValue<SavedJob>('jobs', options.strategy);
       job = {
@@ -230,7 +232,8 @@ async function executeWithLease(
       while (job.cursor < job.universe.length) {
         signal.throwIfAborted();
         const instrument = job.universe[job.cursor]!;
-        const candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - 200 * seconds, blockEnd, job.end, signal);
+        const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings) : 200 * seconds;
+        const candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
         const daily = job.strategy === 'ENVELOPE' && job.settings.envelopeDailyTrend
           ? await ensureCandles(instrument, '1d', Math.floor(job.blockStart / 86400) * 86400 - 25 * 86400, Math.floor((blockEnd - seconds) / 86400) * 86400, undefined, signal) : undefined;
         const prepared = prepareSymbolBlock(instrument.symbol, candles, job.settings, job.strategy, job.blockStart, blockEnd, job.waveStates[instrument.symbol], undefined, daily);
@@ -239,6 +242,7 @@ async function executeWithLease(
           bar.envelope.long &&= instrument.LONG;
           bar.envelope.short &&= instrument.SHORT;
         }
+        for (const bar of prepared.bars) if (bar.newHigh) { bar.newHigh.long &&= instrument.LONG; bar.newHigh.short &&= instrument.SHORT; }
         for (const bar of prepared.bars) {
           if (bar.signal?.exitMode !== 'VOLATILITY_TP') continue;
           bar.intrabarCandles = await ensureCandles(instrument, '1m', bar.candle.openTime, bar.candle.closeTime, bar.candle.closeTime, signal);

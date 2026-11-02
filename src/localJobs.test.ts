@@ -33,7 +33,7 @@ beforeEach(async () => {
   vi.mocked(ensureCandles).mockImplementation(async (_instrument, interval, from, end) => {
     if (interval === '1d') return dailyTrendRows(settings).filter(row => row.openTime >= from && row.openTime < end);
     const rows: Candle[] = [];
-    const step = interval === '1m' ? 60 : 3600;
+    const step = interval === '1m' ? 60 : interval === '4h' ? 14400 : 3600;
     for (let at = from; at < end; at += step) {
       const phase = ((Math.floor((at - origin) / 3600) % 20) + 20) % 20;
       const prices = phase === 8 ? [101, 102, 99, 100] : phase === 9 ? [100, 102, 99, 101]
@@ -50,6 +50,24 @@ beforeEach(async () => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('durable local analysis', () => {
+  it.each(['1h', '4h'] as const)('saves and resumes NEW_HIGH %s with twenty-day ATR warmup and the original Unit/N settings', async interval => {
+    const input = { ...settings, interval, newHighLookback: '30' };
+    const pause = new AbortController();
+    await executeLocalJob({ strategy: 'NEW_HIGH', settings: input }, view => { if (view.blockStart > origin && view.phase === 'DATA') pause.abort(); }, pause.signal);
+    const paused = (await loadLocalJob('NEW_HIGH'))!;
+    const seconds = interval === '1h' ? 3600 : 14400;
+    for (const call of vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === interval)) expect(call[3]! - call[2]).toBeGreaterThan(20 * 86400);
+    if (paused.status === 'PAUSED') {
+      await executeLocalJob({ strategy: 'NEW_HIGH', settings: { ...input, newHighLookback: '99', betAmountUsdt: '1' }, resumeId: paused.id }, () => {}, new AbortController().signal);
+    }
+    const completed = (await loadLocalJob('NEW_HIGH'))!; expect(completed.status).toBe('COMPLETED'); expect(completed.version).toBe('2.10.47');
+    expect(completed.id).toBe(paused.id); expect(completed.settings.newHighLookback).toBe('30'); expect(completed.settings.betAmountUsdt).toBe('100');
+    expect(completed.settings.interval).toBe(interval); expect(completed.total).toBe((completed.end - completed.start) / seconds * 2);
+    const saved = (await loadLocalResult(completed.id))!; expect(saved.result).toEqual(completed.result);
+    await executeLocalJob({ strategy: 'NEW_HIGH', settings: input }, () => {}, new AbortController().signal);
+    const whole = (await loadLocalJob('NEW_HIGH'))!;
+    expect({ ...whole.result, localRunId: undefined }).toEqual({ ...saved.result, localRunId: undefined });
+  });
   it('preserves an old envelope checkpoint but requires a new analysis after the reclaim model change', async () => {
     const controller = new AbortController();
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, view => { if (view.blockStart > origin) controller.abort(); }, controller.signal);

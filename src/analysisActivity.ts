@@ -8,7 +8,7 @@ export function useAnalysisBusy(): boolean {
   useEffect(() => {
     const refresh = () => setBusy(isAnalysisBusy());
     const unsubscribes = [subscribeEnvelopeStatistics(refresh), subscribeEnvelopeBatch('ALL_STATS', refresh), subscribeEnvelopeBatch('VIRTUAL', refresh),
-      ...(['PULLBACK', 'DISPARITY', 'VOLATILITY', 'ENVELOPE'] as const).map(strategy => subscribeLocalBacktest(strategy, refresh))];
+      ...(['PULLBACK', 'DISPARITY', 'VOLATILITY', 'ENVELOPE', 'NEW_HIGH'] as const).map(strategy => subscribeLocalBacktest(strategy, refresh))];
     refresh(); return () => { for (const unsubscribe of unsubscribes) unsubscribe(); };
   }, []);
   return busy;

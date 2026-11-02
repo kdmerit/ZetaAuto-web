@@ -3,6 +3,8 @@ import { enrichCandles, intervalSeconds } from './api';
 import { chartTimestamp, tradeChartFills } from './chartData';
 import { ensureCandles, listInstruments } from './marketData';
 import { refreshEnvelopeOverlay } from './envelopeChart';
+import { atrWindowSeconds } from './atr';
+import { enrichMarketCandles } from './marketIndicators';
 import type { BacktestInterval, BacktestTrade, ChartData, ChartMarker, Wave } from './types';
 
 export const chartIntervals: BacktestInterval[] = ['15m', '1h', '4h', '1d'];
@@ -72,8 +74,9 @@ export async function chartAtInterval(
   const end = options.beforeAt ?? Math.min(latestEnd, focusAt + 160 * seconds);
   const start = end - 300 * seconds;
   const instrument = (await listInstruments(source.symbol))[0] ?? { symbol: source.symbol, launchAt: 0 };
-  const rows = await ensureCandles(instrument, interval, start - 200 * seconds, end);
-  const candles = enrichCandles(rows).filter(candle => candle.openTime >= start);
+  const hasAtr = source.candles.some(candle => candle.marketMetrics !== undefined);
+  const rows = await ensureCandles(instrument, interval, start - (hasAtr ? Math.max(atrWindowSeconds + seconds, 200 * seconds) : 200 * seconds), end);
+  const candles = (hasAtr ? enrichMarketCandles(rows, interval) : enrichCandles(rows)).filter(candle => candle.openTime >= start);
   if (!candles.length) throw new Error('선택한 주기의 차트에 표시할 완성봉이 없습니다.');
   const indices = new Map(candles.map((candle, index) => [candle.openTime, index]));
   const executions = events.map(event => ({ ...event, candleIndex: indices.get(event.openTime) ?? -1 }));

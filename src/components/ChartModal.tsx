@@ -395,7 +395,8 @@ function ChartSvg({
               <line x1={x} x2={x} y1={highY} y2={lowY} stroke={color} strokeWidth="1.2" />
               <rect x={x - candleWidth / 2} y={Math.min(openY, closeY)} width={candleWidth} height={Math.max(2, Math.abs(closeY - openY))} fill={color} rx="1" />
               {markers.map((marker, markerIndex) => (
-                <g key={marker.id} transform={`translate(${x - 10 + markerIndex * 20},${marker.kind === 'CLOSE' || marker.kind === 'PARTIAL_TP' ? highY - 24 : lowY + 8})`}>
+                <g key={marker.id} data-marker-kind={marker.kind} transform={`translate(${x - 10 + markerIndex * 20},${marker.kind === 'CLOSE' || marker.kind === 'PARTIAL_TP' ? highY - 24 : lowY + 8})`}>
+                  {marker.kind === 'PYRAMID_ENTRY' ? <title>불타기 · {formatPrice(marker.price)} · 수량 {formatPrice(marker.quantity)}</title> : null}
                   <rect width="20" height="20" rx="5" fill={marker.label === 'C' ? '#FF5C78' : marker.label === 'S' ? '#FF5C78' : '#7EA2FF'} />
                   <text x="10" y="14" textAnchor="middle" fill="#071020" fontSize="13" fontWeight="800">{marker.label}</text>
                 </g>
@@ -505,7 +506,7 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
         <div className="chart-header">
           <div>
             <p className="eyebrow">{chart.interval.toUpperCase()} · {chart.market ? 'CHART' : 'BACKTEST'}</p>
-            <h2>{chart.symbol} {!chart.market ? <span className={chart.side === 'LONG' ? 'long-text' : 'short-text'}>{chart.side === 'LONG' ? '롱' : '숏'}</span> : null}</h2>
+            <h2><button className="chart-symbol-close" type="button" onClick={onClose} aria-label={`${chart.symbol} 팝업 닫기`}>{chart.symbol}</button> {!chart.market ? <span className={chart.side === 'LONG' ? 'long-text' : 'short-text'}>{chart.side === 'LONG' ? '롱' : '숏'}</span> : null}</h2>
             <p className="muted chart-reference">{formatDate(fills.entry?.sourceOpenTime ?? firstEntryTime(chart) ?? chart.referenceAt)}</p>
           </div>
           <button className="close-button" type="button" onClick={onClose} aria-label="차트 닫기">×</button>
@@ -547,7 +548,7 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
           </div>
           {infoCandle ? (
             <div className={`candle-info${selected ? '' : ' candle-info-hidden'}`} aria-hidden={!selected}>
-              {chart.market && infoCandle.marketMetrics ? <span className="market-true-range positive" title="TR=max(고가−저가, |고가−이전 종가|, |저가−이전 종가|) · 비율=TR/선택 캔들 종가×100">TR {formatPrice(infoCandle.marketMetrics.trueRange)} ({infoCandle.marketMetrics.trueRangePercent === null ? '—' : `${infoCandle.marketMetrics.trueRangePercent.toFixed(2)}%`})</span> : null}
+              {infoCandle.marketMetrics ? <span className="market-true-range positive" title={`ATR=직전 20일 TR 단순평균(선택 완성봉 포함) · 비율=ATR/선택 캔들 종가×100 · ${infoCandle.marketMetrics.atrSamples ?? 0}/${infoCandle.marketMetrics.expectedAtrSamples ?? 0}봉${(infoCandle.marketMetrics.atrSamples ?? 0) < (infoCandle.marketMetrics.expectedAtrSamples ?? 0) ? ' · 20일 미만: 확보된 봉 평균' : ''}`}>ATR {infoCandle.marketMetrics.averageTrueRange20d == null ? '—' : formatPrice(infoCandle.marketMetrics.averageTrueRange20d)} ({infoCandle.marketMetrics.atrPercent == null ? '—' : `${infoCandle.marketMetrics.atrPercent.toFixed(2)}%`})</span> : null}
               <span>시가 {formatPrice(infoCandle.open)} · 고가 {formatPrice(infoCandle.high)}</span>
               <span>저가 {formatPrice(infoCandle.low)} · 종가 {formatPrice(infoCandle.close)}</span>
               <div className="candle-change-row"><span>몸통 <em className={infoCandle.close >= infoCandle.open ? 'positive' : 'negative'}>{signedPercent(bodyPercent(infoCandle))}</em></span><span>최대 {signedPercent(rangePercent(infoCandle))}</span></div>

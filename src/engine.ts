@@ -2,6 +2,7 @@ import { enrichCandles, intervalSeconds } from './api';
 import { volatilityParameters } from './backtestSettings';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import { bandFor, envelopeParameters, priorMovingAverages, projectDailyTrend, projectEnvelopeBands } from './envelope';
+import { prepareNewHigh, type PreparedNewHigh } from './newHigh';
 import type {
   BacktestResult,
   BacktestSettings,
@@ -398,6 +399,7 @@ export interface PreparedBar {
   intrabarCandles?: Candle[];
   envelope?: PreparedEnvelope;
   envelopeBySide?: Partial<Record<'LONG' | 'SHORT', PreparedEnvelope>>;
+  newHigh?: PreparedNewHigh;
 }
 
 export interface PreparedSymbol {
@@ -418,6 +420,12 @@ export function prepareSymbolBlock(
   minuteCandles?: Candle[],
   dailyCandles?: Candle[],
 ): PreparedSymbol {
+  if (strategy === 'NEW_HIGH') {
+    const definitions = prepareNewHigh(candles, settings);
+    return { symbol, bars: candles.flatMap((candle, index) => candle.openTime < start || candle.openTime >= end ? [] : [{
+      candle, signal: null, ma20: null, ma60Exit: null, ...(definitions[index] ? { newHigh: definitions[index] } : {}),
+    }]) };
+  }
   if (strategy === 'ENVELOPE') {
     const { percent, period } = envelopeParameters(settings);
     const centers = priorMovingAverages(candles, period);
@@ -812,7 +820,7 @@ export function runBacktest(
   minuteCandles?: Candle[],
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
-  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE') {
+  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH') {
     const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
     const start = candles[0]!.openTime;
     const end = candles.at(-1)!.closeTime;
@@ -920,7 +928,7 @@ export function buildLocalChart(
     if (signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
     lines.push(line('TP', signal.target));
     if (signal.partial) lines.push(line('PARTIAL_TP', signal.partial));
-  } else if (signal.strategy === 'ENVELOPE') {
+  } else if (signal.strategy === 'ENVELOPE' || signal.strategy === 'NEW_HIGH') {
     lines.push(line('ENTRY', trade.executions.find(fill => fill.kind === 'ENTRY')?.price ?? trade.entryPrice));
     lines.push(line('SL', signal.activeStop ?? signal.stop));
   } else {
@@ -955,6 +963,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
+  if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 진입하고, 20일 ATR마다 최대 4회 불타기·추가매수가 ±2ATR SL·이평선 이탈 청산을 적용합니다.';
   if (strategy === 'ENVELOPE') return '1h 재돌파 진입·중심선 전량 청산에 일봉 MA20 추세 필터를 선택 적용하고, SMA·이격을 사용자 필터와 수익률·승률 정렬로 비교합니다.';
   if (strategy === 'PULLBACK') {
     return '공통 몸통 파동의 고점·저점 상승과 MA10·MA20·간격의 3봉 연속 증가를 확인한 반전 첫 봉을 2분할 매수합니다.';
