@@ -4,7 +4,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { buildLocalChart, prepareSymbolBlock } from './engine';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import { StrategyBacktest } from './components/StrategyBacktest';
-import type { BacktestSettings, Candle } from './types';
+import type { PreparedBar } from './engine';
+import type { BacktestSettings, Candle, Signal } from './types';
 
 const origin = Date.UTC(2026, 0, 1) / 1000;
 const baseSettings: BacktestSettings = {
@@ -54,5 +55,25 @@ describe('updated pullback MA/envelope strategy', () => {
     expect(result.exitReasons).toEqual({ PULLBACK_ENVELOPE: 1 });
     expect(result.recentTrades[0]!.priceLines).toEqual([{ kind: 'ENTRY', price: result.recentTrades[0]!.entryPrice }]);
     expect(buildLocalChart({ ...result, candles: rows }, result.recentTrades[0]!, settings).envelope?.deviationPercent).toBe(5);
+  });
+
+  it.each(['LONG', 'SHORT'] as const)('exits at MA60 touch before the envelope target, side=%s', side => {
+    const long = side === 'LONG';
+    const signal: Signal = {
+      strategy: 'PULLBACK', side, index: 0, entry: 100, stop: 0,
+      target: long ? 120 : 80, initialTarget: long ? 120 : 80, exitMode: 'PULLBACK_ENVELOPE',
+      envelopeMaPeriod: 20, envelopeDeviationPercent: 5,
+    };
+    const bar = (index: number, signalValue: Signal | null): PreparedBar => ({
+      candle: {
+        openTime: origin + index * 3600, closeTime: origin + (index + 1) * 3600,
+        open: 100, high: long ? 101 : 110, low: long ? 90 : 99, close: 100, volume: 10,
+      },
+      signal: signalValue, ma20: long ? 110 : 90, ma60: long ? 95 : 105, ma120: long ? 90 : 110,
+      ma60Exit: null, pullbackEnvelope: { center: 100, upper: 120, lower: 80, long: true, short: true },
+    });
+    const state = initialPortfolio(1000);
+    replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [bar(0, signal), bar(1, null)] }], { ...baseSettings, side }, origin, origin + 7200, 3600);
+    expect(portfolioResult(state, { ...baseSettings, side }).exitReasons).toEqual({ PULLBACK_MA60: 1 });
   });
 });

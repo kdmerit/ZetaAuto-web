@@ -31,6 +31,7 @@ interface Holding {
   risk?: ContractRisk;
   envelopeCenter?: number;
   centerStopMoved?: boolean;
+  pullbackMa60Exit?: number;
   pyramidCount?: number;
   lastPyramidPrice?: number;
 }
@@ -243,6 +244,11 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
   if (stopped) { close(state, p, opening ? price : p.stop, p.qty, 'SL', candle, opening); return; }
   const roi = roiPrice(p, settings);
   if (roi !== null && (long ? price <= roi : price >= roi)) { close(state, p, opening ? price : roi, p.qty, 'ROI_LOSS', candle, opening); return; }
+  if (p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE'
+    && p.pullbackMa60Exit !== undefined && (long ? price <= p.pullbackMa60Exit : price >= p.pullbackMa60Exit)) {
+    close(state, p, opening ? price : p.pullbackMa60Exit, p.qty, 'PULLBACK_MA60', candle, opening);
+    return;
+  }
   if (p.signal.envelopeMoveSlOnCenter === true && !p.centerStopMoved && p.envelopeCenter !== undefined
     && (long ? p.envelopeCenter > p.entry && price >= p.envelopeCenter : p.envelopeCenter < p.entry && price <= p.envelopeCenter)) {
     const next = (p.entry + p.envelopeCenter) / 2;
@@ -275,6 +281,7 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
     || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
   if (targetEnabled) levels.add(p.target);
   if (p.signal.exitMode !== 'PULLBACK_ENVELOPE' && (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true)) levels.add(p.stop);
+  if (p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE' && p.pullbackMa60Exit !== undefined) levels.add(p.pullbackMa60Exit);
   if (p.pending) levels.add(p.second);
   if (p.partial !== null && !p.partialDone) levels.add(p.partial);
   if (p.signal.envelopeMoveSlOnCenter === true && !p.centerStopMoved && p.envelopeCenter !== undefined) levels.add(p.envelopeCenter);
@@ -498,6 +505,7 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
   if (position.signal.strategy === 'PULLBACK' && position.signal.exitMode === 'PULLBACK_ENVELOPE') {
     if (!bar.pullbackEnvelope) throw new Error(`${symbol}의 눌림목 엔벨로프 계산에 필요한 캔들이 부족합니다.`);
     position.target = position.signal.side === 'LONG' ? bar.pullbackEnvelope.upper : bar.pullbackEnvelope.lower;
+    position.pullbackMa60Exit = bar.ma60 ?? undefined;
   }
   const candidates = [replayPath(position, bar, settings, true), replayPath(position, bar, settings, false)];
   mergePath(state, worstPath(candidates), symbol);

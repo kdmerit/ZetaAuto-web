@@ -137,6 +137,7 @@ const reasonLabels: Record<string, string> = {
   VOLATILITY_MA5_EXIT: '수익구간 MA5 기준 청산',
   NEXT_CANDLE_CLOSE: '매수 다음 캔들 종가 청산',
   PULLBACK_ENVELOPE: '눌림목 엔벨로프 청산',
+  PULLBACK_MA60: '눌림목 MA60 터치 청산',
   PULLBACK_MA_EXIT: '눌림목 정배열 이탈 청산',
   ENVELOPE_CENTER: '엔벨로프 중심선 청산',
   ENVELOPE_OPPOSITE: '엔벨로프 반대 밴드 청산',
@@ -680,10 +681,10 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>1. MA20 &gt; MA60 &gt; MA120 정배열이 최근 5개 캔들에서 계속 유지됩니다.</p>
                 <p>2. MA60과 MA120이 각각 5개 캔들 연속 상승하고, MA60−MA120 값도 5개 캔들 연속 증가합니다.</p>
                 <p>3. 현재 종가가 MA20 이하일 때 종가로 롱 진입합니다.</p>
-                <p>4. 엔벨로프 상단 터치 시 전량 청산합니다.</p>
+                <p>4. MA60 터치 시 전량 청산하고, 엔벨로프 상단 터치 시에도 전량 청산합니다.</p>
                 <p>5. MA20·MA60·MA120 정배열이 깨지면 해당 캔들 종가로 전량 청산합니다.</p>
                 <strong>숏 포지션</strong>
-                <p>위 조건을 반대로 적용합니다. MA20 &lt; MA60 &lt; MA120, MA60·MA120 하락, MA60−MA120 감소, 현재 종가가 MA20 이상일 때 진입하며 엔벨로프 하단 또는 정배열 이탈 시 청산합니다.</p>
+                <p>위 조건을 반대로 적용합니다. MA20 &lt; MA60 &lt; MA120, MA60·MA120 하락, MA60−MA120 감소, 현재 종가가 MA20 이상일 때 진입하며 MA60 터치·엔벨로프 하단·정배열 이탈 시 청산합니다.</p>
                 <p>엔벨로프 중심선은 입력한 SMA, 상·하단은 중심선에서 입력한 이격률만큼 떨어진 가격입니다. 별도 SL·분할매수·부분 TP는 사용하지 않습니다.</p>
               </div>
             ) : strategy === 'DISPARITY' ? (
