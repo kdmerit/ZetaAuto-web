@@ -212,6 +212,7 @@ export interface Signal {
   volatilityK?: number;
   volatilityK1?: number;
   volatilityK2?: number;
+  volatilityAtr?: number;
   // Absent in pre-SL volatility histories; do not turn their placeholder into a stop.
   volatilityStopEnabled?: boolean;
   volatilityPriorExtreme?: number;

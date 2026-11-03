@@ -1,7 +1,9 @@
 import { enrichCandles, intervalSeconds } from './api';
+import { calendarAtr } from './atr';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import { bandFor, envelopeParameters, priorMovingAverages, projectDailyTrend, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
 import { prepareNewHigh, type PreparedNewHigh } from './newHigh';
+import { enrichMarketCandles } from './marketIndicators';
 import type {
   BacktestResult,
   BacktestSettings,
@@ -397,12 +399,14 @@ function volatilitySignals(
   settings: BacktestSettings,
 ): Signal[] {
   const enriched = enrichCandles(candles);
+  const atr = calendarAtr(candles, settings.interval);
   const signals: Signal[] = [];
   for (let index = 5; index < candles.length; index += 1) {
     const candle = candles[index];
     const previous = candles[index - 1];
     const current = enriched[index];
-    if (!candle || !previous || !current || current.ma5 === null) continue;
+    const atrValue = atr[index]?.value ?? null;
+    if (!candle || !previous || !current || current.ma5 === null || atrValue === null || !Number.isFinite(atrValue) || atrValue <= 0) continue;
     const previousBody = Math.abs(previous.close - previous.open);
     const currentBody = Math.abs(candle.close - candle.open);
     if (!Number.isFinite(previousBody) || previousBody <= 0 || !Number.isFinite(currentBody)) continue;
@@ -423,9 +427,7 @@ function volatilitySignals(
     const entry = long
       ? Math.max(candle.open + previousBody * 2, current.ma5 * 2 - candle.low)
       : Math.min(candle.open - previousBody * 2, current.ma5 * 2 - candle.high);
-    const stop = long
-      ? Math.min(candles[index - 2]!.low, candles[index - 1]!.low, candle.low)
-      : Math.max(candles[index - 2]!.high, candles[index - 1]!.high, candle.high);
+    const stop = entry - (long ? 1 : -1) * atrValue * 2;
     if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0) continue;
     if (long ? entry > candle.high : entry < candle.low) continue;
     signals.push({
@@ -434,6 +436,7 @@ function volatilitySignals(
       index,
       entry,
       stop,
+      volatilityAtr: atrValue,
       volatilityStopEnabled: true,
       target: entry,
       initialTarget: entry,
@@ -954,7 +957,7 @@ export function buildLocalChart(
   trade: BacktestTrade,
   settings: BacktestSettings,
 ): ChartData {
-  const all = enrichCandles(result.candles);
+  const all = trade.signal.strategy === 'VOLATILITY' ? enrichMarketCandles(result.candles, settings.interval) : enrichCandles(result.candles);
   const start = Math.max(0, Math.min(trade.entryIndex, trade.signalIndex) - 120);
   const end = Math.min(all.length, Math.max(trade.exitIndex, trade.entryIndex) + 121);
   const candles = all.slice(start, end);
@@ -1040,7 +1043,7 @@ export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'DISPARITY') {
     return 'MA20·MA60 사이 이격, 현재 캔들 절반, 직전 5봉 몸통 돌파와 직전 10봉 MA20 조건을 분석합니다.';
   }
-  return '직전 5개 몸통의 MA5 위치와 현재 몸통 2배 조건을 선택 주기 봉 안에서 추정해 중간 진입하고, 매수 캔들 포함 3개 캔들 극값 SL·완성 캔들의 고가·저가 중간값 MA5 이탈 청산을 적용합니다.';
+  return '직전 5개 몸통의 MA5 위치와 현재 몸통 2배 조건을 선택 주기 봉 안에서 추정해 중간 진입하고, 실제 매수가 ±2ATR SL·완성 캔들의 고가·저가 중간값 MA5 이탈 청산을 적용합니다.';
 }
 
 export function estimateBars(settings: BacktestSettings): number {

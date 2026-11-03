@@ -33,4 +33,8 @@ describe('standalone market chart presentation', () => {
     expect(html).toContain('백테스트 차트'); expect(html).toContain('BACKTEST'); expect(html).toContain('롱'); expect(html).toContain('매수가'); expect(html).toContain('청산가');
     expect(html).not.toContain('ATR 엔벨로프 설정'); expect(html).not.toContain('market-true-range');
   });
+  it('shows the 20-day ATR in a volatility backtest popup', () => {
+    const html = renderToStaticMarkup(<ChartModal chart={{ ...chart, market: undefined, side: 'LONG', priceLines: [{ kind: 'ENTRY', price: 100 }, { kind: 'SL', price: 90 }] }} onClose={() => {}} />);
+    expect(html).toContain('백테스트 차트'); expect(html).toContain('ATR 10 (10.00%)'); expect(html).toContain('market-true-range positive');
+  });
 });

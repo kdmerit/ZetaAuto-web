@@ -176,17 +176,21 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   if (!Number.isFinite(target) || target <= 0 && (signal.exitMode !== 'VOLATILITY_TP' || signal.volatilityTpEnabled !== false)) return;
   const margin = split ? bet / 2 : bet;
   const fee = margin * leverage * feeRate;
+  const activeStop = signal.strategy === 'VOLATILITY' && signal.volatilityAtr !== undefined
+    ? entry - direction * signal.volatilityAtr * 2
+    : signal.strategy === 'ENVELOPE' ? entry * (1 - direction * signal.envelopeDeviationPercent! / 100) : signal.stop;
+  const effectiveSignal = activeStop === signal.stop ? signal : { ...signal, stop: activeStop };
   const p: Holding = {
-    symbol, signal, opened: signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH' ? candle.openTime : candle.closeTime, first: entry, entry, qty: margin * leverage / entry,
+    symbol, signal: effectiveSignal, opened: signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH' ? candle.openTime : candle.closeTime, first: entry, entry, qty: margin * leverage / entry,
     margin, reserved: bet - margin, reservedFee: (bet - margin) * leverage * feeRate,
     pending: split, second: split ? (entry + signal.stop) / 2 : entry,
     ...(signal.strategy === 'ENVELOPE' && settings.envelopeRisk?.symbol === symbol ? { risk: settings.envelopeRisk } : {}),
     target,
     partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' && signal.strategy !== 'NEW_HIGH' && signal.exitMode !== 'PULLBACK_ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
-    partialDone: false, stop: signal.strategy === 'ENVELOPE' ? entry * (1 - direction * signal.envelopeDeviationPercent! / 100) : signal.stop, mark: candle.close, net: -fee, executions: [],
+    partialDone: false, stop: activeStop, mark: candle.close, net: -fee, executions: [],
   };
   if (signal.strategy === 'ENVELOPE') {
-    p.signal = { ...signal, stop: p.stop, initialStop: p.stop };
+    p.signal = { ...effectiveSignal, stop: p.stop, initialStop: p.stop };
     p.envelopeCenter = signal.envelopeCenter;
     if (signal.envelopeExitMode === 'HALF') p.partial = signal.partial ?? null;
   }

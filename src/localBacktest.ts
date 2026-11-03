@@ -106,9 +106,9 @@ export async function chartForLocalTrade(
   const start = end - 300 * seconds;
   const symbol = trade.symbol === 'LOCAL' ? `${settings.symbol.replace(/USDT$/i, '').toUpperCase()}USDT` : trade.symbol;
   const instrument = (await listInstruments(symbol))[0] ?? { symbol, launchAt: 0 };
-  const warmup = trade.signal.strategy === 'NEW_HIGH' ? Math.max(atrWindowSeconds + seconds, 200 * seconds) : 200 * seconds;
+  const warmup = trade.signal.strategy === 'NEW_HIGH' || trade.signal.strategy === 'VOLATILITY' ? Math.max(atrWindowSeconds + seconds, 200 * seconds) : 200 * seconds;
   const rows = await ensureCandles(instrument, settings.interval, start - warmup, end);
-  const candles = (trade.signal.strategy === 'NEW_HIGH' ? enrichMarketCandles(rows, settings.interval) : enrichCandles(rows)).filter(candle => candle.openTime >= start);
+  const candles = (trade.signal.strategy === 'NEW_HIGH' || trade.signal.strategy === 'VOLATILITY' ? enrichMarketCandles(rows, settings.interval) : enrichCandles(rows)).filter(candle => candle.openTime >= start);
   if (!candles.length) throw new Error('차트에 표시할 캔들이 없습니다.');
   const indexFor = (time: number): number => candles.findIndex(candle => candle.openTime === time);
   const executions: ChartData['markers'] = trade.executions.map((execution, index) => ({

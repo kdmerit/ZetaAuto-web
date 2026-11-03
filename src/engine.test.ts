@@ -22,7 +22,7 @@ function row(index: number, prices: number[], volume = 10): Candle {
 function longCandles(): Candle[] {
   return [
     [110, 111, 109, 110], [110, 111, 109, 110], [110, 111, 109, 110], [110, 111, 109, 110],
-    [108.5, 109.5, 108, 109], [107.5, 108.5, 107, 108], [106.5, 107.5, 85, 107], [105.5, 106.5, 105, 106], [104.5, 105.5, 104, 105],
+    [108.5, 109.5, 108, 109], [107.5, 108.5, 107, 108], [106.5, 300, 85, 107], [105.5, 106.5, 105, 106], [104.5, 105.5, 104, 105],
     [108, 130, 90, 120],
     [120, 125, 115, 121],
     [129, 130, 91, 129],
@@ -49,7 +49,8 @@ describe('MA5 body volatility breakout preparation', () => {
       strategy: 'VOLATILITY', side, exitMode: 'VOLATILITY_MA5', volatilityStopEnabled: true,
     });
     expect(signal.entry).toBeCloseTo(side === 'LONG' ? 128.4 : 171.6, 10);
-    expect(signal.stop).toBe(side === 'LONG' ? 90 : 210);
+    expect(signal.volatilityAtr).toBeTypeOf('number');
+    expect(signal.stop).toBeCloseTo(signal.entry - (side === 'LONG' ? 1 : -1) * signal.volatilityAtr! * 2, 10);
     expect(signal.target).toBe(signal.entry);
     expect(signal.entry).not.toBe(rows[9]!.close);
     expect(signal.volatilityK1).toBeUndefined();
@@ -72,10 +73,12 @@ describe('MA5 body volatility breakout preparation', () => {
     expect(prepared(rows).bars[0]!.signal).toBeNull();
   });
 
-  it('uses the current candle and two preceding candles for the stop', () => {
+  it('uses the prior TR average for the two-ATR stop', () => {
     const rows = longCandles();
     rows[7]!.low = 88;
-    expect(prepared(rows).bars[0]!.signal?.stop).toBe(88);
+    const signal = prepared(rows).bars[0]!.signal!;
+    expect(signal.volatilityAtr).toBeTypeOf('number');
+    expect(signal.stop).toBeCloseTo(signal.entry - signal.volatilityAtr! * 2, 10);
   });
 
   it('keeps the signal aligned with a completed candle rather than requiring 1-minute data', () => {
@@ -99,10 +102,10 @@ describe('MA5 body volatility breakout replay', () => {
     expect(result.exitReasons).toEqual({ VOLATILITY_MA5_EXIT: 1 });
     expect(result.recentTrades[0]!.entryPrice).toBeCloseTo(document.bars[0]!.signal!.entry * (side === 'LONG' ? 1.0002 : 0.9998), 10);
     expect(result.recentTrades[0]!.executions[0]).toMatchObject({ timing: 'INTRABAR', candleOpenAt: rows[9]!.openTime });
-    expect(result.recentTrades[0]!.signal.stop).toBe(side === 'LONG' ? 90 : 210);
+    expect(result.recentTrades[0]!.signal.stop).toBeCloseTo(result.recentTrades[0]!.entryPrice - (side === 'LONG' ? 1 : -1) * document.bars[0]!.signal!.volatilityAtr! * 2, 10);
     expect(result.recentTrades[0]!.priceLines).toEqual([
       { kind: 'ENTRY', price: result.recentTrades[0]!.entryPrice },
-      { kind: 'SL', price: side === 'LONG' ? 90 : 210 },
+      { kind: 'SL', price: result.recentTrades[0]!.signal.stop },
     ]);
   });
 
@@ -123,17 +126,17 @@ describe('MA5 body volatility breakout replay', () => {
   it.each([
     ['LONG', longCandles()],
     ['SHORT', mirror(longCandles())],
-  ] as const)('applies the three-candle extreme SL, %s', (side, rows) => {
+  ] as const)('applies the ATR-based SL, %s', (side, rows) => {
     if (side === 'LONG') {
       rows[7]!.low = 95;
       rows[8]!.low = 94;
-      rows[10]!.low = 89;
+      rows[10]!.low = 50;
       rows[10]!.close = 119;
     } else {
       rows[6]!.high = 205;
       rows[7]!.high = 205;
       rows[8]!.high = 206;
-      rows[10]!.high = 211;
+      rows[10]!.high = 260;
       rows[10]!.close = 181;
     }
     const document = prepared(rows, side);
