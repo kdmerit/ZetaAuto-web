@@ -775,14 +775,14 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
 
           <div className="field-grid three">
             <label className="field-label">가상 초기자금<input inputMode="decimal" value={settings.initialCapitalUsdt} onChange={(event) => update('initialCapitalUsdt', event.target.value)} /></label>
-            <label className="field-label">{strategy === 'NEW_HIGH' ? '고정 베팅액 (1Unit)' : '고정 베팅액'}<input inputMode="decimal" value={settings.betAmountUsdt} onChange={(event) => update('betAmountUsdt', event.target.value)} /></label>
+            <label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={(event) => update('betAmountUsdt', event.target.value)} /></label>
             <label className="field-label">레버리지<input inputMode="decimal" value={settings.leverage} onChange={(event) => update('leverage', event.target.value)} /><small>1~{leverageMaximum}배</small></label>
           </div>
 
           {strategy === 'NEW_HIGH' ? <>
             <label className="field-label">신고가 기준 봉수<input type="number" inputMode="numeric" min="6" max="1000" step="1" value={settings.newHighLookback ?? '20'} onChange={event => update('newHighLookback', event.target.value)} /><small>6~1000 · 기본 20 · 현재 봉 제외 · 최근 5봉에 고가/저가가 있으면 제외</small></label>
-            <p className="notice small">돌파 즉시 진입 · 돌파선 ± 1ATR 이내만 매수 · 최초/추가매수가 ± 2ATR SL · ATR마다 최대 4회 불타기 · MA10·MA20 이탈 전량 청산</p>
-            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 최초 진입 외 추가매수 4회까지 가능합니다. 최초 SL도 매수가 ± 2ATR이며 이평선 역전 확인은 이전 20봉 고정입니다.</p>
+            <p className="notice small">돌파 즉시 1회 진입 · 돌파선 ± 1ATR 이내만 매수 · 실제 매수가 ± 2ATR SL · MA10·MA20 이탈 전량 청산</p>
+            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 고정 베팅액으로 한 번만 진입합니다. 최초 SL은 실제 매수가 ± 2ATR이며 이평선 역전 확인은 이전 20봉 고정입니다.</p>
           </> : strategy === 'PULLBACK' ? (
             <>
               <label className="field-label">엔벨로프 SMA<input type="number" inputMode="numeric" min="1" max="120" step="1" value={settings.envelopeMaPeriod ?? '20'} onChange={event => update('envelopeMaPeriod', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>1~120 · 기본 20</small></label>
@@ -902,7 +902,7 @@ function ResultCard({ result, onOpenTrade }: { result: BacktestResult; onOpenTra
         <div><span>수익 · 손실</span><strong>{result.winCount} · {result.lossCount}</strong></div>
         <div><span>최대 낙폭</span><strong>{percent(result.maxDrawdownPercent)}</strong></div>
       </div>
-      <p className="muted small">관찰 캔들 {result.observedBars.toLocaleString()}개 · 수수료 {money(result.feesUsdt)} USDT · {result.pyramidFillCount === undefined ? `2차 체결 ${result.secondFillCount}회` : `불타기 ${result.pyramidFillCount}회`}</p>
+      <p className="muted small">관찰 캔들 {result.observedBars.toLocaleString()}개 · 수수료 {money(result.feesUsdt)} USDT · 2차 체결 {result.secondFillCount}회</p>
       {Object.keys(result.exitReasons).length > 0 ? <div className="reason-list">{Object.entries(result.exitReasons).map(([reason, count]) => <span key={reason}>{reasonLabels[reason] ?? reason} {count}</span>)}</div> : null}
       {result.recentTrades.length > 0 ? (
         <div className="trade-list">

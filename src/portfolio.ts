@@ -32,8 +32,6 @@ interface Holding {
   envelopeCenter?: number;
   centerStopMoved?: boolean;
   pullbackMa60Exit?: number;
-  pyramidCount?: number;
-  lastPyramidPrice?: number;
 }
 
 export interface PortfolioState {
@@ -52,7 +50,6 @@ export interface PortfolioState {
   signals: number;
   insufficientFunds: number;
   secondFills: number;
-  pyramidFills?: number;
   exitReasons: Record<string, number>;
   peak: number;
   maxDrawdown: number;
@@ -86,7 +83,7 @@ export function portfolioEquity(state: PortfolioState): number {
 }
 
 function priceLines(p: Holding): PriceLine[] {
-  if (p.signal.strategy === 'NEW_HIGH') return [{ kind: 'ENTRY', price: p.first }, { kind: 'AVERAGE_ENTRY', price: p.entry }, { kind: 'SL', price: p.stop },
+  if (p.signal.strategy === 'NEW_HIGH') return [{ kind: 'ENTRY', price: p.first }, { kind: 'SL', price: p.stop },
     ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
   if (p.signal.strategy === 'ENVELOPE') return [{ kind: 'ENTRY', price: p.first }, { kind: 'SL', price: p.stop },
     ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
@@ -484,7 +481,6 @@ function mergePath(state: PortfolioState, selected: PortfolioState, symbol: stri
   for (const field of ['realized', 'fees', 'closed', 'wins', 'losses', 'breakeven', 'secondFills', 'entries', 'signals', 'insufficientFunds'] as const) state[field] += selected[field];
   state.winningProfit = (state.winningProfit ?? 0) + (selected.winningProfit ?? 0);
   state.losingLoss = (state.losingLoss ?? 0) + (selected.losingLoss ?? 0);
-  if (selected.pyramidFills !== undefined) state.pyramidFills = (state.pyramidFills ?? 0) + selected.pyramidFills;
   for (const [reason, count] of Object.entries(selected.exitReasons)) state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + count;
   state.trades = [...state.trades, ...selected.trades].slice(-100);
   if (selected.positions[symbol]) state.positions[symbol] = selected.positions[symbol];
@@ -494,7 +490,7 @@ function mergePath(state: PortfolioState, selected: PortfolioState, symbol: stri
 function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, settings: BacktestSettings): void {
   const position = state.positions[symbol];
   if (!position) return;
-  if (position.signal.strategy === 'NEW_HIGH') return; // Replayed with entry/addition funding together below.
+  if (position.signal.strategy === 'NEW_HIGH') return; // Replayed with intrabar funding together below.
   if (position.signal.strategy === 'DISPARITY') {
     if (bar.ma60Exit === null) throw new Error(`${symbol}의 MA60 계산에 필요한 캔들이 부족합니다.`);
     position.target = bar.ma60Exit;
@@ -527,34 +523,12 @@ interface NewHighPath { state: PortfolioState; spent: number }
 /** Causal price-dependent MA10/20; final candle.close is never an entry filter. */
 function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, holding: Holding | undefined, lowFirst: boolean): NewHighPath {
   const state = initialPortfolio(available); const definition = bar.newHigh!; const candle = bar.candle;
-  state.pyramidFills = 0;
   if (holding) state.positions[symbol] = structuredClone(holding);
   let spent = 0; let attempted = holding !== undefined;
   const cost = Number(settings.betAmountUsdt) * (1 + Number(settings.leverage) * feeRate);
   const ma10 = (price: number) => (definition.sum9 + price) / 10;
   const ma20 = (price: number) => (definition.sum19 + price) / 20;
   const tolerance = (...values: number[]) => Math.max(Number.MIN_VALUE, ...values.map(value => Math.abs(value) * Number.EPSILON * 16));
-  const additionAllowed = (p: Holding, price: number): boolean => {
-    const direction = p.signal.side === 'LONG' ? 1 : -1;
-    return definition.atr !== null && definition.atr > 0 && (p.pyramidCount ?? 0) < 4
-      && direction * (ma10(price) - definition.previousMa10) > 0
-      && direction * (price - ma10(price)) > 0 && direction * (price - ma20(price)) > 0
-      && direction * (price - (p.lastPyramidPrice ?? p.first)) >= definition.atr - tolerance(price, p.lastPyramidPrice ?? p.first, definition.atr);
-  };
-  const add = (p: Holding, price: number, opening: boolean): void => {
-    if (!additionAllowed(p, price)) return;
-    if (state.cash + 1e-10 < cost) { state.insufficientFunds += 1; return; }
-    const direction = p.signal.side === 'LONG' ? 1 : -1;
-    const fill = price * (1 + direction * slippage); const stop = fill - direction * 2 * definition.atr!;
-    if (!(stop > 0)) return;
-    const margin = Number(settings.betAmountUsdt); const notional = margin * Number(settings.leverage); const fee = notional * feeRate;
-    const qty = notional / fill;
-    p.entry = (p.entry * p.qty + notional) / (p.qty + qty); p.qty += qty; p.margin += margin;
-    p.net -= fee; p.stop = stop; p.lastPyramidPrice = fill; p.pyramidCount = (p.pyramidCount ?? 0) + 1;
-    state.cash -= cost; state.realized -= fee; state.fees += fee; spent += cost;
-    state.pyramidFills = (state.pyramidFills ?? 0) + 1;
-    recordFill(p, 'PYRAMID_ENTRY', fill, qty, candle, opening);
-  };
   const attempt = (side: 'LONG' | 'SHORT', price: number): void => {
     attempted = true;
     const direction = side === 'LONG' ? 1 : -1;
@@ -566,10 +540,7 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     enter(state, symbol, { strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime),
       entry: price, stop, target: price, initialTarget: price, exitMode: 'NEW_HIGH_TOUCH' }, candle, settings);
     const p = state.positions[symbol];
-    if (p) {
-      spent += cost; p.pyramidCount = 0; p.lastPyramidPrice = p.first;
-      p.stop = stop; p.signal = { ...p.signal, stop, initialStop: stop, activeStop: stop };
-    }
+    if (p) spent += cost;
   };
   const eligible = (side: 'LONG' | 'SHORT'): boolean => definition.atr !== null && definition.atr > 0 && (side === 'LONG' ? definition.long : definition.short);
   const crossPrice = definition.sum19 - 2 * definition.sum9;
@@ -579,29 +550,19 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     const long = atOpen.signal.side === 'LONG';
     if (long ? candle.open <= atOpen.stop : candle.open >= atOpen.stop) close(state, atOpen, candle.open, atOpen.qty, 'SL', candle, true);
     else if (long ? candle.open < ma10(candle.open) && candle.open < ma20(candle.open) : candle.open > ma10(candle.open) && candle.open > ma20(candle.open)) close(state, atOpen, candle.open, atOpen.qty, 'NEW_HIGH_MA_EXIT', candle, true);
-    else add(atOpen, candle.open, true);
   } else if (eligible('LONG') && candle.open > longEntry) attempt('LONG', candle.open);
   else if (eligible('SHORT') && candle.open < shortEntry) attempt('SHORT', candle.open);
   const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
   for (let i = 1; i < path.length; i += 1) {
     let before = path[i - 1]!; const after = path[i]!;
-    // Initial + four additions + one exit is the maximum possible sequence per segment.
-    for (let count = 0; count < 8; count += 1) {
+    for (let count = 0; count < 3; count += 1) {
       const p = state.positions[symbol];
-      const events: { price: number; kind: 'SL' | 'EXIT' | 'ADD' | 'LONG' | 'SHORT' }[] = [];
+      const events: { price: number; kind: 'SL' | 'EXIT' | 'LONG' | 'SHORT' }[] = [];
       if (p) {
         const long = p.signal.side === 'LONG';
         if (long ? before >= p.stop && after <= p.stop : before <= p.stop && after >= p.stop) events.push({ price: p.stop, kind: 'SL' });
         const exit = long ? Math.min(definition.sum9 / 9, definition.sum19 / 19) : Math.max(definition.sum9 / 9, definition.sum19 / 19);
         if (long ? before >= exit && after < exit : before <= exit && after > exit) events.push({ price: exit, kind: 'EXIT' });
-        if (definition.atr !== null && definition.atr > 0 && (p.pyramidCount ?? 0) < 4) {
-          const average10Boundary = 10 * definition.previousMa10 - definition.sum9;
-          const target = long ? Math.max((p.lastPyramidPrice ?? p.first) + definition.atr, definition.sum9 / 9, definition.sum19 / 19, average10Boundary)
-            : Math.min((p.lastPyramidPrice ?? p.first) - definition.atr, definition.sum9 / 9, definition.sum19 / 19, average10Boundary);
-          const touchingAllowed = additionAllowed(p, target);
-          if (long ? before <= target && (touchingAllowed ? after >= target : after > target) && after > before
-            : before >= target && (touchingAllowed ? after <= target : after < target) && after < before) events.push({ price: target, kind: 'ADD' });
-        }
       } else if (!attempted) {
         if (eligible('LONG') && before <= longEntry && after > longEntry) events.push({ price: longEntry, kind: 'LONG' });
         if (eligible('SHORT') && before >= shortEntry && after < shortEntry) events.push({ price: shortEntry, kind: 'SHORT' });
@@ -612,14 +573,6 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
       if (event.kind === 'LONG' || event.kind === 'SHORT') {
         const direction = event.kind === 'LONG' ? 1 : -1;
         attempt(event.kind, event.price === crossPrice ? event.price + direction * tolerance(event.price) : event.price);
-      }
-      else {
-        const previousCount = p!.pyramidCount ?? 0;
-        // At a strict MA boundary use its infinitesimal crossing for eligibility, not final close.
-        const direction = p!.signal.side === 'LONG' ? 1 : -1;
-        const eligiblePrice = additionAllowed(p!, event.price) ? event.price : event.price + direction * tolerance(event.price);
-        add(p!, eligiblePrice, false);
-        if ((p!.pyramidCount ?? 0) === previousCount) break;
       }
       before = event.price;
     }
@@ -765,7 +718,6 @@ export function portfolioResult(state: PortfolioState, settings: BacktestSetting
     winningProfitUsdt: state.winningProfit ?? 0, losingLossUsdt: state.losingLoss ?? 0,
     openPositionCount: Object.keys(state.positions).length, insufficientFundsCount: state.insufficientFunds,
     betAmountUsdt: Number(settings.betAmountUsdt), secondFillCount: state.secondFills,
-    ...(state.pyramidFills === undefined ? {} : { pyramidFillCount: state.pyramidFills }),
     signalCount: state.signals, observedBars: state.observedBars, dataStartAt: state.dataStartAt, dataEndAt: state.dataEndAt,
     exitReasons: state.exitReasons, recentTrades: state.trades, equityCurve: state.equityCurve, candles: [],
   };

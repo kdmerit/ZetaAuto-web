@@ -253,7 +253,6 @@ export interface BacktestResult {
   insufficientFundsCount: number;
   betAmountUsdt: number;
   secondFillCount: number;
-  pyramidFillCount?: number;
   signalCount: number;
   observedBars: number;
   dataStartAt: number | null;
