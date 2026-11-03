@@ -20,10 +20,11 @@ function candle(index: number, close: number, high = close + 0.5, low = close - 
   return { openTime: origin + index * 3600, closeTime: origin + (index + 1) * 3600, open: close, high, low, close, volume: 10 };
 }
 
-function rowsFor(side: 'LONG' | 'SHORT'): Candle[] {
+function rowsFor(side: 'LONG' | 'SHORT', priorEnvelopeTouch = true): Candle[] {
   const source = Array.from({ length: 151 }, (_, index) => 100 + index * 0.02 + index * index * 0.002);
   source[149] = 139.777;
   const rows = source.map((close, index) => candle(index, close, close + 0.5, close - 0.5));
+  if (priorEnvelopeTouch) rows[140] = candle(140, source[140]!, source[140]! + 20, source[140]! - 0.5);
   rows[149] = candle(149, source[149]!, source[149]! + 0.5, source[149]! - 0.5);
   rows[150] = candle(150, source[150]!, source[150]! + 10, source[150]! - 0.5);
   if (side === 'LONG') return rows;
@@ -55,6 +56,15 @@ describe('updated pullback MA/envelope strategy', () => {
     expect(result.exitReasons).toEqual({ PULLBACK_ENVELOPE: 1 });
     expect(result.recentTrades[0]!.priceLines).toEqual([{ kind: 'ENTRY', price: result.recentTrades[0]!.entryPrice }]);
     expect(buildLocalChart({ ...result, candles: rows }, result.recentTrades[0]!, settings).envelope?.deviationPercent).toBe(5);
+  });
+
+  it.each(['LONG', 'SHORT'] as const)('requires an opposite envelope touch in the prior ten candles, side=%s', side => {
+    const rows = rowsFor(side, false);
+    const document = prepareSymbolBlock('BTCUSDT', rows, { ...baseSettings, side }, 'PULLBACK', rows[149]!.openTime, rows.at(-1)!.closeTime);
+    expect(document.bars[0]!.signal).toBeNull();
+    const touched = rowsFor(side, true);
+    const touchedDocument = prepareSymbolBlock('BTCUSDT', touched, { ...baseSettings, side }, 'PULLBACK', touched[149]!.openTime, touched.at(-1)!.closeTime);
+    expect(touchedDocument.bars[0]!.signal).toMatchObject({ strategy: 'PULLBACK', side });
   });
 
   it.each(['LONG', 'SHORT'] as const)('exits at MA60 touch before the envelope target, side=%s', side => {

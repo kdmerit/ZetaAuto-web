@@ -296,6 +296,18 @@ function pullbackSignals(
     return side === 'LONG' ? row.ma20 > row.ma60 && row.ma60 > row.ma120 : row.ma20 < row.ma60 && row.ma60 < row.ma120;
   };
   const rising = (values: (number | null)[], side: 'LONG' | 'SHORT'): boolean => values.every((value, index) => index === 0 || value !== null && values[index - 1] !== null && (side === 'LONG' ? value > values[index - 1]! : value < values[index - 1]!));
+  const previousEnvelopeTouch = (index: number, side: 'LONG' | 'SHORT'): boolean => {
+    if (index < 10) return false;
+    const previousCandles = candles.slice(index - 10, index);
+    const previousCenters = centers.slice(index - 10, index);
+    if (previousCandles.length !== 10 || previousCenters.length !== 10 || previousCenters.some(centerValue => centerValue === null || centerValue === undefined)) return false;
+    return previousCandles.some((row, cursor) => {
+      const centerValue = previousCenters[cursor];
+      if (centerValue === null || centerValue === undefined) return false;
+      const band = bandFor(centerValue, percent);
+      return side === 'LONG' ? row.high >= band.upper : row.low <= band.lower;
+    });
+  };
   for (let index = 0; index < candles.length; index += 1) {
     const candle = candles[index];
     const current = enriched[index];
@@ -312,6 +324,7 @@ function pullbackSignals(
         && rising(window.map(row => row.ma60), side)
         && rising(window.map(row => row.ma120), side)
         && rising(spreads, side)
+        && previousEnvelopeTouch(index, side)
         && (long ? candle.close <= current.ma20! : candle.close >= current.ma20!);
       if (!valid) continue;
       const band = bandFor(center, percent);
@@ -1022,7 +1035,7 @@ export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 진입하고, 20일 ATR마다 최대 4회 불타기·추가매수가 ±2ATR SL·이평선 이탈 청산을 적용합니다.';
   if (strategy === 'ENVELOPE') return '1h 재돌파 진입·중심선 전량 청산에 일봉 MA20 추세 필터를 선택 적용하고, SMA·이격을 사용자 필터와 수익률·승률 정렬로 비교합니다.';
   if (strategy === 'PULLBACK') {
-    return 'MA20·MA60·MA120 5봉 정배열과 MA60·MA120·이격 증가를 확인한 뒤 MA20 눌림에서 진입하고, 엔벨로프 상단·하단과 정배열 해제로 청산합니다.';
+    return 'MA20·MA60·MA120 5봉 정배열과 MA60·MA120·이격 증가, 직전 10봉 엔벨로프 접촉 이력을 확인한 뒤 MA20 눌림에서 진입하고, MA60·엔벨로프와 정배열 해제로 청산합니다.';
   }
   if (strategy === 'DISPARITY') {
     return 'MA20·MA60 사이 이격, 현재 캔들 절반, 직전 5봉 몸통 돌파와 직전 10봉 MA20 조건을 분석합니다.';
