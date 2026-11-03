@@ -304,6 +304,7 @@ function replayPath(position: Holding, bar: PreparedBar, settings: BacktestSetti
       const volatilityMa5Exit = p.signal.exitMode === 'VOLATILITY_MA5'
         && i === path.length - 1
         && bar.ma5Exit !== null && bar.ma5Exit !== undefined
+        && (p.signal.side === 'LONG' ? after > p.entry : after < p.entry)
         && (p.signal.side === 'LONG'
           ? (candle.high + candle.low) / 2 <= bar.ma5Exit
           : (candle.high + candle.low) / 2 >= bar.ma5Exit);

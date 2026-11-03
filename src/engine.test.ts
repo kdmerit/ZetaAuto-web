@@ -25,7 +25,7 @@ function longCandles(): Candle[] {
     [108.5, 109.5, 108, 109], [107.5, 108.5, 107, 108], [106.5, 107.5, 85, 107], [105.5, 106.5, 105, 106], [104.5, 105.5, 104, 105],
     [108, 130, 90, 120],
     [120, 125, 115, 121],
-    [121, 123, 94, 95],
+    [129, 130, 91, 129],
   ].map((prices, index) => row(index, prices));
 }
 
@@ -104,6 +104,20 @@ describe('MA5 body volatility breakout replay', () => {
       { kind: 'ENTRY', price: result.recentTrades[0]!.entryPrice },
       { kind: 'SL', price: side === 'LONG' ? 90 : 210 },
     ]);
+  });
+
+  it.each([
+    ['LONG', longCandles()],
+    ['SHORT', mirror(longCandles())],
+  ] as const)('does not use MA5 exit while the completed candle is below the entry profit zone, %s', (side, rows) => {
+    rows[11] = side === 'LONG' ? row(11, [100, 130, 91, 100]) : row(11, [200, 209, 170, 200]);
+    const document = prepared(rows, side);
+    const state = initialPortfolio(1_000);
+    replayPortfolioBlock(state, [document], { ...settings, side }, rows[9]!.openTime, rows.at(-1)!.closeTime, 3600);
+    const result = portfolioResult(state, { ...settings, side });
+    expect(result.entryCount).toBe(1);
+    expect(result.closedTradeCount).toBe(0);
+    expect(result.exitReasons).toEqual({});
   });
 
   it.each([
