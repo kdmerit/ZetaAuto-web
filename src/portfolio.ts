@@ -106,7 +106,8 @@ function priceLines(p: Holding): PriceLine[] {
 }
 
 function recordFill(p: Holding, kind: Execution['kind'], price: number, quantity: number, candle: Candle, opening = false, confirmedClose = false): void {
-  const intrabar = (p.signal.exitMode === 'VOLATILITY_TP' || p.signal.exitMode === 'ENVELOPE_TOUCH' || p.signal.exitMode === 'NEW_HIGH_TOUCH') && !opening && !confirmedClose;
+  const intrabar = (p.signal.exitMode === 'VOLATILITY_TP' || p.signal.exitMode === 'ENVELOPE_TOUCH' || p.signal.exitMode === 'NEW_HIGH_TOUCH'
+    || p.signal.exitMode === 'VOLATILITY_MA5') && !opening && !confirmedClose;
   const parentOpenTime = (candle as Candle & { parentOpenTime?: number }).parentOpenTime ?? candle.openTime;
   p.executions.push({ kind, price, quantity, at: opening || intrabar ? candle.openTime : candle.closeTime, candleOpenAt: parentOpenTime,
     ...(intrabar ? { timing: 'INTRABAR' as const } : confirmedClose ? { timing: 'BAR_CLOSE' as const } : {}) });
@@ -121,7 +122,7 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_MA_EXIT'].includes(reason);
+  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_MA_EXIT'].includes(reason);
   const fill = market ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
   const qty = Math.min(p.qty, quantity);
   const profit = gross(p, fill, qty);
@@ -134,7 +135,8 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   p.margin -= released;
   p.qty -= qty;
   state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + 1;
-  recordFill(p, reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE', fill, qty, candle, opening, reason === 'NEXT_CANDLE_CLOSE');
+  recordFill(p, reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE', fill, qty, candle, opening,
+    reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT');
   state.trades.push({
     tradeId: `local:${p.symbol}:${p.opened}:${candle.openTime}:${p.executions.length}`,
     symbol: p.symbol, side: p.signal.side, entryAt: p.opened,
@@ -172,7 +174,7 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   const margin = split ? bet / 2 : bet;
   const fee = margin * leverage * feeRate;
   const p: Holding = {
-    symbol, signal, opened: signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH' ? candle.openTime : candle.closeTime, first: entry, entry, qty: margin * leverage / entry,
+    symbol, signal, opened: signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH' ? candle.openTime : candle.closeTime, first: entry, entry, qty: margin * leverage / entry,
     margin, reserved: bet - margin, reservedFee: (bet - margin) * leverage * feeRate,
     pending: split, second: split ? (entry + signal.stop) / 2 : entry,
     ...(signal.strategy === 'ENVELOPE' && settings.envelopeRisk?.symbol === symbol ? { risk: settings.envelopeRisk } : {}),
@@ -247,7 +249,8 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
     if (p.signal.strategy === 'DISPARITY') p.stop = p.first;
     close(state, p, p.partial, p.qty / 2, 'PARTIAL_TP', candle, opening);
   }
-  const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' || p.signal.volatilityTpEnabled !== false;
+  const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
+    || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
   if (targetEnabled && (long ? price >= p.target : price <= p.target)) {
     const disparity = p.signal.strategy === 'DISPARITY';
     const reason = p.signal.strategy === 'ENVELOPE' ? p.signal.envelopeExitMode === 'CENTER' ? 'ENVELOPE_CENTER' : 'ENVELOPE_OPPOSITE'
@@ -262,7 +265,9 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
     const liq = estimatedLiquidation(p.signal.side, p.entry, p.qty, p.margin, p.risk);
     if (liq !== null) levels.add(liq);
   }
-  if (p.signal.exitMode !== 'VOLATILITY_TP' || p.signal.volatilityTpEnabled !== false) levels.add(p.target);
+  const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
+    || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
+  if (targetEnabled) levels.add(p.target);
   if (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true) levels.add(p.stop);
   if (p.pending) levels.add(p.second);
   if (p.partial !== null && !p.partialDone) levels.add(p.partial);
@@ -293,13 +298,20 @@ function replayPath(position: Holding, bar: PreparedBar, settings: BacktestSetti
       const halfBreak = p.signal.strategy === 'DISPARITY' && settings.ma20HalfCloseEnabled && bar.ma20 !== null
         && (p.signal.side === 'LONG' ? (candle.high + candle.low) / 2 <= bar.ma20 : (candle.high + candle.low) / 2 >= bar.ma20);
       const direction = p.signal.side === 'LONG' ? 1 : -1;
-      const closeThreshold = p.first + direction * p.signal.breakoutRange! * p.signal.volatilityK1!;
       const volatilityClose = p.signal.exitMode === 'VOLATILITY_CLOSE'
-        && direction * (after - closeThreshold) >= 0;
+        && p.signal.breakoutRange !== undefined && p.signal.volatilityK1 !== undefined
+        && direction * (after - (p.first + direction * p.signal.breakoutRange * p.signal.volatilityK1)) >= 0;
+      const volatilityMa5Exit = p.signal.exitMode === 'VOLATILITY_MA5'
+        && i === path.length - 1
+        && bar.ma5Exit !== null && bar.ma5Exit !== undefined
+        && (p.signal.side === 'LONG'
+          ? (candle.high + candle.low) / 2 <= bar.ma5Exit
+          : (candle.high + candle.low) / 2 >= bar.ma5Exit);
       const nextClose = p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityNextCloseEnabled === true
         && !('parentOpenTime' in candle) && candle.openTime > p.opened;
       if (i === path.length - 1 && nextClose) close(state, p, after, p.qty, 'NEXT_CANDLE_CLOSE', candle);
       else if (i === path.length - 1 && volatilityClose) close(state, p, after, p.qty, 'VOLATILITY_CLOSE', candle);
+      else if (volatilityMa5Exit) close(state, p, after, p.qty, 'VOLATILITY_MA5_EXIT', candle);
       else if (halfBreak && i === path.length - 1) close(state, p, after, p.qty, 'MA20_HALF_BREAK', candle);
       else p.mark = after;
     }
@@ -345,7 +357,16 @@ function intrabarEntryPath(symbol: string, bar: PreparedBar, candle: Candle, set
   return state;
 }
 
+function replayVolatilityMa5Entry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
+  const state = initialPortfolio(available);
+  const signal = bar.signal!;
+  const executionCandle = { ...bar.candle, parentOpenTime: bar.candle.openTime };
+  enter(state, symbol, signal, executionCandle, settings);
+  return state;
+}
+
 function replayIntrabarEntry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
+  if (bar.signal?.exitMode === 'VOLATILITY_MA5') return replayVolatilityMa5Entry(symbol, bar, settings, available);
   const minutes = bar.intrabarCandles ?? [];
   validateMinuteCandles(bar.candle, minutes);
   let state = initialPortfolio(available);
@@ -638,7 +659,9 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
     for (const { symbol, bar } of rows) {
       const parameters = options.settingsForSymbol?.[symbol] ?? settings;
       const hasEnvelope = !!(bar.envelope || bar.envelopeBySide);
-      if (occupiedAtOpen.has(symbol) || bar.signal?.exitMode !== 'VOLATILITY_TP' && !hasEnvelope) continue;
+      const intrabarSignal = bar.signal?.exitMode === 'VOLATILITY_TP' || bar.signal?.exitMode === 'VOLATILITY_MA5';
+      const hasIntrabarData = intrabarSignal;
+      if (occupiedAtOpen.has(symbol) || !hasIntrabarData && !hasEnvelope) continue;
       if (bar.envelope?.parentOpenTime !== undefined && state.envelopeParents?.[symbol]?.blocked) continue;
       if (bar.envelope && parameters.envelopeEntryMode !== 'RECLAIM' && !(bar.envelope.long && bar.candle.low <= bar.envelope.lower)
         && !(bar.envelope.short && bar.candle.high >= bar.envelope.upper)) continue;
@@ -682,7 +705,11 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
         state.envelopeReclaims[key] ??= { outsideAt: band.parentOpenTime ?? bar.candle.openTime };
       } else delete state.envelopeReclaims[key];
     }
-    for (const { symbol, bar } of rows) if (bar.signal && bar.signal.exitMode !== 'VOLATILITY_TP') enter(state, symbol, bar.signal, bar.candle, options.settingsForSymbol?.[symbol] ?? settings);
+    for (const { symbol, bar } of rows) {
+      const signal = bar.signal;
+      const completedEntry = signal?.exitMode !== 'VOLATILITY_MA5';
+      if (signal && signal.exitMode !== 'VOLATILITY_TP' && completedEntry) enter(state, symbol, signal, bar.candle, options.settingsForSymbol?.[symbol] ?? settings);
+    }
     if (!rows.length) continue;
     state.observedBars += 1;
     state.dataStartAt ??= at;

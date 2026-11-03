@@ -33,7 +33,7 @@ import type {
 import { ChartModal } from './ChartModal';
 import { chartTimestamp, mergeChartPages } from '../chartData';
 import { chartAtInterval, withChartExecutionTimes } from '../chartIntervals';
-import { serverSettingsSnapshot, volatilityParameters } from '../backtestSettings';
+import { serverSettingsSnapshot } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
 import { currentEnvelopeSettings, envelopeParameters, envelopePeriods } from '../envelope';
 import { EnvelopeTrendControl } from './EnvelopeTrendControl';
@@ -134,6 +134,7 @@ const reasonLabels: Record<string, string> = {
   ROI_LOSS: 'ROI 손실 청산',
   SESSION_CLOSE: '신호 캔들 마감 청산',
   VOLATILITY_CLOSE: '변동폭 K1 종가 청산',
+  VOLATILITY_MA5_EXIT: 'MA5 기준 캔들 중간값 청산',
   NEXT_CANDLE_CLOSE: '매수 다음 캔들 종가 청산',
   ENVELOPE_CENTER: '엔벨로프 중심선 청산',
   ENVELOPE_OPPOSITE: '엔벨로프 반대 밴드 청산',
@@ -403,7 +404,6 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     if (strategy === 'PULLBACK' && (!/^\d+$/.test(settings.fullTpWavePercent) || Number(settings.fullTpWavePercent) < 1 || Number(settings.fullTpWavePercent) > 100)) throw new Error('전체 TP 파동폭은 1~100 정수로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^(0\.[1-9]|[1-9](\.\d)?|10(\.0)?)$/.test(settings.minDisparityPercent))) throw new Error('MA60 이격률은 0.1~10.0%로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^([1-9]|[1-9]\d|100)$/.test(settings.roiClosePercent))) throw new Error('ROI 손실 청산은 1~100 정수로 입력해 주세요.');
-    if (strategy === 'VOLATILITY') volatilityParameters(settings);
     if (strategy === 'ENVELOPE') envelopeParameters(settings);
     if (strategy === 'NEW_HIGH') newHighPeriod(settings);
     const start = Date.parse(`${settings.startDate}T${settings.startTime}:00+09:00`);
@@ -712,28 +712,21 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               </div>
             ) : (
               <div className="condition-copy">
-                <p>R = |직전 종가 − 직전 시가| (몸통 크기) · 변동폭(%) = R ÷ 직전 종가 × 100</p>
-                <p>변동폭 ≥ {settings.minVolatilityPercent}% · 0.1 ≤ K1 ≤ K2 ≤ 10.0</p>
+                <p>신호는 선택한 주기의 완성 캔들에서 조건을 확인하지만, 체결은 종가까지 기다리지 않고 해당 캔들 안의 조건 충족 가격으로 추정합니다.</p>
                 <strong>롱 포지션</strong>
-                <p>1. 전전봉 종가 &lt; 시가 (음봉)</p>
-                <p>2. 직전봉 양봉 · 돌파 순간의 현재가 &gt; 현재 시가</p>
-                <p>3. 직전 저가 &lt; 진입 시점까지의 현재봉 저가</p>
-                <p>4. 현재가가 현재 시가 + R×K1에 처음 닿으면 롱 진입 · 진입 허용 상한은 현재 시가 + R×K2</p>
-                <p>5. TP 켜짐: 매수가 + R×K1 접촉 시 전량 청산 · 종가 확정 대기 없음</p>
-                <p>6. SL = 진입 시점까지의 현재봉 저가로 고정 · 진입 직후부터 접촉 시 전량 손절</p>
-                <p>7. 다음 캔들 종가 청산 켜짐: 진입봉의 바로 다음 봉이 마감되면 전량 시장가 청산</p>
+                <p>1. 직전 5개 캔들의 몸통 전체가 각 캔들의 MA5 아래에 있습니다.</p>
+                <p>2. 현재 캔들의 고가·저가 중간값이 MA5 이상입니다. 즉, 캔들 전체 길이 기준 MA5 위·아래 길이가 같거나 위쪽이 더 깁니다.</p>
+                <p>3. 현재 캔들 몸통 크기가 직전 캔들 몸통의 2배 이상입니다.</p>
+                <p>4. SL은 매수 캔들을 포함한 직전 3개 캔들의 최저가입니다.</p>
+                <p>5. 보유 후 완성된 캔들의 고가·저가 중간값이 MA5 이하가 되는 시점에 종가로 전량 청산합니다. 이는 MA5 아래·위 길이가 같아지는 순간부터 적용합니다.</p>
                 <strong>숏 포지션</strong>
-                <p>1. 전전봉 종가 &gt; 시가 (양봉)</p>
-                <p>2. 직전봉 음봉 · 돌파 순간의 현재가 &lt; 현재 시가</p>
-                <p>3. 직전 고가 &gt; 진입 시점까지의 현재봉 고가</p>
-                <p>4. 현재가가 현재 시가 − R×K1에 처음 닿으면 숏 진입 · 진입 허용 하한은 현재 시가 − R×K2</p>
-                <p>5. TP 켜짐: 매수가 − R×K1 접촉 시 전량 청산 · 종가 확정 대기 없음</p>
-                <p>6. SL = 진입 시점까지의 현재봉 고가로 고정 · 진입 직후부터 접촉 시 전량 손절</p>
-                <p>7. 다음 캔들 종가 청산 켜짐: 진입봉의 바로 다음 봉이 마감되면 전량 시장가 청산</p>
+                <p>1. 직전 5개 캔들의 몸통 전체가 각 캔들의 MA5 위에 있습니다.</p>
+                <p>2. 현재 캔들의 고가·저가 중간값이 MA5 이하입니다. 즉, 캔들 전체 길이 기준 MA5 아래·위 길이가 같거나 아래쪽이 더 깁니다.</p>
+                <p>3. 현재 캔들 몸통 크기가 직전 캔들 몸통의 2배 이상입니다.</p>
+                <p>4. SL은 매도 캔들을 포함한 직전 3개 캔들의 최고가입니다.</p>
+                <p>5. 보유 후 완성된 캔들의 고가·저가 중간값이 MA5 이상이 되는 시점에 종가로 전량 청산합니다. 이는 MA5 아래·위 길이가 같아지는 순간부터 적용합니다.</p>
                 <strong>공통 체결 기준</strong>
-                <p>최소 변동폭 조건을 포함해 모두 충족해야 진입합니다. R·진입 시점 SL은 고정하며 실제 매수가는 시장가 슬리피지 0.02%를 반영합니다. 연속 가격에서는 K1 가격에 진입하며, 1분봉 시가 갭이 나면 관측된 시가가 K2 범위 안일 때만 진입합니다.</p>
-                <p>TP와 다음 봉 종가 청산은 독립 옵션이며 먼저 충족한 조건으로 청산합니다. SL은 항상 적용합니다. 둘 다 끄면 SL로만 청산하며 기간 말 미청산분은 평가액에 포함합니다. 진입봉 안의 TP·SL도 적용하되, 진입 이전 움직임으로 소급 청산하지 않습니다.</p>
-                <p>신호봉의 1분봉을 시간순으로 사용해 진입 시점 SL을 계산하며, 분봉 안에서는 두 OHLC 경로 중 불리한 결과를 사용합니다. 진입·신호봉 내 청산 시각은 1분봉 시작의 추정치이고, 이후 보유 봉 TP/SL은 선택 주기 봉 시작의 추정치입니다. 다음 봉 종가 청산은 실제 마감 시각이며 정확한 틱 재현은 아닙니다.</p>
+                <p>거래량 증가 조건과 변동폭 최소·K1·K2 입력값은 사용하지 않습니다. 1분봉을 조회하지 않고 선택 주기 캔들의 고가·저가 경계를 기준으로 MA5 위·아래 길이가 같아지는 가격과 몸통 2배 가격 중 조건이 충족되는 지점을 중간 체결가로 추정합니다. 롱 추정가는 `max(시가 + 직전 몸통×2, MA5×2 − 저가)`, 숏은 반대로 `min(시가 − 직전 몸통×2, MA5×2 − 고가)`입니다. 진입·SL에는 0.02% 슬리피지와 편도 0.055% 수수료를 반영합니다. MA5 이탈 청산은 완성된 보유 캔들의 고가·저가 중간값으로 확인해 해당 캔들 종가에 청산합니다.</p>
                 <p>한 종목은 봉당 최대 한 번 진입하며 봉 시작에 보유했다면 그 봉 재진입은 제외합니다. 전체종목은 종목명 순서·봉 시작의 가용자금만 진입에 사용해 같은 봉의 미래 청산 자금을 재사용하지 않습니다. SL 갭은 시가에 손절합니다.</p>
               </div>
             )}
@@ -801,21 +794,13 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '0.5'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용 · SL도 같은 비율</small></label>
               <p className="notice small">고정 조건: 서로 다른 봉의 이탈 후 재돌파 진입 · 중심선 터치 시 전량 청산 · 초기 SL 유지</p>
             </>
+          ) : strategy === 'VOLATILITY' ? (
+            <p className="notice small">MA5 몸통 위치·몸통 크기 2배·직전 5개 캔들 조건으로 진입가를 캔들 중간에서 추정합니다. 1분봉·거래량·변동폭·K1·K2 조건은 사용하지 않습니다.</p>
           ) : (
-            <>
-              <label className="field-label">변동폭 최소 (%)<span className="suffix-field"><input inputMode="decimal" value={settings.minVolatilityPercent} onChange={(event) => update('minVolatilityPercent', event.target.value.replace(/[^0-9.]/g, '').slice(0, 5))} /><b>%</b></span><small>0.1~10.0 · 기본 0.5 · 직전 몸통 크기 ÷ 직전 종가 × 100</small></label>
-              <div className="field-grid two">
-                <label className="field-label">K1<input inputMode="decimal" value={settings.volatilityK1} onChange={(event) => update('volatilityK1', event.target.value.replace(/[^0-9.]/g, '').slice(0, 4))} /><small>0.1~10.0 · 기본 0.5</small></label>
-                <label className="field-label">K2<input inputMode="decimal" value={settings.volatilityK2} onChange={(event) => update('volatilityK2', event.target.value.replace(/[^0-9.]/g, '').slice(0, 4))} /><small>0.1~10.0 · 기본 1.0 · K1 이상</small></label>
-              </div>
-            </>
+            <></>
           )}
           {strategy === 'VOLATILITY' ? (
-            <>
-              <label className="checkbox-row"><input type="checkbox" checked={settings.volatilityTpEnabled} onChange={(event) => update('volatilityTpEnabled', event.target.checked)} /><span>TP (변동폭 × K1)</span></label>
-              <label className="checkbox-row"><input type="checkbox" checked={settings.volatilityNextCloseEnabled} onChange={(event) => update('volatilityNextCloseEnabled', event.target.checked)} /><span>매수 다음 캔들 종가 청산</span></label>
-              <p className="muted small">봉 중간 K1 돌파에 진입하며 SL은 진입 시점까지의 저가(롱)·고가(숏)로 고정합니다. 두 옵션은 먼저 충족한 조건으로 청산하며, 모두 끄면 SL만 적용합니다. 신호봉의 1분봉은 필요한 구간만 조회·캐시하며 1분봉 내부 경로는 보수적으로 추정합니다.</p>
-            </>
+            <p className="muted small">매수 캔들의 고가·저가 경계 안에서 MA5 절반 돌파와 몸통 2배가 충족되는 가격을 추정해 진입하며, SL은 매수 캔들을 포함한 3개 캔들의 극값으로 고정합니다. 이후 완성 캔들의 고가·저가 중간값이 MA5를 이탈하면 종가에 청산합니다.</p>
           ) : strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' ? (
             <>
               <label className="checkbox-row"><input type="checkbox" checked={settings.partialTpEnabled} onChange={(event) => update('partialTpEnabled', event.target.checked)} /><span>부분 TP 50%</span></label>

@@ -143,6 +143,20 @@ describe('durable local analysis', () => {
     expect(listInstruments).toHaveBeenLastCalledWith('AAAUSDT', expect.any(AbortSignal));
   });
   it('resumes from a committed shared-account block with identical trades and totals', async () => {
+    vi.mocked(ensureCandles).mockImplementation(async (_instrument, interval, from, end) => {
+      const rows: Candle[] = [];
+      const pattern = [
+        [110, 111, 109, 110], [110, 111, 109, 110], [110, 111, 109, 110], [110, 111, 109, 110],
+        [108.5, 109.5, 108, 109], [107.5, 108.5, 107, 108], [106.5, 107.5, 85, 107], [105.5, 106.5, 105, 106], [104.5, 105.5, 104, 105],
+        [108, 130, 90, 120], [120, 125, 115, 121], [121, 123, 94, 95],
+      ];
+      for (let at = from; at < end; at += 3600) {
+        const phase = ((Math.floor((at - origin) / 3600) % pattern.length) + pattern.length) % pattern.length;
+        const prices = pattern[phase]!;
+        rows.push({ openTime: at, closeTime: at + 3600, open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: 10 });
+      }
+      return rows;
+    });
     const pause = new AbortController();
     const updates: LocalJobView[] = [];
     await executeLocalJob({ strategy: 'VOLATILITY', settings }, view => {
@@ -178,22 +192,13 @@ describe('durable local analysis', () => {
     await executeLocalJob({ strategy: 'VOLATILITY', resumeId: paused.id }, () => undefined, new AbortController().signal);
     expect((await loadLocalJob('VOLATILITY'))?.status).toBe('COMPLETED');
   });
-  it('pauses on missing minute ordering data and resumes with the same account and checkbox snapshot', async () => {
-    const original = vi.mocked(ensureCandles).getMockImplementation()!;
+  it('does not request minute ordering data for the selected-timeframe strategy', async () => {
     const snapshot = { ...settings, volatilityTpEnabled: false, volatilityNextCloseEnabled: true };
-    vi.mocked(ensureCandles).mockImplementation((instrument, interval, ...rest) => {
-      if (interval === '1m') throw new Error('minute ordering unavailable');
-      return original(instrument, interval, ...rest);
-    });
     await executeLocalJob({ strategy: 'VOLATILITY', settings: snapshot }, () => undefined, new AbortController().signal);
-    const paused = (await loadLocalJob('VOLATILITY'))!;
-    expect(paused.status).toBe('PAUSED'); expect(paused.cursor).toBe(0); expect(paused.result).toBeNull();
-    vi.mocked(ensureCandles).mockImplementation(original);
-    await executeLocalJob({ strategy: 'VOLATILITY', resumeId: paused.id }, () => undefined, new AbortController().signal);
     const finished = (await loadLocalJob('VOLATILITY'))!;
-    expect(finished.id).toBe(paused.id); expect(finished.status).toBe('COMPLETED');
+    expect(finished.status).toBe('COMPLETED');
     expect(finished.settings.volatilityTpEnabled).toBe(false); expect(finished.settings.volatilityNextCloseEnabled).toBe(true);
-    expect(finished.result?.exitReasons.NEXT_CANDLE_CLOSE).toBeGreaterThan(0);
+    expect(vi.mocked(ensureCandles).mock.calls.some(call => call[1] === '1m')).toBe(false);
   });
 
   it('prevents another tab from replacing a running checkpoint', async () => {
@@ -258,7 +263,7 @@ describe('durable local analysis', () => {
   it.each(['2.10.26', '2.10.28', '2.10.29', '2.10.30'])('separates old volatility checkpoints (%s) but preserves other strategy versions and old results', async version => {
     expect(engineVersionFor('PULLBACK')).toBe('2.10.26');
     expect(engineVersionFor('DISPARITY')).toBe('2.10.26');
-    expect(engineVersionFor('VOLATILITY')).toBe('2.10.31');
+    expect(engineVersionFor('VOLATILITY')).toBe('2.10.48');
     const controller = new AbortController();
     await executeLocalJob({ strategy: 'VOLATILITY', settings }, view => {
       if (view.blockStart > origin) controller.abort();

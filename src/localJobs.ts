@@ -20,7 +20,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'NEW_HIGH' ? '2.10.47' : strategy === 'ENVELOPE' ? '2.10.45' : strategy === 'VOLATILITY' ? '2.10.31' : localEngineVersion;
+  return strategy === 'NEW_HIGH' ? '2.10.47' : strategy === 'ENVELOPE' ? '2.10.45' : strategy === 'VOLATILITY' ? '2.10.48' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);
@@ -91,10 +91,6 @@ export function jobView(job: LocalJob): LocalJobView {
 }
 
 function blockSize(job: LocalJob): number {
-  if (job.strategy === 'VOLATILITY') {
-    const minutes = intervalSeconds(job.settings.interval) / 60;
-    return Math.max(1, Math.min(128, Math.floor(64_000 / Math.max(1, job.universe.length * minutes))));
-  }
   return Math.max(16, Math.min(128, Math.floor(64_000 / Math.max(1, job.universe.length))));
 }
 

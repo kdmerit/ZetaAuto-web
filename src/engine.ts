@@ -1,5 +1,4 @@
 import { enrichCandles, intervalSeconds } from './api';
-import { volatilityParameters } from './backtestSettings';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import { bandFor, envelopeParameters, priorMovingAverages, projectDailyTrend, projectEnvelopeBands } from './envelope';
 import { prepareNewHigh, type PreparedNewHigh } from './newHigh';
@@ -340,51 +339,48 @@ function volatilitySignals(
   candles: Candle[],
   settings: BacktestSettings,
 ): Signal[] {
-  const { minimum, k1, k2 } = volatilityParameters(settings);
+  const enriched = enrichCandles(candles);
   const signals: Signal[] = [];
-  for (let index = 2; index < candles.length; index += 1) {
+  for (let index = 5; index < candles.length; index += 1) {
     const candle = candles[index];
     const previous = candles[index - 1];
-    const older = candles[index - 2];
-    if (!candle || !previous || !older || previous.close <= 0) continue;
-    const range = Math.abs(previous.close - previous.open);
-    if (!Number.isFinite(range) || range <= 0) continue;
-    const rangePercent = range / previous.close * 100;
-    if (rangePercent + 1e-10 < minimum) continue;
-    // Only the two preceding bars are confirmed. Direction and running wick
-    // extrema of the current bar are checked at the touch, never at final close.
-    const long = older.close < older.open && previous.close > previous.open && previous.low < candle.open;
-    const short = older.close > older.open && previous.close < previous.open && previous.high > candle.open;
+    const current = enriched[index];
+    if (!candle || !previous || !current || current.ma5 === null) continue;
+    const previousBody = Math.abs(previous.close - previous.open);
+    const currentBody = Math.abs(candle.close - candle.open);
+    if (!Number.isFinite(previousBody) || previousBody <= 0 || !Number.isFinite(currentBody)) continue;
+    const previousFiveBelow = candles.slice(index - 5, index).every((row, offset) => {
+      const ma5 = enriched[index - 5 + offset]?.ma5;
+      return ma5 !== null && ma5 !== undefined && bodyHigh(row) < ma5;
+    });
+    const previousFiveAbove = candles.slice(index - 5, index).every((row, offset) => {
+      const ma5 = enriched[index - 5 + offset]?.ma5;
+      return ma5 !== null && ma5 !== undefined && bodyLow(row) > ma5;
+    });
+    const currentCandleMidpoint = (candle.high + candle.low) / 2;
+    const long = previousFiveBelow && currentCandleMidpoint >= current.ma5 && currentBody >= previousBody * 2;
+    const short = previousFiveAbove && currentCandleMidpoint <= current.ma5 && currentBody >= previousBody * 2;
     if (!long && !short) continue;
     const side = long ? 'LONG' : 'SHORT';
     if (settings.side !== 'BOTH' && settings.side !== side) continue;
-    const direction = long ? 1 : -1;
-    const entry = candle.open + direction * range * k1;
-    if (long ? candle.high < entry : candle.low > entry) continue;
-    const target = entry + direction * range * k1;
-    if (!Number.isFinite(entry) || entry <= 0) continue;
-    if (!Number.isFinite(target) || target <= 0 && settings.volatilityTpEnabled !== false) continue;
+    const entry = long
+      ? Math.max(candle.open + previousBody * 2, current.ma5 * 2 - candle.low)
+      : Math.min(candle.open - previousBody * 2, current.ma5 * 2 - candle.high);
+    const stop = long
+      ? Math.min(candles[index - 2]!.low, candles[index - 1]!.low, candle.low)
+      : Math.max(candles[index - 2]!.high, candles[index - 1]!.high, candle.high);
+    if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0) continue;
+    if (long ? entry > candle.high : entry < candle.low) continue;
     signals.push({
       strategy: 'VOLATILITY',
       side,
       index,
       entry,
-      // Initial placeholder is the only current-bar extreme known at open.
-      // Replay replaces it with the running low/high at the actual path touch.
-      stop: candle.open,
+      stop,
       volatilityStopEnabled: true,
-      volatilityPriorExtreme: long ? previous.low : previous.high,
-      volatilityEntryLimit: candle.open + direction * range * k2,
-      volatilityTpEnabled: settings.volatilityTpEnabled !== false,
-      volatilityNextCloseEnabled: settings.volatilityNextCloseEnabled === true,
-      target,
-      initialTarget: target,
-      volatilityK1: k1,
-      volatilityK2: k2,
-      breakoutRange: range,
-      breakoutRangePercent: rangePercent,
-      breakoutLevel: entry,
-      exitMode: 'VOLATILITY_TP',
+      target: entry,
+      initialTarget: entry,
+      exitMode: 'VOLATILITY_MA5',
     });
   }
   return signals;
@@ -396,6 +392,7 @@ export interface PreparedBar {
   signal: Signal | null;
   ma20: number | null;
   ma60Exit: number | null;
+  ma5Exit?: number | null;
   intrabarCandles?: Candle[];
   envelope?: PreparedEnvelope;
   envelopeBySide?: Partial<Record<'LONG' | 'SHORT', PreparedEnvelope>>;
@@ -461,15 +458,16 @@ export function prepareSymbolBlock(
   }));
   return {
     symbol,
-    bars: enrichCandles(candles).filter(candle => candle.openTime >= start && candle.openTime < end).map(candle => ({
+    bars: enrichCandles(candles).map(candle => ({
       candle,
       signal: byTime.get(candle.openTime) ?? null,
       ma20: candle.ma20,
+      ma5Exit: candle.ma5,
       // The intrabar MA60 touch equals the previous 59 closes' mean, independent of the final close.
       ma60Exit: candle.ma60 === null ? null : (candle.ma60 * 60 - candle.close) / 59,
       ...(byTime.get(candle.openTime)?.exitMode === 'VOLATILITY_TP' && minuteGroups.has(candle.openTime)
         ? { intrabarCandles: minuteGroups.get(candle.openTime) } : {}),
-    })),
+    })).filter(bar => bar.candle.openTime >= start && bar.candle.openTime < end),
     waveState,
   };
 }
@@ -971,7 +969,7 @@ export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'DISPARITY') {
     return 'MA20·MA60 사이 이격, 현재 캔들 절반, 직전 5봉 몸통 돌파와 직전 10봉 MA20 조건을 분석합니다.';
   }
-  return '직전봉 몸통 변동폭·2봉 방향과 K1 돌파로 봉 중간에 진입하고, 진입 시점 SL·선택형 K1 TP·다음 봉 종가 청산을 적용합니다.';
+  return '직전 5개 몸통의 MA5 위치와 현재 몸통 2배 조건을 선택 주기 봉 안에서 추정해 중간 진입하고, 매수 캔들 포함 3개 캔들 극값 SL·완성 캔들의 고가·저가 중간값 MA5 이탈 청산을 적용합니다.';
 }
 
 export function estimateBars(settings: BacktestSettings): number {

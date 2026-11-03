@@ -13,207 +13,130 @@ const settings: BacktestSettings = {
   volatilityK1: '0.5', volatilityK2: '1.0', volatilityTpEnabled: true, volatilityNextCloseEnabled: false,
 };
 
-function row(index: number, prices: number[]): Candle {
+function row(index: number, prices: number[], volume = 10): Candle {
   return { openTime: origin + index * 3600, closeTime: origin + (index + 1) * 3600,
-    open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: 10 };
-}
-function candles(short = false, current = [100, 115, 95, 112], tail: number[][] = []): Candle[] {
-  const raw = [...Array.from({ length: 20 }, () => [100, 101, 99, 100]),
-    [104, 105, 99, 100], [100, 125, 90, 120], current, ...tail];
-  return raw.map((prices, i) => row(i, short ? [200 - prices[0]!, 200 - prices[2]!, 200 - prices[1]!, 200 - prices[3]!] : prices));
-}
-function minutesFor(parent: Candle, ordered = false, short = false): Candle[] {
-  const original = short ? { ...parent, open: 200 - parent.open, high: 200 - parent.low, low: 200 - parent.high, close: 200 - parent.close } : parent;
-  return Array.from({ length: 60 }, (_, i) => {
-    const prices = ordered ? i === 0 ? [original.open, original.open + 6, original.low, original.open + 6]
-      : i === 1 ? [original.open + 6, original.high, Math.min(original.open + 5, original.close), original.close]
-        : [original.close, original.close, original.close, original.close]
-      : i === 59 ? [original.open, original.high, original.low, original.close] : [original.open, original.open, original.open, original.open];
-    const p = short ? [200 - prices[0]!, 200 - prices[2]!, 200 - prices[1]!, 200 - prices[3]!] : prices;
-    return { openTime: parent.openTime + i * 60, closeTime: parent.openTime + (i + 1) * 60,
-      open: p[0]!, high: p[1]!, low: p[2]!, close: p[3]!, volume: 1 };
-  });
-}
-function prepared(short = false, current?: number[], tail: number[][] = [], changes: Partial<BacktestSettings> = {}, ordered = false) {
-  const data = candles(short, current, tail);
-  const document = prepareSymbolBlock('BTCUSDT', data, { ...settings, ...changes }, 'VOLATILITY', origin + 22 * 3600, data.at(-1)!.closeTime);
-  for (const bar of document.bars) if (bar.signal) bar.intrabarCandles = minutesFor(bar.candle, ordered, short);
-  return document;
-}
-function simulate(short = false, current?: number[], tail: number[][] = [], changes: Partial<BacktestSettings> = {}, ordered = false) {
-  const document = prepared(short, current, tail, changes, ordered);
-  const state = initialPortfolio(1000);
-  replayPortfolioBlock(state, [document], { ...settings, ...changes }, origin + 22 * 3600, document.bars.at(-1)!.candle.closeTime, 3600);
-  return { state, result: portfolioResult(state, { ...settings, ...changes }) };
+    open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume };
 }
 
-describe('intrabar volatility signal preparation', () => {
-  it.each([false, true])('uses the previous absolute body, not its longer wick range, short=%s', short => {
-    const signal = prepared(short).bars[0]!.signal!;
-    expect(signal.breakoutRange).toBe(20);
-    expect(signal.breakoutRangePercent).toBeCloseTo(20 / (short ? 80 : 120) * 100, 10);
-    expect(signal.entry).toBe(short ? 90 : 110);
+/** Nine warm-up candles, five bodies below MA5, then a two-times body signal. */
+function longCandles(): Candle[] {
+  return [
+    [110, 111, 109, 110], [110, 111, 109, 110], [110, 111, 109, 110], [110, 111, 109, 110],
+    [108.5, 109.5, 108, 109], [107.5, 108.5, 107, 108], [106.5, 107.5, 85, 107], [105.5, 106.5, 105, 106], [104.5, 105.5, 104, 105],
+    [108, 130, 90, 120],
+    [120, 125, 115, 121],
+    [121, 123, 94, 95],
+  ].map((prices, index) => row(index, prices));
+}
+
+function mirror(rows: Candle[]): Candle[] {
+  return rows.map((candle, index) => row(index, [300 - candle.open, 300 - candle.low, 300 - candle.high, 300 - candle.close], candle.volume));
+}
+
+function prepared(rows: Candle[], side: 'LONG' | 'SHORT' = 'LONG') {
+  const start = rows[9]!.openTime;
+  return prepareSymbolBlock('BTCUSDT', rows, { ...settings, side }, 'VOLATILITY', start, rows.at(-1)!.closeTime);
+}
+
+describe('MA5 body volatility breakout preparation', () => {
+  it.each([
+    ['LONG', longCandles()],
+    ['SHORT', mirror(longCandles())],
+  ] as const)('creates the %s signal with the fixed conditions', (side, rows) => {
+    const document = prepared(rows, side);
+    const signal = document.bars[0]!.signal!;
+    expect(signal).toMatchObject({
+      strategy: 'VOLATILITY', side, exitMode: 'VOLATILITY_MA5', volatilityStopEnabled: true,
+    });
+    expect(signal.entry).toBeCloseTo(side === 'LONG' ? 128.4 : 171.6, 10);
+    expect(signal.stop).toBe(side === 'LONG' ? 90 : 210);
+    expect(signal.target).toBe(signal.entry);
+    expect(signal.entry).not.toBe(rows[9]!.close);
+    expect(signal.volatilityK1).toBeUndefined();
+    expect(signal.volatilityK2).toBeUndefined();
   });
-  it.each([false, true])('rejects a small previous body even when its wicks exceed the minimum, short=%s', short => {
-    const data = candles(short);
-    data[21] = row(21, short ? [100, 110, 50, 99.8] : [100, 150, 90, 100.2]);
-    const document = prepareSymbolBlock('BTCUSDT', data, settings, 'VOLATILITY', origin + 22 * 3600, data.at(-1)!.closeTime);
-    expect(document.bars[0]!.signal).toBeNull();
+
+  it('does not use volume as a condition', () => {
+    const rows = longCandles();
+    rows[8]!.volume = 1_000;
+    rows[9]!.volume = 1;
+    expect(prepared(rows).bars[0]!.signal).not.toBeNull();
   });
-  it.each([false, true])('keeps the percentage denominator at the previous close and accepts its exact minimum, short=%s', short => {
-    const data = candles(short);
-    data[21] = row(21, short ? [101, 110, 50, 100] : [99, 150, 90, 100]);
-    const prepare = (minimum: string) => prepareSymbolBlock('BTCUSDT', data, { ...settings, minVolatilityPercent: minimum }, 'VOLATILITY', origin + 22 * 3600, data.at(-1)!.closeTime);
-    expect(prepare('1').bars[0]!.signal).toMatchObject({ breakoutRange: 1, breakoutRangePercent: 1, entry: short ? 99.5 : 100.5 });
-    expect(prepare('1.00001').bars[0]!.signal).toBeNull();
+
+  it.each([
+    ['a previous body reaches MA5', (rows: Candle[]) => { rows[8]!.close = 110; }],
+    ['the current candle midpoint is below MA5', (rows: Candle[]) => { rows[9]!.high = 105; rows[9]!.low = 90; }],
+    ['the current body is less than twice the previous body', (rows: Candle[]) => { rows[9]!.open = 104.5; rows[9]!.close = 105; }],
+  ])('rejects when %s', (_reason, change) => {
+    const rows = longCandles(); change(rows);
+    expect(prepared(rows).bars[0]!.signal).toBeNull();
   });
-  it.each([false, true])('uses K above one for both entry and TP instead of clamping it, short=%s', short => {
-    const signal = prepared(short, [100, 132, 95, 130], [], { volatilityK1: '1.5', volatilityK2: '2.0' }).bars[0]!.signal!;
-    expect(signal).toMatchObject({ entry: short ? 70 : 130, target: short ? 40 : 160,
-      volatilityEntryLimit: short ? 60 : 140, volatilityK1: 1.5, volatilityK2: 2 });
+
+  it('uses the current candle and two preceding candles for the stop', () => {
+    const rows = longCandles();
+    rows[7]!.low = 88;
+    expect(prepared(rows).bars[0]!.signal?.stop).toBe(88);
   });
-  it.each([false, true])('supports an inclusive K1/K2=10 band with a positive short target, short=%s', short => {
-    const data = candles(short, [100, 111, 95, 110]);
-    data[21] = row(21, short ? [101, 110, 90, 100] : [99, 110, 90, 100]);
-    const signal = prepareSymbolBlock('BTCUSDT', data, { ...settings, volatilityK1: '10.0', volatilityK2: '10.0' }, 'VOLATILITY', origin + 22 * 3600, data.at(-1)!.closeTime).bars[0]!.signal!;
-    expect(signal).toMatchObject({ entry: short ? 90 : 110, target: short ? 80 : 120,
-      volatilityEntryLimit: short ? 90 : 110, volatilityK1: 10, volatilityK2: 10 });
-  });
-  it.each([false, true])('uses two confirmed candle directions and the first K1 touch, short=%s', short => {
-    const signal = prepared(short).bars[0]!.signal!;
-    expect(signal).toMatchObject({ side: short ? 'SHORT' : 'LONG', entry: short ? 90 : 110,
-      target: short ? 80 : 120, stop: 100, breakoutRange: 20, volatilityPriorExtreme: short ? 110 : 90,
-      volatilityEntryLimit: short ? 80 : 120, exitMode: 'VOLATILITY_TP', volatilityStopEnabled: true,
-      volatilityTpEnabled: true, volatilityNextCloseEnabled: false });
-  });
-  it.each([80, 100, 130])('never filters the touch using the later final close=%s', close => {
-    const document = prepared(false, [100, 140, 75, close]);
-    expect(document.bars[0]!.signal?.entry).toBe(110);
-  });
-  it('requires a touch, but accepts an exact wick touch', () => {
-    expect(prepared(false, [100, 109.99, 95, 108]).bars[0]!.signal).toBeNull();
-    expect(prepared(false, [100, 110, 95, 108]).bars[0]!.signal?.entry).toBe(110);
-  });
-  it.each([20, 21])('requires the strict completed candle pattern, index=%s', index => {
-    const data = candles();
-    data[index]!.close = data[index]!.open;
-    const document = prepareSymbolBlock('BTCUSDT', data, settings, 'VOLATILITY', origin + 22 * 3600, data.at(-1)!.closeTime);
-    expect(document.bars[0]!.signal).toBeNull();
-  });
-  it('retains minimum volatility and side filters', () => {
-    expect(prepared(false, [100, 115, 95, 112], [], { side: 'SHORT' }).bars[0]!.signal).toBeNull();
-    const data = candles(false, [105, 120, 101, 112]);
-    data[21] = row(21, [100, 110, 100, 105]);
-    const document = prepareSymbolBlock('BTCUSDT', data, { ...settings, minVolatilityPercent: '10' }, 'VOLATILITY', origin + 22 * 3600, data.at(-1)!.closeTime);
-    expect(document.bars[0]!.signal).toBeNull();
+
+  it('keeps the signal aligned with a completed candle rather than requiring 1-minute data', () => {
+    const document = prepared(longCandles());
+    expect(document.bars[0]!.intrabarCandles).toBeUndefined();
+    expect(document.bars[0]!.ma5Exit).toBeTypeOf('number');
   });
 });
 
-describe('intrabar execution and frozen running SL', () => {
-  it.each([false, true])('executes an expanded K multiplier against body-based entry and TP, short=%s', short => {
-    const { result } = simulate(short, [100, 132, 95, 130], [[130, 170, 125, 160]], { volatilityK1: '1.5', volatilityK2: '2.0' }, true);
-    expect(result.exitReasons).toEqual({ FULL_TP: 1 });
-    const trade = result.recentTrades[0]!;
-    expect(trade.entryPrice).toBeCloseTo(short ? 70 * 0.9998 : 130 * 1.0002, 10);
-    expect(trade.exitPrice).toBeCloseTo(trade.entryPrice + (short ? -30 : 30), 10);
-    expect(trade.signal.stop).toBe(short ? 105 : 95);
-  });
-  it.each([false, true])('enters before close and never uses a later low/high as its entry-time SL, short=%s', short => {
-    const { result } = simulate(short);
+describe('MA5 body volatility breakout replay', () => {
+  it.each([
+    ['LONG', longCandles()],
+    ['SHORT', mirror(longCandles())],
+  ] as const)('enters at the completed signal close and exits when the candle midpoint crosses MA5, %s', (side, rows) => {
+    const document = prepared(rows, side);
+    const state = initialPortfolio(1_000);
+    replayPortfolioBlock(state, [document], { ...settings, side }, rows[9]!.openTime, rows.at(-1)!.closeTime, 3600);
+    const result = portfolioResult(state, { ...settings, side });
     expect(result.entryCount).toBe(1);
-    expect(result.exitReasons).toEqual({ SL: 1 });
-    const trade = result.recentTrades[0]!;
-    // O-H-L-C is the conservative path: the future 95/105 wick was not known
-    // at the first touch, so running SL is the current open, 100.
-    expect(trade.entryPrice).toBeCloseTo(short ? 90 * 0.9998 : 110 * 1.0002, 10);
-    expect(trade.signal.stop).toBe(100);
-    expect(trade.exitPrice).toBeCloseTo(short ? 100 * 1.0002 : 100 * 0.9998, 10);
-    expect(trade.executions.map(fill => fill.timing)).toEqual(['INTRABAR', 'INTRABAR']);
-    expect(trade.entryAt).toBe(origin + 22 * 3600 + 59 * 60);
+    expect(result.closedTradeCount).toBe(1);
+    expect(result.exitReasons).toEqual({ VOLATILITY_MA5_EXIT: 1 });
+    expect(result.recentTrades[0]!.entryPrice).toBeCloseTo(document.bars[0]!.signal!.entry * (side === 'LONG' ? 1.0002 : 0.9998), 10);
+    expect(result.recentTrades[0]!.executions[0]).toMatchObject({ timing: 'INTRABAR', candleOpenAt: rows[9]!.openTime });
+    expect(result.recentTrades[0]!.signal.stop).toBe(side === 'LONG' ? 90 : 210);
+    expect(result.recentTrades[0]!.priceLines).toEqual([
+      { kind: 'ENTRY', price: result.recentTrades[0]!.entryPrice },
+      { kind: 'SL', price: side === 'LONG' ? 90 : 210 },
+    ]);
   });
-  it.each([false, true])('can take the new K1 TP inside the entry bar, without waiting for close, short=%s', short => {
-    const { result } = simulate(short, [100, 125, 95, 98]);
-    expect(result.exitReasons).toEqual({ FULL_TP: 1 });
-    const trade = result.recentTrades[0]!;
-    expect(trade.exitPrice).toBeCloseTo(trade.entryPrice + (short ? -10 : 10), 10);
-    expect(trade.entryAt).toBe(trade.exitAt);
-    expect(trade.executions[0]!.candleOpenAt).toBe(trade.executions[1]!.candleOpenAt);
-    expect(trade.priceLines).toContainEqual({ kind: 'TP', price: trade.exitPrice });
-  });
-  it.each([false, true])('does not retroactively stop on a low/high visited before entry, short=%s', short => {
-    const { state, result } = simulate(short, [100, 115, 95, 111], [], { volatilityK1: '0.1' });
-    // Previous body R=20, R*K1=2: TP precedes any post-entry adverse wick.
-    expect(result.exitReasons).toEqual({ FULL_TP: 1 });
-    expect(state.closed).toBe(1);
-  });
-  it.each([false, true])('uses the worse no-entry scenario if the other path is a profitable but uncertain valid touch, short=%s', short => {
-    const { result } = simulate(short, [100, 125, 85, 110]);
-    // Low-first invalidates the prior-wick condition before entry. High-first
-    // profits, but must not be cherry-picked merely because it traded.
-    expect(result.entryCount).toBe(0);
-    expect(result.exitReasons).toEqual({});
-  });
-  it.each([false, true])('honours the strict prior-wick condition at open, short=%s', short => {
-    const current = [90, 105, 85, 95];
-    expect(prepared(short, current).bars[0]!.signal).toBeNull();
-  });
-  it('the legacy direct API uses the same authoritative intrabar replay and chart lines', () => {
-    const data = candles(false, [100, 125, 95, 98]);
-    const minuteData = minutesFor(data[22]!);
-    const direct = runBacktest(data, settings, 'VOLATILITY', undefined, minuteData);
-    const { result } = simulate(false, [100, 125, 95, 98]);
-    expect(direct.exitReasons).toEqual(result.exitReasons);
-    expect(direct.finalEquityUsdt).toBeCloseTo(result.finalEquityUsdt, 10);
-    const chart = buildLocalChart(direct, direct.recentTrades[0]!, settings);
-    expect(chart.priceLines).toContainEqual({ kind: 'TP', price: direct.recentTrades[0]!.exitPrice });
-    expect(chart.priceLines.some(line => line.kind === 'SL')).toBe(true);
-  });
-});
 
-describe('independent TP and next-candle-close options', () => {
-  const current = [100, 115, 100, 112];
-  const tail = [[112, 125, 110, 114], [114, 130, 113, 127]];
-  const orderedSimulation = (short: boolean, current: number[], tail: number[][], changes: Partial<BacktestSettings> = {}) => simulate(short, current, tail, changes, true);
-  it.each([false, true])('TP enabled closes on touch even when next-close is disabled, short=%s', short => {
-    const { result } = orderedSimulation(short, current, tail);
-    expect(result.exitReasons).toEqual({ FULL_TP: 1 });
+  it.each([
+    ['LONG', longCandles()],
+    ['SHORT', mirror(longCandles())],
+  ] as const)('applies the three-candle extreme SL, %s', (side, rows) => {
+    if (side === 'LONG') {
+      rows[7]!.low = 95;
+      rows[8]!.low = 94;
+      rows[10]!.low = 89;
+      rows[10]!.close = 119;
+    } else {
+      rows[6]!.high = 205;
+      rows[7]!.high = 205;
+      rows[8]!.high = 206;
+      rows[10]!.high = 211;
+      rows[10]!.close = 181;
+    }
+    const document = prepared(rows, side);
+    const state = initialPortfolio(1_000);
+    replayPortfolioBlock(state, [document], { ...settings, side }, rows[9]!.openTime, rows.at(-1)!.closeTime, 3600);
+    expect(portfolioResult(state, { ...settings, side }).exitReasons).toEqual({ SL: 1 });
   });
-  it.each([false, true])('TP disabled ignores touch, omits its line, and closes at the exact next bar close when selected, short=%s', short => {
-    const { result } = orderedSimulation(short, current, tail, { volatilityTpEnabled: false, volatilityNextCloseEnabled: true });
-    expect(result.exitReasons).toEqual({ NEXT_CANDLE_CLOSE: 1 });
+
+  it('does not render a TP line for the new fixed-exit strategy', () => {
+    const prefix = Array.from({ length: 12 }, (_, index) => row(index, [110, 111, 109, 110]));
+    const rows = [...prefix, ...longCandles().map((candle, index) => ({ ...candle, openTime: origin + (index + 12) * 3600, closeTime: origin + (index + 13) * 3600 }))];
+    const result = runBacktest(rows, settings, 'VOLATILITY');
     const trade = result.recentTrades[0]!;
-    expect(trade.exitAt).toBe(origin + 24 * 3600);
-    expect(trade.exitPrice).toBeCloseTo(short ? 86 * 1.0002 : 114 * 0.9998, 10);
-    expect(trade.executions.at(-1)!.timing).toBe('BAR_CLOSE');
-    expect(trade.priceLines?.some(line => line.kind === 'TP')).toBe(false);
-    expect(trade.priceLines?.some(line => line.kind === 'SL')).toBe(true);
-  });
-  it.each([false, true])('both enabled chooses TP first, short=%s', short => {
-    const { result } = orderedSimulation(short, current, tail, { volatilityNextCloseEnabled: true });
-    expect(result.exitReasons).toEqual({ FULL_TP: 1 });
-  });
-  it.each([false, true])('both disabled retains the position beyond TP and multiple closes, short=%s', short => {
-    const { result } = orderedSimulation(short, current, tail, { volatilityTpEnabled: false, volatilityNextCloseEnabled: false });
-    expect(result.closedTradeCount).toBe(0);
-    expect(result.openPositionCount).toBe(1);
-  });
-  it.each([false, true])('SL remains mandatory with both optional exits disabled and gaps fill at open, short=%s', short => {
-    const { result } = orderedSimulation(short, current, [[90, 99, 85, 97]], { volatilityTpEnabled: false, volatilityNextCloseEnabled: false });
-    expect(result.exitReasons).toEqual({ SL: 1 });
-    expect(result.recentTrades[0]!.exitPrice).toBeCloseTo(short ? 110 * 1.0002 : 90 * 0.9998, 10);
-    expect(result.recentTrades[0]!.exitAt).toBe(origin + 23 * 3600);
-  });
-  it.each([false, true])('next-close never exits the entry candle itself, short=%s', short => {
-    const { result } = orderedSimulation(short, current, [], { volatilityTpEnabled: false, volatilityNextCloseEnabled: true });
-    expect(result.entryCount).toBe(1);
-    expect(result.closedTradeCount).toBe(0);
-  });
-  it.each([false, true])('SL or TP before next close wins over the scheduled close, short=%s', short => {
-    const { result } = orderedSimulation(short, current, [[112, 118, 95, 114]], { volatilityTpEnabled: false, volatilityNextCloseEnabled: true });
-    expect(result.exitReasons).toEqual({ SL: 1 });
-  });
-  it.each([false, true])('does not resurrect the removed K1 close rule when TP is off, short=%s', short => {
-    const { result } = orderedSimulation(short, current, [[112, 129, 110, 126]], { volatilityTpEnabled: false });
-    expect(result.closedTradeCount).toBe(0);
+    const chart = buildLocalChart(result, trade, settings);
+    expect(chart.priceLines).toEqual([
+      { kind: 'ENTRY', price: trade.entryPrice },
+      { kind: 'SL', price: trade.signal.activeStop ?? trade.signal.stop },
+    ]);
   });
 });

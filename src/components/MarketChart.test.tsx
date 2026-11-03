@@ -14,7 +14,7 @@ describe('standalone market chart presentation', () => {
     const html = renderToStaticMarkup(<BacktestMenu onOpen={() => {}} onOpenChart={() => {}} onSignOut={() => {}} email="tester@example.com" />);
     expect(html.indexOf('차트 보기')).toBeLessThan(html.indexOf('눌림목 백테스트'));
     expect(html.indexOf('차트 보기')).toBeLessThan(html.indexOf('신고가 백테스트')); expect(html.indexOf('신고가 백테스트')).toBeLessThan(html.indexOf('눌림목 백테스트'));
-    expect(html).not.toContain('상세설명'); expect(html).not.toContain('분석할 전략'); expect(html).toContain('엔벨로프 백테스트'); expect(html).toContain('로그아웃');
+    expect(html).toContain('메뉴 순서 편집'); expect(html).not.toContain('상세설명'); expect(html).not.toContain('분석할 전략'); expect(html).toContain('엔벨로프 백테스트'); expect(html).toContain('로그아웃');
   });
   it('omits position/entry/exit labels and includes twenty-day ATR, prior volume ratio and independent ATR bands', () => {
     const html = renderToStaticMarkup(<ChartModal chart={chart} onClose={() => {}} />);
