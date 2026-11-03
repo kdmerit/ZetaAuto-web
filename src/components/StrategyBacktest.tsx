@@ -35,7 +35,7 @@ import { chartTimestamp, mergeChartPages } from '../chartData';
 import { chartAtInterval, withChartExecutionTimes } from '../chartIntervals';
 import { serverSettingsSnapshot } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
-import { currentEnvelopeSettings, envelopeParameters, envelopePeriods } from '../envelope';
+import { currentEnvelopeSettings, currentPullbackSettings, envelopeParameters, envelopePeriods, pullbackEnvelopeParameters } from '../envelope';
 import { EnvelopeTrendControl } from './EnvelopeTrendControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
@@ -43,7 +43,7 @@ import { useAnalysisBusy } from '../analysisActivity';
 import { currentNewHighSettings, newHighPeriod, newHighRules } from '../newHigh';
 
 const strategySettings = (strategy: Strategy, value: BacktestSettings): BacktestSettings => strategy === 'NEW_HIGH'
-  ? currentNewHighSettings(value) : strategy === 'ENVELOPE' ? currentEnvelopeSettings(value) : value;
+  ? currentNewHighSettings(value) : strategy === 'ENVELOPE' ? currentEnvelopeSettings(value) : strategy === 'PULLBACK' ? currentPullbackSettings(value) : value;
 
 interface StrategyBacktestProps {
   strategy: Strategy;
@@ -136,6 +136,8 @@ const reasonLabels: Record<string, string> = {
   VOLATILITY_CLOSE: '변동폭 K1 종가 청산',
   VOLATILITY_MA5_EXIT: '수익구간 MA5 기준 청산',
   NEXT_CANDLE_CLOSE: '매수 다음 캔들 종가 청산',
+  PULLBACK_ENVELOPE: '눌림목 엔벨로프 청산',
+  PULLBACK_MA_EXIT: '눌림목 정배열 이탈 청산',
   ENVELOPE_CENTER: '엔벨로프 중심선 청산',
   ENVELOPE_OPPOSITE: '엔벨로프 반대 밴드 청산',
   NEW_HIGH_MA_EXIT: 'MA10·MA20 이탈 청산',
@@ -144,7 +146,7 @@ const reasonLabels: Record<string, string> = {
 function defaultRequest(settings: BacktestSettings, strategy: Strategy): BacktestRequestBody {
   // The optional AWS fallback still runs VOLATILITY v1. Do not silently send a
   // v2 request to that incompatible calculation. Old server histories stay readable.
-  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH') throw new Error('이 전략은 이 기기에서 분석합니다.');
+  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK') throw new Error('이 전략은 이 기기에서 분석합니다.');
   const body: BacktestRequestBody = {
     strategy,
     mode: settings.mode,
@@ -155,13 +157,12 @@ function defaultRequest(settings: BacktestSettings, strategy: Strategy): Backtes
     betAmountUsdt: settings.betAmountUsdt,
     side: settings.side,
     leverage: settings.leverage,
-    entryMode: strategy === 'PULLBACK' ? 'SPLIT' : 'ALL_IN',
+    entryMode: 'ALL_IN',
     ma10CloseEnabled: false,
     partialTpEnabled: settings.partialTpEnabled,
   };
   if (settings.endDate) body.endAt = toIso(settings.endDate, settings.endTime);
-  if (strategy === 'PULLBACK') body.fullTpWavePercent = Number(settings.fullTpWavePercent);
-  else if (strategy === 'DISPARITY') {
+  if (strategy === 'DISPARITY') {
     body.minDisparityPercent = settings.minDisparityPercent;
     body.ma20HalfCloseEnabled = settings.ma20HalfCloseEnabled;
     body.roiClosePercent = settings.roiClosePercent;
@@ -201,7 +202,7 @@ function restoredServerJob(entry: BacktestHistoryEntry): ServerJob {
 }
 
 export function StrategyBacktest({ strategy, context, embedded = false, forcedMode, preferredSettings }: StrategyBacktestProps) {
-  const defaults = useMemo(() => strategySettings(strategy, defaultSettings()), [strategy]);
+  const defaults = useMemo(() => strategySettings(strategy, strategy === 'PULLBACK' ? { ...defaultSettings(), envelopeDeviationPercent: undefined } : defaultSettings()), [strategy]);
   const [settings, setSettings] = useState<BacktestSettings>(() => {
     const value = { ...(preferredSettings ?? loadSettings(strategy, defaults)), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
     return strategySettings(strategy, value);
@@ -401,10 +402,10 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     if (!/^\d+(\.\d{1,2})?$/.test(settings.initialCapitalUsdt) || Number(settings.initialCapitalUsdt) < 10) throw new Error('초기자금을 확인해 주세요.');
     if (!/^\d+(\.\d{1,2})?$/.test(settings.betAmountUsdt) || Number(settings.betAmountUsdt) < 1 || Number(settings.betAmountUsdt) > Number(settings.initialCapitalUsdt)) throw new Error('고정 베팅액을 확인해 주세요.');
     if (!/^\d{1,4}(\.\d{1,2})?$/.test(settings.leverage) || Number(settings.leverage) < 1 || Number(settings.leverage) > leverageMaximum) throw new Error(`레버리지는 1~${leverageMaximum}배로 입력해 주세요.`);
-    if (strategy === 'PULLBACK' && (!/^\d+$/.test(settings.fullTpWavePercent) || Number(settings.fullTpWavePercent) < 1 || Number(settings.fullTpWavePercent) > 100)) throw new Error('전체 TP 파동폭은 1~100 정수로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^(0\.[1-9]|[1-9](\.\d)?|10(\.0)?)$/.test(settings.minDisparityPercent))) throw new Error('MA60 이격률은 0.1~10.0%로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^([1-9]|[1-9]\d|100)$/.test(settings.roiClosePercent))) throw new Error('ROI 손실 청산은 1~100 정수로 입력해 주세요.');
     if (strategy === 'ENVELOPE') envelopeParameters(settings);
+    if (strategy === 'PULLBACK') pullbackEnvelopeParameters(settings);
     if (strategy === 'NEW_HIGH') newHighPeriod(settings);
     const start = Date.parse(`${settings.startDate}T${settings.startTime}:00+09:00`);
     const end = settings.endDate ? Date.parse(`${settings.endDate}T${settings.endTime}:00+09:00`) : Date.now();
@@ -676,12 +677,14 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             ) : strategy === 'PULLBACK' ? (
               <div className="condition-copy">
                 <strong>롱 포지션</strong>
-                <p>1. 전파동 저점·고점 &gt; 전전파동 저점·고점</p>
-                <p>2. MA10·MA20·(MA10−MA20)이 t−2 &lt; t−1 &lt; t</p>
-                <p>3. 하락→상승 반전 첫 봉의 몸통 고점 &gt; 직전 몸통 고점</p>
-                <p>4. 1차 종가·2차 (1차가+SL)÷2 · 최초 TP = 몸통 저점 + 전파동폭 × 비율</p>
+                <p>1. MA20 &gt; MA60 &gt; MA120 정배열이 최근 5개 캔들에서 계속 유지됩니다.</p>
+                <p>2. MA60과 MA120이 각각 5개 캔들 연속 상승하고, MA60−MA120 값도 5개 캔들 연속 증가합니다.</p>
+                <p>3. 현재 종가가 MA20 이하일 때 종가로 롱 진입합니다.</p>
+                <p>4. 엔벨로프 상단 터치 시 전량 청산합니다.</p>
+                <p>5. MA20·MA60·MA120 정배열이 깨지면 해당 캔들 종가로 전량 청산합니다.</p>
                 <strong>숏 포지션</strong>
-                <p>위 조건을 반대로 적용합니다. SL은 전파동 꼬리 극값이며 2차 체결 후 TP는 평단가·1차가 중간값입니다.</p>
+                <p>위 조건을 반대로 적용합니다. MA20 &lt; MA60 &lt; MA120, MA60·MA120 하락, MA60−MA120 감소, 현재 종가가 MA20 이상일 때 진입하며 엔벨로프 하단 또는 정배열 이탈 시 청산합니다.</p>
+                <p>엔벨로프 중심선은 입력한 SMA, 상·하단은 중심선에서 입력한 이격률만큼 떨어진 가격입니다. 별도 SL·분할매수·부분 TP는 사용하지 않습니다.</p>
               </div>
             ) : strategy === 'DISPARITY' ? (
               <div className="condition-copy">
@@ -779,7 +782,11 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             <p className="notice small">돌파 즉시 진입 · 돌파선 ± 1ATR 이내만 매수 · 최초/추가매수가 ± 2ATR SL · ATR마다 최대 4회 불타기 · MA10·MA20 이탈 전량 청산</p>
             <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 최초 진입 외 추가매수 4회까지 가능합니다. 최초 SL도 매수가 ± 2ATR이며 이평선 역전 확인은 이전 20봉 고정입니다.</p>
           </> : strategy === 'PULLBACK' ? (
-            <label className="field-label">전체 TP 직전 파동폭 (%)<input inputMode="numeric" value={settings.fullTpWavePercent} onChange={(event) => update('fullTpWavePercent', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>1~100 · 기본 100</small></label>
+            <>
+              <label className="field-label">엔벨로프 SMA<input type="number" inputMode="numeric" min="1" max="120" step="1" value={settings.envelopeMaPeriod ?? '20'} onChange={event => update('envelopeMaPeriod', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>1~120 · 기본 20</small></label>
+              <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" inputMode="decimal" min="0.1" max="20" step="0.1" value={settings.envelopeDeviationPercent ?? '5.0'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 기본 5.0</small></label>
+              <p className="notice small">MA20·MA60·MA120 5봉 정배열·추세·간격 증가 후 MA20 눌림 진입 · 엔벨로프 반대 밴드 터치 또는 정배열 이탈 청산</p>
+            </>
           ) : strategy === 'DISPARITY' ? (
             <>
               <label className="field-label">MA60 최소 이격률 (%)<input inputMode="decimal" value={settings.minDisparityPercent} onChange={(event) => update('minDisparityPercent', event.target.value)} /><small>0.1~10.0</small></label>
@@ -801,10 +808,10 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           )}
           {strategy === 'VOLATILITY' ? (
             <p className="muted small">매수 캔들의 고가·저가 경계 안에서 MA5 절반 돌파와 몸통 2배가 충족되는 가격을 추정해 진입하며, SL은 매수 캔들을 포함한 3개 캔들의 극값으로 고정합니다. 실제 매수가보다 유리한 구간에서만 완성 캔들의 고가·저가 중간값이 MA5를 이탈하면 종가에 청산합니다.</p>
-          ) : strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' ? (
+          ) : strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' && strategy !== 'PULLBACK' ? (
             <>
               <label className="checkbox-row"><input type="checkbox" checked={settings.partialTpEnabled} onChange={(event) => update('partialTpEnabled', event.target.checked)} /><span>부분 TP 50%</span></label>
-              <p className="muted small">{strategy === 'PULLBACK' ? '1차 매수가와 최초 TP의 중간에서 50% 청산합니다. 2차 체결 시 미체결 부분 TP는 취소됩니다.' : '매수가와 신호 시점 MA60의 중간에서 50% 청산하고 SL을 최초 매수가로 옮깁니다.'}</p>
+              <p className="muted small">매수가와 신호 시점 MA60의 중간에서 50% 청산하고 SL을 최초 매수가로 옮깁니다.</p>
             </>
           ) : null}
 
@@ -815,7 +822,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           </div>
           {!running && !statisticsRunning && !activeServer && localJob?.status === 'PAUSED' && canResumeLocalJob(localJob) ? <button className="outline-button" type="button" onClick={() => run(true)}>분석 이어하기</button> : null}
           {localJob && localJob.status !== 'COMPLETED' ? <p className="muted small">화면을 끄거나 탭을 닫으면 분석이 정지될 수 있습니다. 다시 열어 ‘분석 이어하기’를 누르면 저장된 지점부터 계속합니다.</p> : null}
-          {error && strategy !== 'VOLATILITY' && strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
+          {error && strategy !== 'VOLATILITY' && strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' && strategy !== 'PULLBACK' && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
           <button
             className="outline-button history-toggle"
             type="button"

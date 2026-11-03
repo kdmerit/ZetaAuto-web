@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import type { Strategy } from '../types';
 
@@ -47,18 +47,39 @@ export function BacktestMenu({ onOpen, onOpenChart, onSignOut, email }: Backtest
   const [order, setOrder] = useState<MenuItemId[]>(loadMenuOrder);
   const [editing, setEditing] = useState(false);
   const [dragging, setDragging] = useState<MenuItemId | null>(null);
+  const [dragOffset, setDragOffset] = useState(0);
   const pointer = useRef<{ id: MenuItemId; pointerId: number; startY: number; moved: boolean } | null>(null);
   const itemRefs = useRef(new Map<MenuItemId, HTMLButtonElement>());
+  const layoutBeforeOrderRef = useRef(new Map<MenuItemId, number>());
 
   useEffect(() => {
     try { window.localStorage.setItem(backtestMenuOrderStorageKey, JSON.stringify(order)); } catch { /* The menu still works if storage is unavailable. */ }
   }, [order]);
+
+  useLayoutEffect(() => {
+    const before = layoutBeforeOrderRef.current;
+    if (before.size) {
+      for (const [id, element] of itemRefs.current) {
+        if (id === dragging) continue;
+        const previousTop = before.get(id);
+        if (previousTop === undefined) continue;
+        const delta = previousTop - element.getBoundingClientRect().top;
+        if (Math.abs(delta) < 1 || typeof element.animate !== 'function') continue;
+        element.animate(
+          [{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }],
+          { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' },
+        );
+      }
+    }
+    layoutBeforeOrderRef.current = new Map([...itemRefs.current].map(([id, element]) => [id, element.getBoundingClientRect().top]));
+  }, [order, dragging]);
 
   const finishDrag = (event: React.PointerEvent<HTMLButtonElement>): void => {
     if (pointer.current?.pointerId !== event.pointerId) return;
     try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* Pointer capture may already be released. */ }
     pointer.current = null;
     setDragging(null);
+    setDragOffset(0);
   };
 
   const moveItem = (event: React.PointerEvent<HTMLButtonElement>, id: MenuItemId): void => {
@@ -78,12 +99,22 @@ export function BacktestMenu({ onOpen, onOpenChart, onSignOut, email }: Backtest
       return event.clientY < bounds.top + bounds.height / 2;
     });
     const insertAt = target < 0 ? order.length - 1 : from < target ? target - 1 : target;
-    if (insertAt === from) return;
+    if (insertAt === from) {
+      setDragOffset(event.clientY - active.startY);
+      return;
+    }
+    const element = itemRefs.current.get(id);
+    const rowStep = element ? element.getBoundingClientRect().height + 10 : 0;
+    // Keep the card under the finger while its flow position changes. The
+    // non-dragged cards animate into their new positions in the layout effect.
+    active.startY += (insertAt - from) * rowStep;
+    layoutBeforeOrderRef.current = new Map([...itemRefs.current].map(([itemId, node]) => [itemId, node.getBoundingClientRect().top]));
     setOrder(current => {
       const next = current.filter(candidate => candidate !== id);
       next.splice(Math.max(0, Math.min(insertAt, next.length)), 0, id);
       return next;
     });
+    setDragOffset(event.clientY - active.startY);
   };
 
   const orderedItems = order.map(id => menuItemById.get(id)).filter((item): item is MenuItem => Boolean(item));
@@ -93,13 +124,6 @@ export function BacktestMenu({ onOpen, onOpenChart, onSignOut, email }: Backtest
       <div className="content menu-content">
         <header className="page-header">
           <div className="menu-title-row">
-            <button
-              className={`menu-edit-button${editing ? ' active' : ''}`}
-              type="button"
-              aria-label={editing ? '메뉴 순서 편집 완료' : '메뉴 순서 편집'}
-              aria-pressed={editing}
-              onClick={() => { setEditing(value => !value); setDragging(null); pointer.current = null; }}
-            >{editing ? '✓' : '✎'}</button>
             <div>
               <p className="eyebrow">BYBIT · BACKTEST</p>
               <h1>백테스트</h1>
@@ -108,6 +132,13 @@ export function BacktestMenu({ onOpen, onOpenChart, onSignOut, email }: Backtest
           <div className="account-actions">
             <span className="account-email" title={email ?? undefined}>{email ?? ''}</span>
             <button className="logout-button" type="button" onClick={onSignOut}>로그아웃</button>
+            <button
+              className={`menu-edit-button${editing ? ' active' : ''}`}
+              type="button"
+              aria-label={editing ? '메뉴 순서 편집 완료' : '메뉴 순서 편집'}
+              aria-pressed={editing}
+              onClick={() => { setEditing(value => !value); setDragging(null); setDragOffset(0); pointer.current = null; }}
+            >{editing ? '✓' : '✎'}</button>
           </div>
         </header>
         {editing ? <p className="menu-edit-hint">버튼을 위아래로 드래그해 순서를 바꾼 뒤 ✓를 누르세요.</p> : null}
@@ -126,10 +157,12 @@ export function BacktestMenu({ onOpen, onOpenChart, onSignOut, email }: Backtest
                 if (!editing) return;
                 event.currentTarget.setPointerCapture(event.pointerId);
                 pointer.current = { id: item.id, pointerId: event.pointerId, startY: event.clientY, moved: false };
+                setDragOffset(0);
               }}
               onPointerMove={event => moveItem(event, item.id)}
               onPointerUp={event => finishDrag(event)}
               onPointerCancel={event => finishDrag(event)}
+              style={dragging === item.id ? { transform: `translateY(${dragOffset}px)`, zIndex: 2 } : undefined}
             >
               <span className="menu-card-copy"><strong>{item.title}</strong></span>
               {editing ? <span className="menu-drag-handle" aria-hidden="true">☷</span> : <span className="chevron" aria-hidden="true">›</span>}

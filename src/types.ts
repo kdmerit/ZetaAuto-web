@@ -221,7 +221,7 @@ export interface Signal {
   breakoutRangePercent?: number;
   breakoutRange?: number;
   breakoutLevel?: number;
-  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'VOLATILITY_MA5' | 'ENVELOPE_TOUCH' | 'NEW_HIGH_TOUCH';
+  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'VOLATILITY_MA5' | 'ENVELOPE_TOUCH' | 'PULLBACK_ENVELOPE' | 'NEW_HIGH_TOUCH';
   envelopeDeviationPercent?: number;
   envelopeExitMode?: EnvelopeExitMode;
   envelopeMaPeriod?: number;

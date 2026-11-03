@@ -8,6 +8,25 @@ export const envelopeExitLabels: Record<EnvelopeExitMode, string> = {
   CENTER: '중심선 전량 청산', OPPOSITE: '반대 밴드 전량 청산', HALF: '중심선 50% · 반대 밴드 나머지',
 };
 
+/** The current pullback strategy uses a user-entered SMA period and band width. */
+export function currentPullbackSettings(settings: BacktestSettings): BacktestSettings {
+  return { ...settings, envelopeMaPeriod: settings.envelopeMaPeriod ?? '20', envelopeDeviationPercent: settings.envelopeDeviationPercent ?? '5.0' };
+}
+
+export function pullbackEnvelopeParameters(settings: BacktestSettings): { percent: number; period: number } {
+  const value = settings.envelopeDeviationPercent ?? '5.0';
+  const percent = Number(value);
+  if (!/^\d+(\.\d)?$/.test(value) || !Number.isFinite(percent) || percent < 0.1 || percent > 20) {
+    throw new Error('엔벨로프 이격은 0.1~20.0%로 입력해 주세요. (소수 한 자리)');
+  }
+  const periodValue = settings.envelopeMaPeriod ?? '20';
+  const period = Number(periodValue);
+  if (!/^\d+$/.test(periodValue) || !Number.isInteger(period) || period < 1 || period > 120) {
+    throw new Error('엔벨로프 SMA는 1~120 정수로 입력해 주세요.');
+  }
+  return { percent, period };
+}
+
 /** Current strategy only; archived settings without this marker retain their original replay. */
 export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSettings {
   return { ...settings, interval: '1h', envelopeStatisticsInterval: '1h', envelopeDailyTrend: settings.envelopeDailyTrend ?? true,

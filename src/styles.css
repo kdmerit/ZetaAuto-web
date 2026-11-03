@@ -39,7 +39,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .account-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; max-width: calc(100% - 50px); padding-right: 48px; color: #aab6c8; font-size: 12px; }
 .account-email { min-width: 0; max-width: 145px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-content .page-header h1 { white-space: nowrap; }
-.menu-content .account-actions { flex: 1; max-width: 45%; padding-right: 0; }
+.menu-content .account-actions { flex: 0 1 45%; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 45%; padding-right: 0; }
 .logout-button { flex: 0 0 auto; min-height: 32px; padding: 0 9px; border: 1px solid #34435b; border-radius: 9px; background: #151f30; color: #f4f7fb; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .icon-button, .close-button { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid #34435b; border-radius: 999px; background: #151f30; color: #f4f7fb; font-size: 22px; }
 .close-button { flex: 0 0 auto; font-size: 32px; line-height: 1; }
@@ -57,10 +57,10 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .menu-description { margin: -8px 8px 0; }
 
 .menu-cards { display: flex; flex-direction: column; gap: 10px; }
-.menu-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; min-height: clamp(48px, 8.5dvh, 70px); padding: 10px 20px; border: 1px solid #7ea2ff; border-radius: 18px; background: #151f30; color: #f4f7fb; text-align: left; }
+.menu-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; min-height: clamp(48px, 8.5dvh, 70px); padding: 10px 20px; border: 1px solid #7ea2ff; border-radius: 18px; background: #151f30; color: #f4f7fb; text-align: left; will-change: transform; }
 .menu-cards.editing .menu-card { touch-action: none; user-select: none; cursor: grab; }
 .menu-cards.editing .menu-card:active, .menu-card.dragging { cursor: grabbing; }
-.menu-card.dragging { border-color: #64d8e8; background: #202d42; opacity: .72; }
+.menu-card.dragging { border-color: #64d8e8; background: #202d42; opacity: .92; box-shadow: 0 14px 28px rgba(0, 0, 0, .28); transition: box-shadow .18s ease, opacity .18s ease; }
 .menu-drag-handle { color: #7ea2ff; font-size: 25px; line-height: 1; transform: rotate(90deg); }
 .menu-card-copy { display: flex; flex: 1; flex-direction: column; gap: 8px; }
 .menu-card-copy strong { font-size: clamp(22px, 5vw, 30px); line-height: 1.2; }

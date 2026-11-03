@@ -5,7 +5,7 @@ import { prepareSymbolBlock, type PreparedSymbol, type WaveState } from './engin
 import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateMinuteCandles } from './intrabar';
-import { currentEnvelopeSettings } from './envelope';
+import { currentEnvelopeSettings, currentPullbackSettings } from './envelope';
 import { currentNewHighSettings, newHighWarmup } from './newHigh';
 import type { BacktestResult, BacktestSettings, Strategy } from './types';
 import { loadWeeklyUniverse, saveWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
@@ -160,7 +160,9 @@ async function executeWithLease(
     } else {
       if (!options.settings) throw new Error('분석 설정이 없습니다.');
       const copied = structuredClone(options.settings);
-      const settings = options.strategy === 'NEW_HIGH' ? currentNewHighSettings(copied) : options.strategy === 'ENVELOPE' ? currentEnvelopeSettings(copied) : copied;
+      const settings = options.strategy === 'NEW_HIGH' ? currentNewHighSettings(copied)
+        : options.strategy === 'ENVELOPE' ? currentEnvelopeSettings(copied)
+          : options.strategy === 'PULLBACK' ? currentPullbackSettings(copied) : copied;
       const { start, end } = analysisWindow(settings);
       previousJob = await readValue<SavedJob>('jobs', options.strategy);
       job = {

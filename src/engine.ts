@@ -1,6 +1,6 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
-import { bandFor, envelopeParameters, priorMovingAverages, projectDailyTrend, projectEnvelopeBands } from './envelope';
+import { bandFor, envelopeParameters, priorMovingAverages, projectDailyTrend, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
 import { prepareNewHigh, type PreparedNewHigh } from './newHigh';
 import type {
   BacktestResult,
@@ -209,7 +209,8 @@ function advanceWaveState(state: WaveState, candle: Candle, index: number): void
   state.lastAt = candle.openTime;
 }
 
-function pullbackSignals(
+/** Archived wave-based signals remain readable for jobs created before the MA pullback update. */
+function legacyPullbackSignals(
   candles: Candle[],
   settings: BacktestSettings,
   state: WaveState = initialWaveState(),
@@ -278,6 +279,49 @@ function pullbackSignals(
         ...(bucket.current ? [toWave(bucket.current, 'CURRENT', candles, side)] : []),
       ],
     });
+  }
+  return signals;
+}
+
+function pullbackSignals(
+  candles: Candle[],
+  settings: BacktestSettings,
+): Signal[] {
+  const enriched = enrichCandles(candles);
+  const { period, percent } = pullbackEnvelopeParameters(settings);
+  const centers = priorMovingAverages(candles, period);
+  const signals: Signal[] = [];
+  const aligned = (row: EnrichedCandle, side: 'LONG' | 'SHORT'): boolean => {
+    if (row.ma20 === null || row.ma60 === null || row.ma120 === null) return false;
+    return side === 'LONG' ? row.ma20 > row.ma60 && row.ma60 > row.ma120 : row.ma20 < row.ma60 && row.ma60 < row.ma120;
+  };
+  const rising = (values: (number | null)[], side: 'LONG' | 'SHORT'): boolean => values.every((value, index) => index === 0 || value !== null && values[index - 1] !== null && (side === 'LONG' ? value > values[index - 1]! : value < values[index - 1]!));
+  for (let index = 0; index < candles.length; index += 1) {
+    const candle = candles[index];
+    const current = enriched[index];
+    const center = centers[index];
+    if (!candle || !current || center === null || center === undefined || index < 4) continue;
+    const window = enriched.slice(index - 4, index + 1);
+    if (window.length !== 5 || window.some(row => row.ma20 === null || row.ma60 === null || row.ma120 === null)) continue;
+    const sides = settings.side === 'BOTH' ? ['LONG', 'SHORT'] as const : [settings.side] as const;
+    for (const side of sides) {
+      if (side !== 'LONG' && side !== 'SHORT') continue;
+      const long = side === 'LONG';
+      const spreads = window.map(row => (row.ma60 as number) - (row.ma120 as number));
+      const valid = window.every(row => aligned(row, side))
+        && rising(window.map(row => row.ma60), side)
+        && rising(window.map(row => row.ma120), side)
+        && rising(spreads, side)
+        && (long ? candle.close <= current.ma20! : candle.close >= current.ma20!);
+      if (!valid) continue;
+      const band = bandFor(center, percent);
+      const target = long ? band.upper : band.lower;
+      signals.push({
+        strategy: 'PULLBACK', side, index, entry: candle.close, stop: 0, target, initialTarget: target,
+        exitMode: 'PULLBACK_ENVELOPE', envelopeDeviationPercent: percent, envelopeMaPeriod: period,
+        envelopeCenter: band.center, envelopeSourceInterval: settings.interval,
+      });
+    }
   }
   return signals;
 }
@@ -391,10 +435,13 @@ export interface PreparedBar {
   candle: Candle;
   signal: Signal | null;
   ma20: number | null;
+  ma60?: number | null;
+  ma120?: number | null;
   ma60Exit: number | null;
   ma5Exit?: number | null;
   intrabarCandles?: Candle[];
   envelope?: PreparedEnvelope;
+  pullbackEnvelope?: PreparedEnvelope;
   envelopeBySide?: Partial<Record<'LONG' | 'SHORT', PreparedEnvelope>>;
   newHigh?: PreparedNewHigh;
 }
@@ -438,9 +485,14 @@ export function prepareSymbolBlock(
       }];
     }) };
   }
-  const waveState = strategy === 'PULLBACK' ? structuredClone(previousWaveState ?? initialWaveState()) : undefined;
-  const signals = strategy === 'PULLBACK' ? pullbackSignals(candles, settings, waveState)
+  const currentPullback = strategy === 'PULLBACK' && (settings.envelopeMaPeriod !== undefined || settings.envelopeDeviationPercent !== undefined);
+  const waveState = strategy === 'PULLBACK' && !currentPullback ? structuredClone(previousWaveState ?? initialWaveState()) : undefined;
+  const signals = strategy === 'PULLBACK' ? currentPullback ? pullbackSignals(candles, settings) : legacyPullbackSignals(candles, settings, waveState)
     : strategy === 'DISPARITY' ? disparitySignals(candles, settings) : volatilitySignals(candles, settings);
+  const pullbackBands = currentPullback ? (() => {
+    const { percent, period } = pullbackEnvelopeParameters(settings);
+    return { percent, centers: priorMovingAverages(candles, period) };
+  })() : null;
   const seconds = intervalSeconds(settings.interval);
   const minuteGroups = new Map<number, Candle[]>();
   for (const minute of minuteCandles ?? []) {
@@ -458,13 +510,17 @@ export function prepareSymbolBlock(
   }));
   return {
     symbol,
-    bars: enrichCandles(candles).map(candle => ({
+    bars: enrichCandles(candles).map((candle, index) => ({
       candle,
       signal: byTime.get(candle.openTime) ?? null,
       ma20: candle.ma20,
+      ...(currentPullback ? { ma60: candle.ma60, ma120: candle.ma120 } : {}),
       ma5Exit: candle.ma5,
       // The intrabar MA60 touch equals the previous 59 closes' mean, independent of the final close.
       ma60Exit: candle.ma60 === null ? null : (candle.ma60 * 60 - candle.close) / 59,
+      ...(pullbackBands && pullbackBands.centers[index] !== null && pullbackBands.centers[index] !== undefined
+        ? { pullbackEnvelope: { ...bandFor(pullbackBands.centers[index] as number, pullbackBands.percent), long: true, short: true } }
+        : {}),
       ...(byTime.get(candle.openTime)?.exitMode === 'VOLATILITY_TP' && minuteGroups.has(candle.openTime)
         ? { intrabarCandles: minuteGroups.get(candle.openTime) } : {}),
     })).filter(bar => bar.candle.openTime >= start && bar.candle.openTime < end),
@@ -818,7 +874,7 @@ export function runBacktest(
   minuteCandles?: Candle[],
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
-  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH') {
+  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK') {
     const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
     const start = candles[0]!.openTime;
     const end = candles.at(-1)!.closeTime;
@@ -835,9 +891,7 @@ export function runBacktest(
         signal: { ...trade.signal, index } };
     }) };
   }
-  const signals = strategy === 'PULLBACK'
-    ? pullbackSignals(candles, settings)
-    : strategy === 'DISPARITY'
+  const signals = strategy === 'DISPARITY'
       ? disparitySignals(candles, settings)
       : volatilitySignals(candles, settings);
   const byIndex = new Map(signals.map((signal) => [signal.index, signal]));
@@ -912,14 +966,18 @@ export function buildLocalChart(
   const signal = trade.signal;
   const lines: Array<PriceLine | null> = [];
   if (signal.strategy === 'PULLBACK') {
-    lines.push(line('FIRST_ENTRY', trade.entryPrice));
-    lines.push(line('SECOND_ENTRY', signal.second));
-    if (signal.averageEntry && signal.averageEntry !== trade.entryPrice) lines.push(line('AVERAGE_ENTRY', signal.averageEntry));
-    lines.push(line('SL', signal.activeStop ?? signal.stop));
-    if (signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
-    if (signal.initialTarget !== signal.target) lines.push(line('INITIAL_TP', signal.initialTarget));
-    lines.push(line('TP', signal.target));
-    if (signal.partial) lines.push(line('PARTIAL_TP', signal.partial));
+    if (signal.exitMode === 'PULLBACK_ENVELOPE') {
+      lines.push(line('ENTRY', trade.entryPrice));
+    } else {
+      lines.push(line('FIRST_ENTRY', trade.entryPrice));
+      lines.push(line('SECOND_ENTRY', signal.second));
+      if (signal.averageEntry && signal.averageEntry !== trade.entryPrice) lines.push(line('AVERAGE_ENTRY', signal.averageEntry));
+      lines.push(line('SL', signal.activeStop ?? signal.stop));
+      if (signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
+      if (signal.initialTarget !== signal.target) lines.push(line('INITIAL_TP', signal.initialTarget));
+      lines.push(line('TP', signal.target));
+      if (signal.partial) lines.push(line('PARTIAL_TP', signal.partial));
+    }
   } else if (signal.strategy === 'DISPARITY') {
     lines.push(line('ENTRY', trade.entryPrice));
     lines.push(line('SL', signal.activeStop ?? signal.stop));
@@ -953,9 +1011,9 @@ export function buildLocalChart(
     markers,
     executions: markers,
     priceLines: lines.filter((value): value is PriceLine => value !== null),
-    ...(signal.strategy === 'ENVELOPE' ? { envelope: projectEnvelopeBands(result.candles, candles, {
+    ...(signal.strategy === 'ENVELOPE' || signal.exitMode === 'PULLBACK_ENVELOPE' ? { envelope: projectEnvelopeBands(result.candles, candles, {
       interval, period: signal.envelopeMaPeriod ?? Number(settings.envelopeMaPeriod ?? '20'),
-      deviationPercent: signal.envelopeDeviationPercent ?? Number(settings.envelopeDeviationPercent ?? '0.5'),
+      deviationPercent: signal.envelopeDeviationPercent ?? Number(settings.envelopeDeviationPercent ?? '5.0'),
     }) } : {}),
   };
 }
@@ -964,7 +1022,7 @@ export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 진입하고, 20일 ATR마다 최대 4회 불타기·추가매수가 ±2ATR SL·이평선 이탈 청산을 적용합니다.';
   if (strategy === 'ENVELOPE') return '1h 재돌파 진입·중심선 전량 청산에 일봉 MA20 추세 필터를 선택 적용하고, SMA·이격을 사용자 필터와 수익률·승률 정렬로 비교합니다.';
   if (strategy === 'PULLBACK') {
-    return '공통 몸통 파동의 고점·저점 상승과 MA10·MA20·간격의 3봉 연속 증가를 확인한 반전 첫 봉을 2분할 매수합니다.';
+    return 'MA20·MA60·MA120 5봉 정배열과 MA60·MA120·이격 증가를 확인한 뒤 MA20 눌림에서 진입하고, 엔벨로프 상단·하단과 정배열 해제로 청산합니다.';
   }
   if (strategy === 'DISPARITY') {
     return 'MA20·MA60 사이 이격, 현재 캔들 절반, 직전 5봉 몸통 돌파와 직전 10봉 MA20 조건을 분석합니다.';

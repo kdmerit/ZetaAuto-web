@@ -94,6 +94,7 @@ function priceLines(p: Holding): PriceLine[] {
     ...(p.signal.volatilityStopEnabled === true ? [{ kind: 'SL' as const, price: p.stop }] : []),
     ...(p.signal.exitMode === 'VOLATILITY_CLOSE' || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false ? [{ kind: 'TP' as const, price: p.target }] : []),
   ];
+  if (p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE') return [{ kind: 'ENTRY', price: p.first }];
   const split = p.signal.strategy === 'PULLBACK';
   const lines: PriceLine[] = [{ kind: split ? 'FIRST_ENTRY' : 'ENTRY', price: p.first }];
   if (split) lines.push({ kind: 'SECOND_ENTRY', price: p.secondFill ?? p.second });
@@ -106,8 +107,9 @@ function priceLines(p: Holding): PriceLine[] {
 }
 
 function recordFill(p: Holding, kind: Execution['kind'], price: number, quantity: number, candle: Candle, opening = false, confirmedClose = false): void {
-  const intrabar = (p.signal.exitMode === 'VOLATILITY_TP' || p.signal.exitMode === 'ENVELOPE_TOUCH' || p.signal.exitMode === 'NEW_HIGH_TOUCH'
-    || p.signal.exitMode === 'VOLATILITY_MA5') && !opening && !confirmedClose;
+  const intrabarMode = p.signal.exitMode === 'VOLATILITY_TP' || p.signal.exitMode === 'ENVELOPE_TOUCH' || p.signal.exitMode === 'PULLBACK_ENVELOPE' || p.signal.exitMode === 'NEW_HIGH_TOUCH'
+    || p.signal.exitMode === 'VOLATILITY_MA5';
+  const intrabar = intrabarMode && !confirmedClose && (kind === 'ENTRY' ? opening : !opening);
   const parentOpenTime = (candle as Candle & { parentOpenTime?: number }).parentOpenTime ?? candle.openTime;
   p.executions.push({ kind, price, quantity, at: opening || intrabar ? candle.openTime : candle.closeTime, candleOpenAt: parentOpenTime,
     ...(intrabar ? { timing: 'INTRABAR' as const } : confirmedClose ? { timing: 'BAR_CLOSE' as const } : {}) });
@@ -122,7 +124,7 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_MA_EXIT'].includes(reason);
+  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_MA_EXIT', 'PULLBACK_MA_EXIT'].includes(reason);
   const fill = market ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
   const qty = Math.min(p.qty, quantity);
   const profit = gross(p, fill, qty);
@@ -165,7 +167,7 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   const bet = Number(settings.betAmountUsdt);
   const leverage = Number(settings.leverage);
   if (state.cash + 1e-10 < bet * (1 + leverage * feeRate)) { state.insufficientFunds += 1; return; }
-  const split = signal.strategy === 'PULLBACK';
+  const split = signal.strategy === 'PULLBACK' && signal.exitMode !== 'PULLBACK_ENVELOPE';
   const entry = signal.entry * (signal.side === 'LONG' ? 1 + slippage : 1 - slippage);
   const direction = signal.side === 'LONG' ? 1 : -1;
   const target = signal.exitMode === 'VOLATILITY_TP' ? entry + direction * signal.breakoutRange! * signal.volatilityK1!
@@ -179,7 +181,7 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     pending: split, second: split ? (entry + signal.stop) / 2 : entry,
     ...(signal.strategy === 'ENVELOPE' && settings.envelopeRisk?.symbol === symbol ? { risk: settings.envelopeRisk } : {}),
     target,
-    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' && signal.strategy !== 'NEW_HIGH' ? (entry + signal.initialTarget) / 2 : null,
+    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' && signal.strategy !== 'NEW_HIGH' && signal.exitMode !== 'PULLBACK_ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
     partialDone: false, stop: signal.strategy === 'ENVELOPE' ? entry * (1 - direction * signal.envelopeDeviationPercent! / 100) : signal.stop, mark: candle.close, net: -fee, executions: [],
   };
   if (signal.strategy === 'ENVELOPE') {
@@ -192,7 +194,9 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   state.realized -= fee;
   state.fees += fee;
   state.entries += 1;
-  recordFill(p, 'ENTRY', entry, p.qty, candle);
+  const entryAtOpen = signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5'
+    || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH';
+  recordFill(p, 'ENTRY', entry, p.qty, candle, entryAtOpen);
   if (signal.exitMode === 'BAR_CLOSE') close(state, p, candle.close, p.qty, 'SESSION_CLOSE', candle);
 }
 
@@ -232,7 +236,8 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
       close(state, p, Math.max(Number.EPSILON, bankruptcy), p.qty, 'LIQ', candle, opening); return;
     }
   }
-  const stopped = (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true)
+  const stopped = p.signal.exitMode !== 'PULLBACK_ENVELOPE'
+    && (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true)
     && (long ? price <= p.stop : price >= p.stop);
   if (p.pending && !stopped && (long ? price <= p.second : price >= p.second)) fillSecond(state, p, opening ? price : p.second, candle, settings, opening);
   if (stopped) { close(state, p, opening ? price : p.stop, p.qty, 'SL', candle, opening); return; }
@@ -254,6 +259,7 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
   if (targetEnabled && (long ? price >= p.target : price <= p.target)) {
     const disparity = p.signal.strategy === 'DISPARITY';
     const reason = p.signal.strategy === 'ENVELOPE' ? p.signal.envelopeExitMode === 'CENTER' ? 'ENVELOPE_CENTER' : 'ENVELOPE_OPPOSITE'
+      : p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE' ? 'PULLBACK_ENVELOPE'
       : disparity ? 'MA60_TOUCH' : 'FULL_TP';
     close(state, p, disparity ? price : p.target, p.qty, reason, candle, opening);
   }
@@ -268,7 +274,7 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
   const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
     || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
   if (targetEnabled) levels.add(p.target);
-  if (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true) levels.add(p.stop);
+  if (p.signal.exitMode !== 'PULLBACK_ENVELOPE' && (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true)) levels.add(p.stop);
   if (p.pending) levels.add(p.second);
   if (p.partial !== null && !p.partialDone) levels.add(p.partial);
   if (p.signal.envelopeMoveSlOnCenter === true && !p.centerStopMoved && p.envelopeCenter !== undefined) levels.add(p.envelopeCenter);
@@ -489,8 +495,20 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
     position.partial = position.signal.envelopeExitMode === 'HALF' && !position.partialDone ? bar.envelope.center : null;
     position.envelopeCenter = bar.envelope.center;
   }
+  if (position.signal.strategy === 'PULLBACK' && position.signal.exitMode === 'PULLBACK_ENVELOPE') {
+    if (!bar.pullbackEnvelope) throw new Error(`${symbol}의 눌림목 엔벨로프 계산에 필요한 캔들이 부족합니다.`);
+    position.target = position.signal.side === 'LONG' ? bar.pullbackEnvelope.upper : bar.pullbackEnvelope.lower;
+  }
   const candidates = [replayPath(position, bar, settings, true), replayPath(position, bar, settings, false)];
   mergePath(state, worstPath(candidates), symbol);
+  const remaining = state.positions[symbol];
+  if (remaining?.signal.strategy === 'PULLBACK' && remaining.signal.exitMode === 'PULLBACK_ENVELOPE') {
+    const long = remaining.signal.side === 'LONG';
+    const aligned = bar.ma20 !== null && bar.ma20 !== undefined && bar.ma60 !== null && bar.ma60 !== undefined
+      && bar.ma120 !== null && bar.ma120 !== undefined
+      && (long ? bar.ma20 > bar.ma60 && bar.ma60 > bar.ma120 : bar.ma20 < bar.ma60 && bar.ma60 < bar.ma120);
+    if (!aligned) close(state, remaining, bar.candle.close, remaining.qty, 'PULLBACK_MA_EXIT', bar.candle);
+  }
 }
 
 interface NewHighPath { state: PortfolioState; spent: number }
