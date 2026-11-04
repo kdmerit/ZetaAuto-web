@@ -167,6 +167,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .trade-price-link.entry { color: #F0A34A; }
 .trade-price-link.close { color: #39C98A; }
 .trade-price-link.stop { color: #FF5C78; }
+.trade-price-link.loss { color: #FF5C78; }
 .candle-info { display: flex; flex-direction: column; gap: 1px; }
 .candle-info-hidden { visibility: hidden; pointer-events: none; }
 .candle-info em { color: #f0b45d; font-style: normal; }

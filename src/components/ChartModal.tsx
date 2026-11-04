@@ -446,6 +446,10 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
     return { ...chart, priceLines: [...chart.priceLines, { kind: 'EXIT' as const, price: fills.close.price }] };
   }, [chart, fills.close]);
   const exitLabel = chart.exitReason === 'SL' ? 'SL' : '청산가';
+  const exitIsProfit = chart.exitProfit ?? (chart.side !== null && fills.entry !== null && fills.close !== null
+    ? chart.side === 'LONG' ? fills.close.price > fills.entry.price : fills.close.price < fills.entry.price
+    : null);
+  const exitLinkTone = exitLabel === 'SL' ? ' stop' : exitIsProfit === false ? ' loss' : '';
   const focusExecution = async (fill: ChartMarker): Promise<void> => {
     if (focusing || switching || loadingOlder) return;
     setFocusing(true);
@@ -551,7 +555,7 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
             <strong className={selected ? undefined : 'candle-info-hidden'} aria-hidden={!selected}>{infoCandle ? formatDate(infoCandle.openTime) : ''}</strong>
             {!chart.market ? <div className="trade-price-links" role="group" aria-label="체결 가격 이동">
               {([['entry', '매수가', fills.entry], ['close', exitLabel, fills.close]] as const).map(([kind, label, fill]) => (
-                <button className={`trade-price-link ${kind}${kind === 'close' && exitLabel === 'SL' ? ' stop' : ''}`} key={kind} type="button" disabled={!fill || focusing || switching !== null || loadingOlder}
+                <button className={`trade-price-link ${kind}${kind === 'close' ? exitLinkTone : ''}`} key={kind} type="button" disabled={!fill || focusing || switching !== null || loadingOlder}
                   aria-label={fill ? `${label} ${formatPrice(fill.price)} · ${kind === 'entry' ? '최초 매수' : '최종 청산'} 지점으로 이동` : `${label} 정보 없음`}
                   onClick={() => { if (fill) void focusExecution(fill); }}>{label} {fill ? formatPrice(fill.price) : '—'}</button>
               ))}
