@@ -40,7 +40,7 @@ import { EnvelopeTrendControl } from './EnvelopeTrendControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
-import { currentNewHighSettings, newHighPeriod, newHighRules, newHighSlMultiplier } from '../newHigh';
+import { currentNewHighSettings, newHighPeriod, newHighRules } from '../newHigh';
 
 const strategySettings = (strategy: Strategy, value: BacktestSettings): BacktestSettings => strategy === 'NEW_HIGH'
   ? currentNewHighSettings(value) : strategy === 'ENVELOPE' ? currentEnvelopeSettings(value) : strategy === 'PULLBACK' ? currentPullbackSettings(value) : value;
@@ -87,7 +87,6 @@ export function defaultSettings(): BacktestSettings {
     envelopeMoveSlOnCenter: false,
     envelopeEntryMode: 'RECLAIM',
     newHighLookback: '20',
-    newHighSlMultiplier: '2',
   };
 }
 
@@ -409,7 +408,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     if (strategy === 'DISPARITY' && (!/^([1-9]|[1-9]\d|100)$/.test(settings.roiClosePercent))) throw new Error('ROI 손실 청산은 1~100 정수로 입력해 주세요.');
     if (strategy === 'ENVELOPE') envelopeParameters(settings);
     if (strategy === 'PULLBACK') pullbackEnvelopeParameters(settings);
-    if (strategy === 'NEW_HIGH') { newHighPeriod(settings); newHighSlMultiplier(settings); }
+    if (strategy === 'NEW_HIGH') newHighPeriod(settings);
     const start = Date.parse(`${settings.startDate}T${settings.startTime}:00+09:00`);
     const end = settings.endDate ? Date.parse(`${settings.endDate}T${settings.endTime}:00+09:00`) : Date.now();
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start > Date.now()) throw new Error('분석 기간을 확인해 주세요.');
@@ -783,8 +782,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
 
           {strategy === 'NEW_HIGH' ? <>
             <label className="field-label">신고가 기준 봉수<input type="number" inputMode="numeric" min="6" max="1000" step="1" value={settings.newHighLookback ?? '20'} onChange={event => update('newHighLookback', event.target.value)} /><small>6~1000 · 기본 20 · 현재 봉 제외 · 최근 5봉에 고가/저가가 있으면 제외</small></label>
-            <label className="field-label">SL 배수 (ATR)<input type="number" inputMode="decimal" min="0.1" max="10" step="0.1" value={settings.newHighSlMultiplier ?? '2'} onChange={event => update('newHighSlMultiplier', event.target.value)} /><small>0.1~10.0 · 기본 2.0 · 롱 매수가−ATR×배수 / 숏 매수가+ATR×배수</small></label>
-            <p className="notice small">돌파 즉시 1회 진입 · 돌파선 ± 1ATR 이내만 매수 · 입력한 SL 배수×ATR 적용</p>
+            <p className="notice small">돌파 즉시 1회 진입 · 돌파선 ± 1ATR 이내만 매수 · 롱 전전고점 캔들의 저가 / 숏 전전저점 캔들의 고가를 SL로 적용</p>
             <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 고정 베팅액으로 한 번만 진입합니다. 1ATR 라인을 돌파한 뒤 다음 캔들에서 재이탈하면 청산하며, 2ATR 수익구간에서는 롱 MA5&lt;MA20·숏 MA5&gt;MA20 조건도 적용합니다.</p>
           </> : strategy === 'PULLBACK' ? (
             <>

@@ -58,7 +58,6 @@ export interface BacktestSettings {
   envelopeDailyTrend?: boolean;
   envelopeResultOptions?: EnvelopeResultOptions;
   newHighLookback?: string;
-  newHighSlMultiplier?: string;
 }
 
 export interface Candle {

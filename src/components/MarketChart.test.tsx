@@ -43,6 +43,16 @@ describe('standalone market chart presentation', () => {
     const loss = renderToStaticMarkup(<ChartModal chart={{ ...chart, market: undefined, side: 'LONG', markers: [entry, close], executions: [entry, close], priceLines: [{ kind: 'ENTRY', price: 100 }, { kind: 'EXIT', price: 105 }], exitReason: 'FULL_TP', exitProfit: false }} onClose={() => {}} />);
     expect(loss).toContain('청산가 105'); expect(loss).toContain('trade-price-link close loss');
   });
+  it('renders current, previous and two-back waves as separate rectangle layers', () => {
+    const waves = [
+      { label: 'PREVIOUS_PREVIOUS' as const, direction: 'UP' as const, startTime: rows[112]!.openTime, endTime: rows[114]!.openTime, startIndex: 112, endIndex: 114, complete: true, low: 96, high: 102 },
+      { label: 'PREVIOUS' as const, direction: 'UP' as const, startTime: rows[116]!.openTime, endTime: rows[118]!.openTime, startIndex: 116, endIndex: 118, complete: true, low: 97, high: 103 },
+      { label: 'CURRENT' as const, direction: 'UP' as const, startTime: rows[120]!.openTime, endTime: rows[123]!.openTime, startIndex: 120, endIndex: 123, complete: false, low: 98, high: 104 },
+    ];
+    const html = renderToStaticMarkup(<ChartModal chart={{ ...chart, market: undefined, side: 'LONG', waves }} onClose={() => {}} />);
+    for (const label of ['PREVIOUS_PREVIOUS', 'PREVIOUS', 'CURRENT']) expect(html).toContain(`data-wave-label="${label}"`);
+    for (const label of ['전전파동', '전파동', '현재파동']) expect(html).toContain(`<title>${label}</title>`);
+  });
   it('shows the 20-day ATR in a volatility backtest popup', () => {
     const html = renderToStaticMarkup(<ChartModal chart={{ ...chart, market: undefined, side: 'LONG', priceLines: [{ kind: 'ENTRY', price: 100 }, { kind: 'SL', price: 90 }] }} onClose={() => {}} />);
     expect(html).toContain('백테스트 차트'); expect(html).toContain('ATR 10 (10.00%)'); expect(html).toContain('market-true-range positive');

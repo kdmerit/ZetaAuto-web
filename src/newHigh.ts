@@ -1,6 +1,6 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { atrWindowSeconds, calendarAtr } from './atr';
-import type { BacktestSettings, Candle } from './types';
+import type { BacktestSettings, Candle, Wave } from './types';
 
 export interface PreparedNewHigh {
   atr: number | null;
@@ -9,6 +9,12 @@ export interface PreparedNewHigh {
   sum19: number;
   high: number;
   low: number;
+  /** Low of the second-highest prior high candle; used as the long SL. */
+  secondHighLow?: number;
+  /** High of the second-lowest prior low candle; used as the short SL. */
+  secondLowHigh?: number;
+  longWaves?: Wave[];
+  shortWaves?: Wave[];
   long: boolean;
   short: boolean;
 }
@@ -19,24 +25,128 @@ export function newHighPeriod(settings: BacktestSettings): number {
   if (settings.interval !== '1h' && settings.interval !== '4h') throw new Error('신고가 백테스트는 1h·4h만 사용할 수 있습니다.');
   return Number(text);
 }
-export function newHighSlMultiplier(settings: BacktestSettings): number {
-  const text = settings.newHighSlMultiplier ?? '2';
-  const value = Number(text);
-  if (!/^\d+(?:\.\d{1,2})?$/.test(text) || !Number.isFinite(value) || value < 0.1 || value > 10) {
-    throw new Error('신고가 SL 배수는 0.1~10.0으로 입력해 주세요.');
-  }
-  return value;
-}
 export function newHighWarmup(settings: BacktestSettings): number {
   return Math.max(atrWindowSeconds + intervalSeconds(settings.interval), (newHighPeriod(settings) + 40) * intervalSeconds(settings.interval));
 }
 export function currentNewHighSettings(settings: BacktestSettings): BacktestSettings {
-  return { ...settings, interval: settings.interval === '4h' ? '4h' : '1h', newHighLookback: settings.newHighLookback ?? '20', newHighSlMultiplier: settings.newHighSlMultiplier ?? '2', partialTpEnabled: false };
+  return { ...settings, interval: settings.interval === '4h' ? '4h' : '1h', newHighLookback: settings.newHighLookback ?? '20', partialTpEnabled: false };
+}
+
+interface InternalWave {
+  startIndex: number;
+  endIndex: number;
+  startTime: number;
+  endTime: number;
+  low: number;
+  high: number;
+  tailLow: number;
+  tailHigh: number;
+  first: boolean;
+  second: boolean;
+}
+
+interface WaveBucket {
+  previousPrevious: InternalWave | null;
+  previous: InternalWave | null;
+  current: InternalWave | null;
+}
+
+interface WaveState {
+  trend: number;
+  lastBodyHigh: number | null;
+  lastBodyLow: number | null;
+  lastTailLow: number | null;
+  lastTailHigh: number | null;
+  lastIndex: number | null;
+  lastAt: number | null;
+  LONG: WaveBucket;
+  SHORT: WaveBucket;
+}
+
+function emptyWaveBucket(): WaveBucket {
+  return { previousPrevious: null, previous: null, current: null };
+}
+
+function emptyWaveState(): WaveState {
+  return { trend: 0, lastBodyHigh: null, lastBodyLow: null, lastTailLow: null, lastTailHigh: null, lastIndex: null, lastAt: null,
+    LONG: emptyWaveBucket(), SHORT: emptyWaveBucket() };
+}
+
+function bodyHigh(candle: Candle): number { return Math.max(candle.open, candle.close); }
+function bodyLow(candle: Candle): number { return Math.min(candle.open, candle.close); }
+
+/** The same body/tail wave definition used by the legacy chart layers. */
+function advanceWaveState(state: WaveState, candle: Candle, index: number): void {
+  const low = bodyLow(candle); const high = bodyHigh(candle);
+  if (state.lastBodyLow === null || state.lastBodyHigh === null) {
+    state.lastBodyLow = low; state.lastBodyHigh = high; state.lastTailLow = candle.low; state.lastTailHigh = candle.high;
+    state.lastIndex = index; state.lastAt = candle.openTime; return;
+  }
+  const oldTrend = state.trend;
+  const highUp = high >= state.lastBodyHigh; const lowDown = low <= state.lastBodyLow;
+  const trend = highUp && !lowDown ? 1 : lowDown && !highUp ? -1
+    : highUp && lowDown ? candle.close === candle.open ? state.trend || 1 : candle.close > candle.open ? 1 : -1
+      : state.trend || -1;
+  const previousIndex = state.lastIndex ?? Math.max(index - 1, 0);
+  for (const [name, wanted] of [['LONG', 1], ['SHORT', -1] as const] as const) {
+    const bucket = state[name];
+    if (trend === wanted && trend !== oldTrend) {
+      if (bucket.current?.first && bucket.current.second) {
+        bucket.previousPrevious = bucket.previous; bucket.previous = bucket.current;
+      }
+      bucket.current = { startIndex: previousIndex, endIndex: previousIndex, startTime: state.lastAt ?? candle.openTime,
+        endTime: state.lastAt ?? candle.openTime, low: state.lastBodyLow, high: state.lastBodyHigh,
+        tailLow: state.lastTailLow ?? candle.low, tailHigh: state.lastTailHigh ?? candle.high, first: true, second: false };
+    }
+    if (bucket.current) {
+      bucket.current.endIndex = index; bucket.current.endTime = candle.openTime;
+      bucket.current.low = Math.min(bucket.current.low, low); bucket.current.high = Math.max(bucket.current.high, high);
+      bucket.current.tailLow = Math.min(bucket.current.tailLow, candle.low); bucket.current.tailHigh = Math.max(bucket.current.tailHigh, candle.high);
+      if (trend === -wanted) bucket.current.second = true;
+    }
+  }
+  state.trend = trend; state.lastBodyLow = low; state.lastBodyHigh = high; state.lastTailLow = candle.low; state.lastTailHigh = candle.high;
+  state.lastIndex = index; state.lastAt = candle.openTime;
+}
+
+function publicWave(wave: InternalWave, label: Wave['label'], side: 'LONG' | 'SHORT'): Wave {
+  return { label, direction: side === 'LONG' ? 'UP' : 'DOWN', startIndex: wave.startIndex, endIndex: wave.endIndex,
+    startTime: wave.startTime, endTime: wave.endTime, complete: label !== 'CURRENT', low: wave.low, high: wave.high };
+}
+
+function waveLayers(candles: Candle[]): { long: Wave[][]; short: Wave[][] } {
+  const states: Record<'LONG' | 'SHORT', WaveState> = { LONG: emptyWaveState(), SHORT: emptyWaveState() };
+  const layers: { long: Wave[][]; short: Wave[][] } = { long: [], short: [] };
+  for (let index = 0; index < candles.length; index += 1) {
+    const candle = candles[index]!;
+    for (const side of ['LONG', 'SHORT'] as const) {
+      const bucket = states[side][side];
+      const current = [
+        bucket.previousPrevious ? publicWave(bucket.previousPrevious, 'PREVIOUS_PREVIOUS', side) : null,
+        bucket.previous ? publicWave(bucket.previous, 'PREVIOUS', side) : null,
+        bucket.current ? publicWave(bucket.current, 'CURRENT', side) : null,
+      ].filter((wave): wave is Wave => wave !== null);
+      layers[side === 'LONG' ? 'long' : 'short'][index] = current;
+    }
+    for (const side of ['LONG', 'SHORT'] as const) advanceWaveState(states[side], candle, index);
+  }
+  return layers;
+}
+
+function secondExtremeReference(candles: Candle[], index: number, period: number, side: 'LONG' | 'SHORT'): number | undefined {
+  const candidates = candles.slice(Math.max(0, index - period), index).map((candle, offset) => ({ candle, index: Math.max(0, index - period) + offset }));
+  candidates.sort((left, right) => {
+    const difference = side === 'LONG' ? right.candle.high - left.candle.high : left.candle.low - right.candle.low;
+    return difference || right.index - left.index;
+  });
+  const reference = candidates[1]?.candle;
+  return side === 'LONG' ? reference?.low : reference?.high;
 }
 
 /** Every field is fixed from candles strictly before the execution candle. */
 export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): (PreparedNewHigh | undefined)[] {
   const period = newHighPeriod(settings); const enriched = enrichCandles(candles); const atr = calendarAtr(candles, settings.interval);
+  const waves = waveLayers(candles);
   const sums = [0]; for (const row of candles) sums.push(sums.at(-1)! + row.close);
   const extremes = (field: 'high' | 'low', direction: number): number[] => {
     const deque: number[] = []; let left = 0;
@@ -52,11 +162,14 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): (
     if (index < Math.max(period, 40)) return undefined;
     const recent = candles.slice(index - 5, index);
     const cross = enriched.slice(index - 20, index);
+    const long = settings.side !== 'SHORT' && recent.every(row => row.high < highs[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 < row.ma20);
+    const short = settings.side !== 'LONG' && recent.every(row => row.low > lows[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 > row.ma20);
     return { atr: atr[index]!.complete ? atr[index]!.value : null,
       sum4: sums[index]! - sums[index - 4]!, sum9: sums[index]! - sums[index - 9]!, sum19: sums[index]! - sums[index - 19]!,
       high: highs[index]!, low: lows[index]!,
-      long: settings.side !== 'SHORT' && recent.every(row => row.high < highs[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 < row.ma20),
-      short: settings.side !== 'LONG' && recent.every(row => row.low > lows[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 > row.ma20),
+      ...(long ? { secondHighLow: secondExtremeReference(candles, index, period, 'LONG'), longWaves: waves.long[index] ?? [] } : {}),
+      ...(short ? { secondLowHigh: secondExtremeReference(candles, index, period, 'SHORT'), shortWaves: waves.short[index] ?? [] } : {}),
+      long, short,
     };
   });
 }
@@ -65,12 +178,12 @@ export const newHighRules = {
   long: [
     '현재 봉을 제외한 이전 N봉 최고가를 위로 돌파한 그 봉에서 즉시 1Unit 진입합니다. N은 입력값(기본 20)이며 실제 체결가가 돌파선 + 1ATR 이내여야 합니다.',
     '돌파 순간 현재가를 반영한 MA10 > MA20이고, 이전 20봉 안에 MA10 < MA20인 봉이 하나 이상 있어야 합니다.',
-    '이전 N봉 최고가가 최근 5개 완성봉 안에 한 번이라도 있으면 진입하지 않습니다. SL은 실제 매수가 − (입력 SL 배수×ATR)입니다. 매수 후 어떤 캔들이 실제 매수가 + 1×ATR을 돌파하면, 이후 캔들이 그 라인을 다시 하락 돌파할 때 청산합니다. 또한 현재가가 실제 매수가 + 2×ATR 이상이고 현재 MA5 < MA20이면 청산합니다.',
+    '이전 N봉 최고가가 최근 5개 완성봉 안에 한 번이라도 있으면 진입하지 않습니다. SL은 매수 기준 전전고점 캔들의 저가입니다. 매수 후 어떤 캔들이 실제 매수가 + 1×ATR을 돌파하면, 이후 캔들이 그 라인을 다시 하락 돌파할 때 청산합니다. 또한 현재가가 실제 매수가 + 2×ATR 이상이고 현재 MA5 < MA20이면 청산합니다.',
   ],
   short: [
     '현재 봉을 제외한 이전 N봉 최저가를 아래로 돌파한 그 봉에서 즉시 1Unit 숏 진입합니다. 실제 체결가가 돌파선 − 1ATR 이상이어야 합니다.',
     '돌파 순간 현재가를 반영한 MA10 < MA20이고, 이전 20봉 안에 MA10 > MA20인 봉이 하나 이상 있어야 합니다.',
-    '이전 N봉 최저가가 최근 5개 완성봉 안에 한 번이라도 있으면 진입하지 않습니다. SL은 실제 매수가 + (입력 SL 배수×ATR)입니다. 매수 후 어떤 캔들이 실제 매수가 − 1×ATR을 돌파하면, 이후 캔들이 그 라인을 다시 상승 돌파할 때 청산합니다. 또한 현재가가 실제 매수가 − 2×ATR 이하이고 현재 MA5 > MA20이면 청산합니다.',
+    '이전 N봉 최저가가 최근 5개 완성봉 안에 한 번이라도 있으면 진입하지 않습니다. SL은 매수 기준 전전저점 캔들의 고가입니다. 매수 후 어떤 캔들이 실제 매수가 − 1×ATR을 돌파하면, 이후 캔들이 그 라인을 다시 상승 돌파할 때 청산합니다. 또한 현재가가 실제 매수가 − 2×ATR 이하이고 현재 MA5 > MA20이면 청산합니다.',
   ],
-  common: 'ATR은 선택 주기 TR의 직전 20일 단순평균(1h 480봉·4h 120봉)이며 매 봉 시작 전에 확정합니다. 자료가 부족하면 신규 진입하지 않습니다. 고정 베팅액 1Unit으로 종목당 한 번만 진입합니다. 자금이 부족하거나 SL 가격이 유효하지 않으면 진입하지 않습니다. 고정 TP는 사용하지 않습니다. 롱은 매수 후 실제 매수가 + 1×ATR을 돌파한 캔들이 나온 뒤 다음 캔들에서 그 라인을 하락 돌파하면 청산하고, 현재가가 실제 매수가 + 2×ATR 이상이면서 현재 MA5 < MA20이어도 청산합니다. 숏은 매수 후 실제 매수가 − 1×ATR을 돌파한 캔들이 나온 뒤 다음 캔들에서 그 라인을 상승 돌파하면 청산하고, 현재가가 실제 매수가 − 2×ATR 이하이면서 현재 MA5 > MA20이어도 청산합니다. MA는 현재가를 반영해 봉 중간에도 계산합니다. 첫 돌파 순간 조건이 맞지 않거나 갭이 진입 허용 범위를 넘으면 같은 봉에서 추격/재시도하지 않습니다. 갭은 과거 돌파가가 아닌 관측 시가에 체결하며 진입/청산 0.02% 슬리피지·편도 0.055% 수수료를 반영합니다. 진입 범위는 슬리피지 반영 실제 체결가로 검사합니다. 두 OHLC 경로 중 낮은 계좌 평가액을 선택하고 동시 경계는 SL 우선입니다. 정확한 틱 재현은 아닙니다. 한 봉에서 청산 후 재진입하지 않으며 전체종목은 한 계좌·종목명 순서·봉 시작 가용자금만 사용합니다.',
+  common: 'ATR은 선택 주기 TR의 직전 20일 단순평균(1h 480봉·4h 120봉)이며 매 봉 시작 전에 확정합니다. 자료가 부족하면 신규 진입하지 않습니다. 고정 베팅액 1Unit으로 종목당 한 번만 진입합니다. 롱 SL은 전전고점 캔들의 저가, 숏 SL은 전전저점 캔들의 고가입니다. 고정 TP는 사용하지 않습니다. 롱은 매수 후 실제 매수가 + 1×ATR을 돌파한 캔들이 나온 뒤 다음 캔들에서 그 라인을 하락 돌파하면 청산하고, 현재가가 실제 매수가 + 2×ATR 이상이면서 현재 MA5 < MA20이어도 청산합니다. 숏은 매수 후 실제 매수가 − 1×ATR을 돌파한 캔들이 나온 뒤 다음 캔들에서 그 라인을 상승 돌파하면 청산하고, 현재가가 실제 매수가 − 2×ATR 이하이면서 현재 MA5 > MA20이어도 청산합니다. MA는 현재가를 반영해 봉 중간에도 계산합니다. 첫 돌파 순간 조건이 맞지 않거나 갭이 진입 허용 범위를 넘으면 같은 봉에서 추격/재시도하지 않습니다. 갭은 과거 돌파가가 아닌 관측 시가에 체결하며 진입/청산 0.02% 슬리피지·편도 0.055% 수수료를 반영합니다. 진입 범위는 슬리피지 반영 실제 체결가로 검사합니다. 두 OHLC 경로 중 낮은 계좌 평가액을 선택하고 동시 경계는 SL 우선입니다. 정확한 틱 재현은 아닙니다. 한 봉에서 청산 후 재진입하지 않으며 전체종목은 한 계좌·종목명 순서·봉 시작 가용자금만 사용합니다.',
 };

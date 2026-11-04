@@ -3,7 +3,6 @@ import type { PreparedBar, PreparedSymbol } from './engine';
 import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, ContractRisk, Execution, PriceLine, Signal } from './types';
 import { validateMinuteCandles } from './intrabar';
 import { dailyTrendAllows, envelopeParameters } from './envelope';
-import { newHighSlMultiplier } from './newHigh';
 import { estimatedLiquidation } from './contractRisk';
 
 const feeRate = 0.00055;
@@ -531,7 +530,6 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
   const ma10 = (price: number) => (definition.sum9 + price) / 10;
   const ma20 = (price: number) => (definition.sum19 + price) / 20;
   const ma5 = (price: number) => (definition.sum4 + price) / 5;
-  const slMultiplier = newHighSlMultiplier(settings);
   const tolerance = (...values: number[]) => Math.max(Number.MIN_VALUE, ...values.map(value => Math.abs(value) * Number.EPSILON * 16));
   const conditionalExitPrice = (p: Holding, before: number, after: number): number | null => {
     const long = p.signal.side === 'LONG';
@@ -559,11 +557,11 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     const fill = price * (1 + direction * slippage);
     const boundary = side === 'LONG' ? definition.high : definition.low;
     if (direction * (ma10(price) - ma20(price)) <= 0 || direction * (fill - boundary) > definition.atr! + tolerance(fill, boundary, definition.atr!)) return;
-    const stop = fill - direction * slMultiplier * definition.atr!;
-    if (!(stop > 0) || (side === 'LONG' ? stop >= price : stop <= price)) return;
+    const stop = side === 'LONG' ? definition.secondHighLow : definition.secondLowHigh;
+    if (stop === undefined || !(stop > 0) || (side === 'LONG' ? stop >= price : stop <= price)) return;
     const target = fill + direction * 2 * definition.atr!;
     enter(state, symbol, { strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime),
-      entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH' }, candle, settings);
+      entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', waves: side === 'LONG' ? definition.longWaves : definition.shortWaves }, candle, settings);
     const p = state.positions[symbol];
     if (p) { p.newHighProfitLineHit = false; spent += cost; }
   };

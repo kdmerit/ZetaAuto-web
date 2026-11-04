@@ -375,7 +375,8 @@ function ChartSvg({
           const top = yFor(wave.high);
           const bottom = yFor(wave.low);
           const color = wave.label === 'CURRENT' ? 'rgba(91,213,165,.20)' : wave.label === 'PREVIOUS' ? 'rgba(126,162,255,.20)' : 'rgba(240,180,93,.20)';
-          return <rect key={wave.label} x={x} y={Math.min(top, bottom)} width={w} height={Math.abs(bottom - top)} fill={color} stroke={color.replace('.20', '.8')} strokeWidth="1" />;
+          const label = wave.label === 'CURRENT' ? '현재파동' : wave.label === 'PREVIOUS' ? '전파동' : '전전파동';
+          return <rect key={wave.label} data-wave-label={wave.label} x={x} y={Math.min(top, bottom)} width={w} height={Math.abs(bottom - top)} fill={color} stroke={color.replace('.20', '.8')} strokeWidth="1"><title>{label}</title></rect>;
         })}
         {maDefinitions.filter((definition) => visibleMas[definition.key]).map((definition) => (
           <polyline key={definition.key} points={pointString(definition.key)} fill="none" stroke={definition.color} strokeWidth="2" opacity=".95" />
