@@ -383,7 +383,7 @@ function ChartSvg({
         {chart.priceLines.map((priceLine) => {
           const y = yFor(priceLine.price);
           if (!Number.isFinite(y) || y < 0 || y > plotHeight) return null;
-          const style = lineStyles[priceLine.kind];
+          const style = priceLine.kind === 'EXIT' && chart.exitReason === 'SL' ? lineStyles.SL : lineStyles[priceLine.kind];
           return <line key={`${priceLine.kind}-${priceLine.price}`} x1="0" x2={width} y1={y} y2={y} stroke={style.color} strokeWidth="1.4" strokeDasharray="4 5" />;
         })}
         {drawnCandles.map((candle, offset) => {
@@ -551,7 +551,7 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
             <strong className={selected ? undefined : 'candle-info-hidden'} aria-hidden={!selected}>{infoCandle ? formatDate(infoCandle.openTime) : ''}</strong>
             {!chart.market ? <div className="trade-price-links" role="group" aria-label="체결 가격 이동">
               {([['entry', '매수가', fills.entry], ['close', exitLabel, fills.close]] as const).map(([kind, label, fill]) => (
-                <button className={`trade-price-link ${kind}`} key={kind} type="button" disabled={!fill || focusing || switching !== null || loadingOlder}
+                <button className={`trade-price-link ${kind}${kind === 'close' && exitLabel === 'SL' ? ' stop' : ''}`} key={kind} type="button" disabled={!fill || focusing || switching !== null || loadingOlder}
                   aria-label={fill ? `${label} ${formatPrice(fill.price)} · ${kind === 'entry' ? '최초 매수' : '최종 청산'} 지점으로 이동` : `${label} 정보 없음`}
                   onClick={() => { if (fill) void focusExecution(fill); }}>{label} {fill ? formatPrice(fill.price) : '—'}</button>
               ))}

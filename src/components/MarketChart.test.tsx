@@ -39,7 +39,7 @@ describe('standalone market chart presentation', () => {
     const html = renderToStaticMarkup(<ChartModal chart={{ ...chart, market: undefined, side: 'LONG', markers: [entry, close], executions: [entry, close], priceLines: [{ kind: 'ENTRY', price: 100 }, { kind: 'EXIT', price: 105 }], exitReason: 'FULL_TP', exitProfit: true }} onClose={() => {}} />);
     expect(html).toContain('stroke="#AE7BFA"'); expect(html).toContain('fill="#39C98A"'); expect(html).toContain('청산가 105');
     const sl = renderToStaticMarkup(<ChartModal chart={{ ...chart, market: undefined, side: 'LONG', markers: [entry, close], executions: [entry, close], priceLines: [{ kind: 'ENTRY', price: 100 }, { kind: 'EXIT', price: 105 }], exitReason: 'SL', exitProfit: false }} onClose={() => {}} />);
-    expect(sl).toContain('SL 105'); expect(sl).toContain('fill="#FF5C78"');
+    expect(sl).toContain('stroke="#FF5C78"'); expect(sl).toContain('SL 105'); expect(sl).toContain('trade-price-link close stop'); expect(sl).toContain('fill="#FF5C78"');
   });
   it('shows the 20-day ATR in a volatility backtest popup', () => {
     const html = renderToStaticMarkup(<ChartModal chart={{ ...chart, market: undefined, side: 'LONG', priceLines: [{ kind: 'ENTRY', price: 100 }, { kind: 'SL', price: 90 }] }} onClose={() => {}} />);
