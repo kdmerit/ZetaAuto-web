@@ -111,7 +111,7 @@ describe('legacy confirmed-close volatility replay compatibility', () => {
     expect(trade.exitPrice).toBeCloseTo(exit, 10);
     expect(saved.realized).toBeCloseTo(profit - totalFees, 10);
     expect(saved.cash).toBeCloseTo(250 + profit - totalFees, 10);
-    expect(trade.priceLines).toEqual([{ kind: 'ENTRY', price: entry }, { kind: 'SL', price: short ? 105 : 95 }, { kind: 'TP', price: entry + (short ? -20 : 20) }]);
+    expect(trade.priceLines).toEqual([{ kind: 'ENTRY', price: entry }, { kind: 'SL', price: short ? 105 : 95 }, { kind: 'TP', price: entry + (short ? -20 : 20) }, { kind: 'EXIT', price: exit }]);
     const whole = initialPortfolio(250);
     replayPortfolioBlock(whole, [doc], settings, start, start + 2700, 900);
     expect(saved).toEqual(whole);

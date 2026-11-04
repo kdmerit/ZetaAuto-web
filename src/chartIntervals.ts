@@ -32,8 +32,12 @@ export function withChartExecutionTimes(chart: ChartData, trade: BacktestTrade):
     }) };
   });
   const byId = new Map(executions.map(event => [event.id, event]));
+  const priceLines = chart.priceLines.some(line => line.kind === 'EXIT')
+    ? chart.priceLines
+    : [...chart.priceLines, { kind: 'EXIT' as const, price: trade.exitPrice }];
   return { ...chart, sourceInterval, sourceWaves: chart.sourceWaves ?? trade.signal.waves ?? chart.waves,
-    executions, markers: chart.markers.map(event => byId.get(event.id) ?? event) };
+    executions, markers: chart.markers.map(event => byId.get(event.id) ?? event), priceLines,
+    exitReason: chart.exitReason ?? trade.reason, exitProfit: chart.exitProfit ?? trade.netProfitUsdt > 0 };
 }
 
 /** A close at the boundary belongs to the candle that just finished. */

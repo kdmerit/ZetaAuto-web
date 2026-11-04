@@ -58,6 +58,7 @@ export interface BacktestSettings {
   envelopeDailyTrend?: boolean;
   envelopeResultOptions?: EnvelopeResultOptions;
   newHighLookback?: string;
+  newHighSlMultiplier?: string;
 }
 
 export interface Candle {
@@ -127,7 +128,8 @@ export type PriceLineKind =
   | 'INITIAL_SL'
   | 'INITIAL_TP'
   | 'TP'
-  | 'PARTIAL_TP';
+  | 'PARTIAL_TP'
+  | 'EXIT';
 
 export interface PriceLine {
   kind: PriceLineKind;
@@ -161,6 +163,9 @@ export interface ChartData {
     multiplier: number;
     bands: { openTime: number; center: number; upper: number; lower: number }[];
   };
+  /** Final fill metadata used to distinguish a stop from a normal exit. */
+  exitReason?: string;
+  exitProfit?: boolean;
 }
 
 export interface Execution {

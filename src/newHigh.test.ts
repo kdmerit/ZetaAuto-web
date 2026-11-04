@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import { prepareSymbolBlock, runBacktest } from './engine';
-import { currentNewHighSettings, newHighPeriod, newHighWarmup, prepareNewHigh, type PreparedNewHigh } from './newHigh';
+import { currentNewHighSettings, newHighPeriod, newHighSlMultiplier, newHighWarmup, prepareNewHigh, type PreparedNewHigh } from './newHigh';
 import { engineVersionFor, canResumeLocalJob } from './localJobs';
 import type { PreparedBar, PreparedSymbol } from './engine';
 import type { BacktestSettings, Candle } from './types';
@@ -32,13 +32,15 @@ function history(): Candle[] {
 describe('new high/low causal strategy', () => {
   it('validates configurable N and only accepts 1h/4h without changing other engines', () => {
     expect(newHighPeriod(settings)).toBe(20); expect(newHighPeriod({ ...settings, newHighLookback: '1000' })).toBe(1000);
+    expect(newHighSlMultiplier(settings)).toBe(2); expect(newHighSlMultiplier({ ...settings, newHighSlMultiplier: '1.5' })).toBe(1.5);
+    for (const value of ['', '0', '0.05', '10.1', '1.234', 'NaN']) expect(() => newHighSlMultiplier({ ...settings, newHighSlMultiplier: value })).toThrow('SL 배수');
     for (const value of ['', '1', '5', '1001', '-5', '20.5', 'NaN']) expect(() => newHighPeriod({ ...settings, newHighLookback: value })).toThrow('봉수');
     expect(() => newHighPeriod({ ...settings, interval: '15m' })).toThrow('1h');
     expect(currentNewHighSettings({ ...settings, interval: '15m', partialTpEnabled: true })).toMatchObject({ interval: '1h', partialTpEnabled: false });
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.53'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
-    expect(canResumeLocalJob({ version: '2.10.53', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.54'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
+    expect(canResumeLocalJob({ version: '2.10.54', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {
     const data = history(); data[585]!.high = 120; data[585]!.low = 50;
@@ -79,9 +81,11 @@ describe('new high/low causal strategy', () => {
     expect(intrabar.entries).toBe(1); expect(intrabar.closed).toBe(0); expect(intrabar.positions.BTCUSDT!.executions[0]!.timing).toBe('INTRABAR');
     expect(intrabar.positions.BTCUSDT!.target).toBeCloseTo(intrabar.positions.BTCUSDT!.first + 4);
   });
-  it('fills opening gaps at observed open and places the initial SL two ATR below the actual fill', () => {
+  it('fills opening gaps at observed open and places the initial SL at the configured ATR multiple', () => {
     const state = simulate([bar(0, 102, 102.5, 101.8, 102)]); const holding = state.positions.BTCUSDT!;
     expect(holding.first).toBeCloseTo(102 * 1.0002); expect(holding.stop).toBeCloseTo(holding.first - 4); expect(holding.qty).toBeCloseTo(100 / holding.first);
+    const custom = simulate([bar(0, 102, 102.5, 101.8, 102)], { ...settings, newHighSlMultiplier: '1.5' });
+    expect(custom.positions.BTCUSDT!.stop).toBeCloseTo(custom.positions.BTCUSDT!.first - 3);
   });
   it.each(['LONG', 'SHORT'] as const)('limits the first %s buy to one ATR from the breakout line including slippage, without chasing a later return', side => {
     const overrides = side === 'SHORT' ? { long: false, short: true } : {};
@@ -120,6 +124,7 @@ describe('new high/low causal strategy', () => {
     expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('NEW_HIGH_CONDITIONAL_EXIT');
     expect(state.trades[0]!.exitPrice).toBeCloseTo((state.trades[0]!.entryPrice + 4) * .9998); expect(state.trades[0]!.executions.at(-1)!.timing).toBe('INTRABAR');
     expect(state.trades[0]!.priceLines!.some(line => line.kind === 'TP')).toBe(false);
+    expect(state.trades[0]!.priceLines).toContainEqual({ kind: 'EXIT', price: state.trades[0]!.exitPrice });
     expect(state.trades[0]!.netProfitUsdt).toBeCloseTo(state.realized);
   });
   it('waits for the MA5 condition after the long two-ATR threshold', () => {

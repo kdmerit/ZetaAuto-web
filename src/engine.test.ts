@@ -106,6 +106,7 @@ describe('MA5 body volatility breakout replay', () => {
     expect(result.recentTrades[0]!.priceLines).toEqual([
       { kind: 'ENTRY', price: result.recentTrades[0]!.entryPrice },
       { kind: 'SL', price: result.recentTrades[0]!.signal.stop },
+      { kind: 'EXIT', price: result.recentTrades[0]!.exitPrice },
     ]);
   });
 
@@ -154,6 +155,7 @@ describe('MA5 body volatility breakout replay', () => {
     expect(chart.priceLines).toEqual([
       { kind: 'ENTRY', price: trade.entryPrice },
       { kind: 'SL', price: trade.signal.activeStop ?? trade.signal.stop },
+      { kind: 'EXIT', price: trade.exitPrice },
     ]);
   });
 });

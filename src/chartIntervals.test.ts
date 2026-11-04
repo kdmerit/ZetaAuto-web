@@ -76,7 +76,7 @@ describe('chart resolution without changing trade results', () => {
     const daily = await chartAtInterval(fifteen, '1d');
     const back = await chartAtInterval(daily, '15m');
     expect(back.executions).toEqual(fifteen.executions);
-    expect(back.priceLines).toEqual(chart.priceLines);
+    expect(back.priceLines).toEqual([...chart.priceLines, { kind: 'EXIT', price: trade.exitPrice }]);
     expect(back.sourceInterval).toBe('4h');
     expect(back.candles.every(candle => candle.closeTime - candle.openTime === 900)).toBe(true);
     expect(back.waves[0]).toMatchObject({ low: 98, high: 103, startTime: opened });
@@ -160,7 +160,7 @@ describe('chart resolution without changing trade results', () => {
     expect(view.envelope).toMatchObject({ interval: '4h', period: 20, deviationPercent: 1 });
     expect(view.envelope!.bands).toHaveLength(view.candles.length);
     expect(view.envelope!.bands[0]).toMatchObject({ center: 101, upper: 102.01, lower: 99.99 });
-    expect(view.priceLines).toEqual(chart.priceLines);
+    expect(view.priceLines).toEqual([...chart.priceLines, { kind: 'EXIT', price: trade.exitPrice }]);
     expect(fetch).not.toHaveBeenCalled();
   });
 });

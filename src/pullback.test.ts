@@ -54,7 +54,7 @@ describe('updated pullback MA/envelope strategy', () => {
     const result = portfolioResult(state, settings);
     expect(result.entryCount).toBe(1);
     expect(result.exitReasons).toEqual({ PULLBACK_ENVELOPE: 1 });
-    expect(result.recentTrades[0]!.priceLines).toEqual([{ kind: 'ENTRY', price: result.recentTrades[0]!.entryPrice }]);
+    expect(result.recentTrades[0]!.priceLines).toEqual([{ kind: 'ENTRY', price: result.recentTrades[0]!.entryPrice }, { kind: 'EXIT', price: result.recentTrades[0]!.exitPrice }]);
     expect(buildLocalChart({ ...result, candles: rows }, result.recentTrades[0]!, settings).envelope?.deviationPercent).toBe(5);
   });
 

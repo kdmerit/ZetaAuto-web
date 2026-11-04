@@ -45,6 +45,7 @@ const lineStyles: Record<PriceLine['kind'], { label: string; color: string }> = 
   INITIAL_TP: { label: '최초 TP', color: '#39C98A' },
   TP: { label: 'TP', color: '#39C98A' },
   PARTIAL_TP: { label: '부분 TP', color: '#39C98A' },
+  EXIT: { label: '청산가', color: '#AE7BFA' },
 };
 
 function formatPrice(value: number): string {
@@ -221,6 +222,11 @@ function ChartSvg({
     }
     return map;
   }, [chart.markers]);
+  const closeMarker = chart.markers.find(marker => marker.kind === 'CLOSE') ?? chart.executions?.find(marker => marker.kind === 'CLOSE');
+  const entryMarker = chart.markers.find(marker => marker.kind === 'ENTRY') ?? chart.executions?.find(marker => marker.kind === 'ENTRY');
+  const closeIsProfit = chart.exitProfit ?? (chart.side !== null && entryMarker !== undefined && closeMarker !== undefined
+    ? chart.side === 'LONG' ? closeMarker.price > entryMarker.price : closeMarker.price < entryMarker.price
+    : false);
   const xFor = (index: number): number => (index + 0.5) * step;
   const yFor = (price: number): number => lineY(price, min, max, priceHeight) + plotPadding;
   const pointString = (key: keyof EnrichedCandle): string => drawnCandles
@@ -397,7 +403,7 @@ function ChartSvg({
               {markers.map((marker, markerIndex) => (
                 <g key={marker.id} data-marker-kind={marker.kind} transform={`translate(${x - 10 + markerIndex * 20},${marker.kind === 'CLOSE' || marker.kind === 'PARTIAL_TP' ? highY - 24 : lowY + 8})`}>
                   {marker.kind === 'PYRAMID_ENTRY' ? <title>불타기 · {formatPrice(marker.price)} · 수량 {formatPrice(marker.quantity)}</title> : null}
-                  <rect width="20" height="20" rx="5" fill={marker.label === 'C' ? '#FF5C78' : marker.label === 'S' ? '#FF5C78' : '#7EA2FF'} />
+                  <rect width="20" height="20" rx="5" fill={marker.label === 'C' ? closeIsProfit ? '#39C98A' : '#FF5C78' : marker.label === 'S' ? '#FF5C78' : '#7EA2FF'} />
                   <text x="10" y="14" textAnchor="middle" fill="#071020" fontSize="13" fontWeight="800">{marker.label}</text>
                 </g>
               ))}
@@ -435,6 +441,11 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
   const [switching, setSwitching] = useState<BacktestInterval | null>(null);
   const [focusError, setFocusError] = useState<string | null>(null);
   const fills = useMemo(() => tradeChartFills(chart), [chart]);
+  const chartWithExit = useMemo(() => {
+    if (!fills.close || chart.priceLines.some(line => line.kind === 'EXIT')) return chart;
+    return { ...chart, priceLines: [...chart.priceLines, { kind: 'EXIT' as const, price: fills.close.price }] };
+  }, [chart, fills.close]);
+  const exitLabel = chart.exitReason === 'SL' ? 'SL' : '청산가';
   const focusExecution = async (fill: ChartMarker): Promise<void> => {
     if (focusing || switching || loadingOlder) return;
     setFocusing(true);
@@ -534,12 +545,12 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
         </div>
         {chart.market ? <MarketIndicatorControls value={indicatorSettings} onApply={value => { saveMarketIndicators(value); setIndicatorSettings(value); }} /> : null}
         {chart.envelope && !chart.market ? <p className="envelope-chart-caption">엔벨로프 {chart.envelope.interval} · SMA{chart.envelope.period} · ±{chart.envelope.deviationPercent}%</p> : null}
-        <ChartSvg chart={chart} visibleMas={visibleMas} selection={selection} onSelect={setSelection} onClear={() => setSelection(null)} focusRequest={focusRequest} onLoadOlder={onLoadOlder} loadingOlder={loadingOlder || focusing || switching !== null} onViewTime={rememberViewTime} />
+        <ChartSvg chart={chartWithExit} visibleMas={visibleMas} selection={selection} onSelect={setSelection} onClear={() => setSelection(null)} focusRequest={focusRequest} onLoadOlder={onLoadOlder} loadingOlder={loadingOlder || focusing || switching !== null} onViewTime={rememberViewTime} />
         <div className="chart-readout">
           <div className="candle-info-heading">
             <strong className={selected ? undefined : 'candle-info-hidden'} aria-hidden={!selected}>{infoCandle ? formatDate(infoCandle.openTime) : ''}</strong>
             {!chart.market ? <div className="trade-price-links" role="group" aria-label="체결 가격 이동">
-              {([['entry', '매수가', fills.entry], ['close', '청산가', fills.close]] as const).map(([kind, label, fill]) => (
+              {([['entry', '매수가', fills.entry], ['close', exitLabel, fills.close]] as const).map(([kind, label, fill]) => (
                 <button className={`trade-price-link ${kind}`} key={kind} type="button" disabled={!fill || focusing || switching !== null || loadingOlder}
                   aria-label={fill ? `${label} ${formatPrice(fill.price)} · ${kind === 'entry' ? '최초 매수' : '최종 청산'} 지점으로 이동` : `${label} 정보 없음`}
                   onClick={() => { if (fill) void focusExecution(fill); }}>{label} {fill ? formatPrice(fill.price) : '—'}</button>

@@ -1008,6 +1008,7 @@ export function buildLocalChart(
     if (signal.volatilityStopEnabled === true) lines.push(line('SL', signal.activeStop ?? signal.stop));
     if (signal.exitMode === 'VOLATILITY_CLOSE' || signal.exitMode === 'VOLATILITY_TP' && signal.volatilityTpEnabled !== false) lines.push(line('TP', signal.target));
   }
+  lines.push(line('EXIT', trade.exitPrice));
   const waves = (signal.waves ?? []).flatMap((wave) => {
     const visibleStart = Math.max(start, wave.startIndex);
     const visibleEnd = Math.min(end - 1, wave.endIndex);
@@ -1027,6 +1028,8 @@ export function buildLocalChart(
     markers,
     executions: markers,
     priceLines: lines.filter((value): value is PriceLine => value !== null),
+    exitReason: trade.reason,
+    exitProfit: trade.netProfitUsdt > 0,
     ...(signal.strategy === 'ENVELOPE' || signal.exitMode === 'PULLBACK_ENVELOPE' ? { envelope: projectEnvelopeBands(result.candles, candles, {
       interval, period: signal.envelopeMaPeriod ?? Number(settings.envelopeMaPeriod ?? '20'),
       deviationPercent: signal.envelopeDeviationPercent ?? Number(settings.envelopeDeviationPercent ?? '5.0'),
