@@ -11,7 +11,7 @@ const settings: BacktestSettings = { mode: 'SINGLE', symbol: 'BTC', interval: '1
   fullTpWavePercent: '100', minDisparityPercent: '1', ma20HalfCloseEnabled: false, roiClosePercent: '100',
   minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1', volatilityTpEnabled: true, volatilityNextCloseEnabled: false, newHighLookback: '20' };
 const origin = Date.UTC(2026, 0, 1) / 1000;
-const definition: PreparedNewHigh = { atr: 2, sum4: 300, sum9: 900, sum19: 1900, high: 101, low: 99, long: true, short: false };
+const definition: PreparedNewHigh = { atr: 2, sum4: 300, sum9: 900, sum19: 1900, sum59: 5900, high: 101, low: 99, long: true, short: false };
 function bar(i: number, open: number, high: number, low: number, close: number, overrides: Partial<PreparedNewHigh> = {}): PreparedBar {
   return { candle: { openTime: origin + i * 3600, closeTime: origin + (i + 1) * 3600, open, high, low, close, volume: 100 },
     signal: null, ma20: null, ma60Exit: null, newHigh: { ...definition, ...overrides } };
@@ -39,8 +39,8 @@ describe('new high/low causal strategy', () => {
     expect(currentNewHighSettings({ ...settings, interval: '15m', partialTpEnabled: true })).toMatchObject({ interval: '1h', partialTpEnabled: false });
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.54'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
-    expect(canResumeLocalJob({ version: '2.10.54', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.55'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
+    expect(canResumeLocalJob({ version: '2.10.55', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {
     const data = history(); data[585]!.high = 120; data[585]!.low = 50;
@@ -98,6 +98,13 @@ describe('new high/low causal strategy', () => {
   });
   it('does not wait for a later MA crossover when the first breakout touch failed its MA condition', () => {
     expect(simulate([bar(0, 100.5, 102.5, 100.2, 102.5, { sum19: 1902 })]).entries).toBe(0);
+  });
+  it('optionally requires the actual entry price to be above or below MA60 by direction', () => {
+    expect(simulate([bar(0, 101.1, 101.5, 101.1, 101.5)], { ...settings, newHighMa60Enabled: true }).entries).toBe(1);
+    expect(simulate([bar(0, 101.1, 101.5, 101.1, 101.5, { sum59: 6600 })], { ...settings, newHighMa60Enabled: true }).entries).toBe(0);
+    const short = { ...settings, side: 'SHORT' as const, newHighMa60Enabled: true };
+    expect(simulate([bar(0, 98.9, 98.9, 98.5, 98.5, { long: false, short: true, sum59: 5900 })], short).entries).toBe(1);
+    expect(simulate([bar(0, 98.9, 98.9, 98.5, 98.5, { long: false, short: true, sum59: 5400 })], short).entries).toBe(0);
   });
   it.each(['LONG', 'SHORT'] as const)('opens only one %s unit and never creates additional fills', side => {
     const prices = [[101.1, 101.5, 101.1, 101.5], [101.5, 104, 101.5, 103.5]];
@@ -183,6 +190,7 @@ describe('new high/low causal strategy', () => {
     const bars = [bar(0, 101.1, 101.5, 101.1, 101.5), bar(1, 101.5, 103.6, 101.5, 103.5)];
     const scaled = bars.map(row => ({ ...row, candle: { ...row.candle, open: row.candle.open * scale, high: row.candle.high * scale, low: row.candle.low * scale, close: row.candle.close * scale },
       newHigh: { ...row.newHigh!, atr: row.newHigh!.atr! * scale, sum4: row.newHigh!.sum4 * scale, sum9: row.newHigh!.sum9 * scale, sum19: row.newHigh!.sum19 * scale,
+        sum59: row.newHigh!.sum59 === undefined ? undefined : row.newHigh!.sum59 * scale,
         high: row.newHigh!.high * scale, low: row.newHigh!.low * scale } }));
     const normal = simulate(bars); const other = simulate(scaled);
     expect(other.entries).toBe(normal.entries);

@@ -531,6 +531,8 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
   const ma10 = (price: number) => (definition.sum9 + price) / 10;
   const ma20 = (price: number) => (definition.sum19 + price) / 20;
   const ma5 = (price: number) => (definition.sum4 + price) / 5;
+  const ma60 = (price: number): number | null => definition.sum59 !== undefined && Number.isFinite(definition.sum59)
+    ? (definition.sum59 + price) / 60 : null;
   const slMultiplier = newHighSlMultiplier(settings);
   const tolerance = (...values: number[]) => Math.max(Number.MIN_VALUE, ...values.map(value => Math.abs(value) * Number.EPSILON * 16));
   const conditionalExitPrice = (p: Holding, before: number, after: number): number | null => {
@@ -558,7 +560,10 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     const direction = side === 'LONG' ? 1 : -1;
     const fill = price * (1 + direction * slippage);
     const boundary = side === 'LONG' ? definition.high : definition.low;
-    if (direction * (ma10(price) - ma20(price)) <= 0 || direction * (fill - boundary) > definition.atr! + tolerance(fill, boundary, definition.atr!)) return;
+    const currentMa60 = ma60(price);
+    if (direction * (ma10(price) - ma20(price)) <= 0
+      || settings.newHighMa60Enabled === true && (currentMa60 === null || direction * (price - currentMa60) <= 0)
+      || direction * (fill - boundary) > definition.atr! + tolerance(fill, boundary, definition.atr!)) return;
     const stop = fill - direction * slMultiplier * definition.atr!;
     if (!(stop > 0) || (side === 'LONG' ? stop >= price : stop <= price)) return;
     const target = fill + direction * 2 * definition.atr!;

@@ -59,6 +59,7 @@ export interface BacktestSettings {
   envelopeResultOptions?: EnvelopeResultOptions;
   newHighLookback?: string;
   newHighSlMultiplier?: string;
+  newHighMa60Enabled?: boolean;
 }
 
 export interface Candle {
