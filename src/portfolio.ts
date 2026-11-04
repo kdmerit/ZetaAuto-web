@@ -83,7 +83,7 @@ export function portfolioEquity(state: PortfolioState): number {
 }
 
 function priceLines(p: Holding): PriceLine[] {
-  if (p.signal.strategy === 'NEW_HIGH') return [{ kind: 'ENTRY', price: p.first }, { kind: 'SL', price: p.stop },
+  if (p.signal.strategy === 'NEW_HIGH') return [{ kind: 'ENTRY', price: p.first }, { kind: 'SL', price: p.stop }, { kind: 'TP', price: p.target },
     ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
   if (p.signal.strategy === 'ENVELOPE') return [{ kind: 'ENTRY', price: p.first }, { kind: 'SL', price: p.stop },
     ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
@@ -122,7 +122,7 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_MA_EXIT', 'PULLBACK_MA_EXIT'].includes(reason);
+  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'NEXT_CANDLE_CLOSE', 'PULLBACK_MA_EXIT'].includes(reason);
   const fill = market ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
   const qty = Math.min(p.qty, quantity);
   const profit = gross(p, fill, qty);
@@ -537,8 +537,9 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     if (direction * (ma10(price) - ma20(price)) <= 0 || direction * (fill - boundary) > definition.atr! + tolerance(fill, boundary, definition.atr!)) return;
     const stop = fill - direction * 2 * definition.atr!;
     if (!(stop > 0) || (side === 'LONG' ? stop >= price : stop <= price)) return;
+    const target = fill + direction * 2 * definition.atr!;
     enter(state, symbol, { strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime),
-      entry: price, stop, target: price, initialTarget: price, exitMode: 'NEW_HIGH_TOUCH' }, candle, settings);
+      entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH' }, candle, settings);
     const p = state.positions[symbol];
     if (p) spent += cost;
   };
@@ -549,7 +550,7 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
   if (atOpen) {
     const long = atOpen.signal.side === 'LONG';
     if (long ? candle.open <= atOpen.stop : candle.open >= atOpen.stop) close(state, atOpen, candle.open, atOpen.qty, 'SL', candle, true);
-    else if (long ? candle.open < ma10(candle.open) && candle.open < ma20(candle.open) : candle.open > ma10(candle.open) && candle.open > ma20(candle.open)) close(state, atOpen, candle.open, atOpen.qty, 'NEW_HIGH_MA_EXIT', candle, true);
+    else if (long ? candle.open >= atOpen.target : candle.open <= atOpen.target) close(state, atOpen, atOpen.target, atOpen.qty, 'FULL_TP', candle, true);
   } else if (eligible('LONG') && candle.open > longEntry) attempt('LONG', candle.open);
   else if (eligible('SHORT') && candle.open < shortEntry) attempt('SHORT', candle.open);
   const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
@@ -557,19 +558,18 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     let before = path[i - 1]!; const after = path[i]!;
     for (let count = 0; count < 3; count += 1) {
       const p = state.positions[symbol];
-      const events: { price: number; kind: 'SL' | 'EXIT' | 'LONG' | 'SHORT' }[] = [];
+      const events: { price: number; kind: 'SL' | 'TP' | 'LONG' | 'SHORT' }[] = [];
       if (p) {
         const long = p.signal.side === 'LONG';
         if (long ? before >= p.stop && after <= p.stop : before <= p.stop && after >= p.stop) events.push({ price: p.stop, kind: 'SL' });
-        const exit = long ? Math.min(definition.sum9 / 9, definition.sum19 / 19) : Math.max(definition.sum9 / 9, definition.sum19 / 19);
-        if (long ? before >= exit && after < exit : before <= exit && after > exit) events.push({ price: exit, kind: 'EXIT' });
+        if (long ? before <= p.target && after >= p.target : before >= p.target && after <= p.target) events.push({ price: p.target, kind: 'TP' });
       } else if (!attempted) {
         if (eligible('LONG') && before <= longEntry && after > longEntry) events.push({ price: longEntry, kind: 'LONG' });
         if (eligible('SHORT') && before >= shortEntry && after < shortEntry) events.push({ price: shortEntry, kind: 'SHORT' });
       }
       events.sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
       const event = events[0]; if (!event) break;
-      if (event.kind === 'SL' || event.kind === 'EXIT') { close(state, p!, event.price, p!.qty, event.kind === 'SL' ? 'SL' : 'NEW_HIGH_MA_EXIT', candle); break; }
+      if (event.kind === 'SL' || event.kind === 'TP') { close(state, p!, event.price, p!.qty, event.kind === 'SL' ? 'SL' : 'FULL_TP', candle); break; }
       if (event.kind === 'LONG' || event.kind === 'SHORT') {
         const direction = event.kind === 'LONG' ? 1 : -1;
         attempt(event.kind, event.price === crossPrice ? event.price + direction * tolerance(event.price) : event.price);

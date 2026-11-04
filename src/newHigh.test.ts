@@ -37,8 +37,8 @@ describe('new high/low causal strategy', () => {
     expect(currentNewHighSettings({ ...settings, interval: '15m', partialTpEnabled: true })).toMatchObject({ interval: '1h', partialTpEnabled: false });
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.50'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
-    expect(canResumeLocalJob({ version: '2.10.50', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.51'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
+    expect(canResumeLocalJob({ version: '2.10.51', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {
     const data = history(); data[585]!.high = 120; data[585]!.low = 50;
@@ -76,7 +76,8 @@ describe('new high/low causal strategy', () => {
     expect(simulate([bar(0, 100, 101, 100, 100.5)]).entries).toBe(0);
     expect(simulate([bar(0, 100.5, 103, 100.2, 102, { sum19: 2000 })]).entries).toBe(0);
     const intrabar = simulate([bar(0, 100.5, 102, 99.5, 99.6)]);
-    expect(intrabar.entries).toBe(1); expect(intrabar.closed).toBe(1); expect(intrabar.trades[0]!.executions[0]!.timing).toBe('INTRABAR');
+    expect(intrabar.entries).toBe(1); expect(intrabar.closed).toBe(0); expect(intrabar.positions.BTCUSDT!.executions[0]!.timing).toBe('INTRABAR');
+    expect(intrabar.positions.BTCUSDT!.target).toBeCloseTo(intrabar.positions.BTCUSDT!.first + 4);
   });
   it('fills opening gaps at observed open and places the initial SL two ATR below the actual fill', () => {
     const state = simulate([bar(0, 102, 102.5, 101.8, 102)]); const holding = state.positions.BTCUSDT!;
@@ -95,7 +96,7 @@ describe('new high/low causal strategy', () => {
     expect(simulate([bar(0, 100.5, 102.5, 100.2, 102.5, { sum19: 1902 })]).entries).toBe(0);
   });
   it.each(['LONG', 'SHORT'] as const)('opens only one %s unit and never creates additional fills', side => {
-    const prices = [[101.1, 101.5, 101.1, 101.5], [101.5, 110, 101.5, 109]];
+    const prices = [[101.1, 101.5, 101.1, 101.5], [101.5, 104, 101.5, 103.5]];
     const bars = prices.map(([o, h, l, c], i) => side === 'LONG' ? bar(i, o!, h!, l!, c!) : bar(i, 200 - o!, 200 - l!, 200 - h!, 200 - c!, { long: false, short: true }));
     const state = simulate(bars, { ...settings, side }); const holding = state.positions.BTCUSDT!;
     expect(holding).toBeDefined(); expect(state.entries).toBe(1); expect(holding.margin).toBe(100);
@@ -105,30 +106,32 @@ describe('new high/low causal strategy', () => {
     expect(portfolioResult(state, { ...settings, side })).not.toHaveProperty('pyramidFillCount');
   });
   it('a gap opens one unit at the observed open without fictional additional fills', () => {
-    const state = simulate([bar(0, 101.1, 101.5, 101.1, 101.5), bar(1, 120, 120.5, 119.8, 120)]);
+    const state = simulate([bar(0, 101.1, 101.5, 101.1, 101.5)]);
     expect(state.entries).toBe(1); expect(state.positions.BTCUSDT!.executions).toHaveLength(1);
     expect(state.positions.BTCUSDT!.first).toBeCloseTo(101.1 * 1.0002);
   });
-  it('requires price below BOTH MAs to exit, with no candle-close wait', () => {
+  it('does not use MA exits and closes at the two-ATR long TP intrabar', () => {
     const first = bar(0, 101.1, 101.5, 101.1, 101.5);
     const oneAverage = bar(1, 101.5, 101.5, 100.5, 101, { sum9: 918, atr: null });
     const state = simulate([first, oneAverage]); expect(state.positions.BTCUSDT).toBeDefined();
-    const exit = bar(2, 101, 101, 99, 99.5, { atr: null });
+    expect(state.closed).toBe(0);
+    const exit = bar(2, 101, 106, 101, 105.5, { atr: null });
     replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [exit] }], settings, exit.candle.openTime, exit.candle.closeTime, 3600);
-    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('NEW_HIGH_MA_EXIT');
-    expect(state.trades[0]!.exitPrice).toBeCloseTo(100 * .9998); expect(state.trades[0]!.executions.at(-1)!.timing).toBe('INTRABAR');
+    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('FULL_TP');
+    expect(state.trades[0]!.exitPrice).toBeCloseTo(state.trades[0]!.entryPrice + 4); expect(state.trades[0]!.executions.at(-1)!.timing).toBe('INTRABAR');
     expect(state.trades[0]!.netProfitUsdt).toBeCloseTo(state.realized);
   });
-  it('short exits above both MAs and the initial SL is the actual fill plus two ATR', () => {
+  it('uses the short two-ATR TP and keeps the initial SL two ATR above the fill', () => {
     const p = { ...settings, side: 'SHORT' as const };
     const state = simulate([bar(0, 98.9, 98.9, 98.5, 98.5, { long: false, short: true })], p);
     expect(state.positions.BTCUSDT!.stop).toBeCloseTo(state.positions.BTCUSDT!.first + 4);
-    const exit = bar(1, 99, 101, 99, 100.5, { long: false, short: true, atr: null });
+    expect(state.positions.BTCUSDT!.target).toBeCloseTo(state.positions.BTCUSDT!.first - 4);
+    const exit = bar(1, 99, 100, 94, 95, { long: false, short: true, atr: null });
     replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [exit] }], p, exit.candle.openTime, exit.candle.closeTime, 3600);
-    expect(state.trades[0]!.reason).toBe('NEW_HIGH_MA_EXIT'); expect(state.trades[0]!.exitPrice).toBeCloseTo(100 * 1.0002);
+    expect(state.trades[0]!.reason).toBe('FULL_TP'); expect(state.trades[0]!.exitPrice).toBeCloseTo(state.trades[0]!.entryPrice - 4);
   });
-  it('keeps the initial stop and does not add after a strong move', () => {
-    const state = simulate([bar(0, 100.5, 110, 100.2, 109)]);
+  it('keeps the initial stop and does not add after a strong move below TP', () => {
+    const state = simulate([bar(0, 100.5, 104, 100.2, 103)]);
     expect(state.entries).toBe(1); expect(state.closed).toBe(0);
     const holding = state.positions.BTCUSDT!; expect(holding.executions).toHaveLength(1); expect(holding.stop).toBeCloseTo(holding.first - 4);
   });
@@ -144,9 +147,9 @@ describe('new high/low causal strategy', () => {
     replayPortfolioBlock(previous, [{ symbol: 'BTCUSDT', bars: [out] }, { symbol: 'ZZZUSDT', bars: [entry] }], shortFunds, out.candle.openTime, out.candle.closeTime, 3600);
     expect(previous.cash).toBeGreaterThan(100); expect(previous.entries).toBe(1); expect(previous.positions.ZZZUSDT).toBeUndefined();
   });
-  it('prefers an earlier losing MA exit over a profitable raised SL on the other admissible path', () => {
+  it('takes TP instead of exiting on an MA cross', () => {
     const state = simulate([bar(0, 101.1, 101.5, 101.1, 101.5), bar(1, 101.5, 110, 99, 109)]);
-    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('NEW_HIGH_MA_EXIT'); expect(state.trades[0]!.netProfitUsdt).toBeLessThan(0);
+    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('FULL_TP'); expect(state.trades[0]!.netProfitUsdt).toBeGreaterThan(0);
     expect(state.fees).toBeLessThan(.12);
   });
   it('resumes JSON portfolio state exactly across entries and closes', () => {
