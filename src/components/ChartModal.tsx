@@ -446,7 +446,7 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
     if (!fills.close || chart.priceLines.some(line => line.kind === 'EXIT')) return chart;
     return { ...chart, priceLines: [...chart.priceLines, { kind: 'EXIT' as const, price: fills.close.price }] };
   }, [chart, fills.close]);
-  const exitLabel = chart.exitReason === 'SL' ? 'SL' : '청산가';
+  const exitLabel = chart.exitReason === 'SL' ? 'SL' : chart.exitReason === 'NEW_HIGH_TRAILING' ? '트레일링 스탑' : '청산가';
   const exitIsProfit = chart.exitProfit ?? (chart.side !== null && fills.entry !== null && fills.close !== null
     ? chart.side === 'LONG' ? fills.close.price > fills.entry.price : fills.close.price < fills.entry.price
     : null);

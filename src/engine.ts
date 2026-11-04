@@ -1003,6 +1003,9 @@ export function buildLocalChart(
   } else if (signal.strategy === 'ENVELOPE' || signal.strategy === 'NEW_HIGH') {
     lines.push(line('ENTRY', trade.executions.find(fill => fill.kind === 'ENTRY')?.price ?? trade.entryPrice));
     lines.push(line('SL', signal.activeStop ?? signal.stop));
+    if (signal.strategy === 'NEW_HIGH' && signal.initialStop !== undefined && signal.initialStop !== (signal.activeStop ?? signal.stop)) {
+      lines.push(line('INITIAL_SL', signal.initialStop));
+    }
   } else {
     lines.push(line('ENTRY', trade.entryPrice));
     if (signal.volatilityStopEnabled === true) lines.push(line('SL', signal.activeStop ?? signal.stop));
@@ -1038,7 +1041,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
-  if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 1회 진입하고, 전전고점·전전저점 기준 SL과 MA5·MA20 조건으로 청산합니다.';
+  if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 1회 진입하고, 이전 파동의 몸통 저점·고점 기준 SL과 파동 크기 N 단계형 트레일링 스탑으로 청산합니다.';
   if (strategy === 'ENVELOPE') return '1h 재돌파 진입·중심선 전량 청산에 일봉 MA20 추세 필터를 선택 적용하고, SMA·이격을 사용자 필터와 수익률·승률 정렬로 비교합니다.';
   if (strategy === 'PULLBACK') {
     return 'MA20·MA60·MA120 5봉 정배열과 MA60·MA120·이격 증가, 직전 10봉 엔벨로프 접촉 이력을 확인한 뒤 MA20 눌림에서 진입하고, MA60·엔벨로프와 정배열 해제로 청산합니다.';

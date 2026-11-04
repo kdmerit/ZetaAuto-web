@@ -143,6 +143,7 @@ const reasonLabels: Record<string, string> = {
   ENVELOPE_OPPOSITE: '엔벨로프 반대 밴드 청산',
   NEW_HIGH_CONDITIONAL_EXIT: '2ATR 도달·MA5/MA20 조건 청산',
   NEW_HIGH_PROFIT_RETRACE: '1ATR 돌파 후 재이탈 청산',
+  NEW_HIGH_TRAILING: '파동 크기 단계형 트레일링 스탑',
 };
 
 function defaultRequest(settings: BacktestSettings, strategy: Strategy): BacktestRequestBody {
@@ -782,8 +783,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
 
           {strategy === 'NEW_HIGH' ? <>
             <label className="field-label">신고가 기준 봉수<input type="number" inputMode="numeric" min="6" max="1000" step="1" value={settings.newHighLookback ?? '20'} onChange={event => update('newHighLookback', event.target.value)} /><small>6~1000 · 기본 20 · 현재 봉 제외 · 최근 5봉에 고가/저가가 있으면 제외</small></label>
-            <p className="notice small">돌파 즉시 1회 진입 · 돌파선 ± 1ATR 이내만 매수 · 롱 전전고점 캔들의 저가 / 숏 전전저점 캔들의 고가를 SL로 적용</p>
-            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 고정 베팅액으로 한 번만 진입합니다. 1ATR 라인을 돌파한 뒤 다음 캔들에서 재이탈하면 청산하며, 2ATR 수익구간에서는 롱 MA5&lt;MA20·숏 MA5&gt;MA20 조건도 적용합니다.</p>
+            <p className="notice small">돌파 즉시 1회 진입 · 돌파선 ± 1ATR 이내만 매수 · 롱 이전 파동 몸통 저점 / 숏 이전 파동 몸통 고점을 SL로 적용</p>
+            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 고정 베팅액으로 한 번만 진입합니다. 이전 파동의 몸통 고점−저점 높이를 N으로 삼아 매수 직후 N 거리의 트레일링 스탑을 시작하고, 매수가에서 N의 배수만큼 유리하게 움직일 때마다 간격을 N의 10%씩 줄입니다. 고정 TP·MA5/MA20·ATR 재이탈 청산은 사용하지 않습니다.</p>
           </> : strategy === 'PULLBACK' ? (
             <>
               <label className="field-label">엔벨로프 SMA<input type="number" inputMode="numeric" min="1" max="120" step="1" value={settings.envelopeMaPeriod ?? '20'} onChange={event => update('envelopeMaPeriod', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>1~120 · 기본 20</small></label>

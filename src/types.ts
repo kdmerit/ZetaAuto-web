@@ -226,7 +226,9 @@ export interface Signal {
   breakoutRangePercent?: number;
   breakoutRange?: number;
   breakoutLevel?: number;
-  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'VOLATILITY_MA5' | 'ENVELOPE_TOUCH' | 'PULLBACK_ENVELOPE' | 'NEW_HIGH_TOUCH';
+  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'VOLATILITY_MA5' | 'ENVELOPE_TOUCH' | 'PULLBACK_ENVELOPE' | 'NEW_HIGH_TOUCH' | 'NEW_HIGH_TRAILING';
+  /** Previous-wave body height used as the New High trailing-stop distance. */
+  newHighWaveSize?: number;
   envelopeDeviationPercent?: number;
   envelopeExitMode?: EnvelopeExitMode;
   envelopeMaPeriod?: number;

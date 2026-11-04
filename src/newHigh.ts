@@ -9,10 +9,14 @@ export interface PreparedNewHigh {
   sum19: number;
   high: number;
   low: number;
-  /** Low of the second-highest prior high candle; used as the long SL. */
-  secondHighLow?: number;
-  /** High of the second-lowest prior low candle; used as the short SL. */
-  secondLowHigh?: number;
+  /** Body low of the wave immediately before the current wave; used as the long SL. */
+  longPreviousWaveLow?: number;
+  /** Body height of the wave immediately before the current wave. */
+  longWaveSize?: number;
+  /** Body high of the wave immediately before the current wave; used as the short SL. */
+  shortPreviousWaveHigh?: number;
+  /** Body height of the wave immediately before the current wave. */
+  shortWaveSize?: number;
   longWaves?: Wave[];
   shortWaves?: Wave[];
   long: boolean;
@@ -114,9 +118,16 @@ function publicWave(wave: InternalWave, label: Wave['label'], side: 'LONG' | 'SH
     startTime: wave.startTime, endTime: wave.endTime, complete: label !== 'CURRENT', low: wave.low, high: wave.high };
 }
 
-function waveLayers(candles: Candle[]): { long: Wave[][]; short: Wave[][] } {
+function previousCompletedWave(bucket: WaveBucket): InternalWave | null {
+  // At the first candle of a new trend the former current wave has already
+  // completed its counter-trend. It is therefore the previous wave even
+  // before advanceWaveState shifts it into bucket.previous.
+  return bucket.current?.second ? bucket.current : bucket.previous;
+}
+
+function waveLayers(candles: Candle[]): { long: Wave[][]; short: Wave[][]; longPrevious: (Wave | null)[]; shortPrevious: (Wave | null)[] } {
   const states: Record<'LONG' | 'SHORT', WaveState> = { LONG: emptyWaveState(), SHORT: emptyWaveState() };
-  const layers: { long: Wave[][]; short: Wave[][] } = { long: [], short: [] };
+  const layers: { long: Wave[][]; short: Wave[][]; longPrevious: (Wave | null)[]; shortPrevious: (Wave | null)[] } = { long: [], short: [], longPrevious: [], shortPrevious: [] };
   for (let index = 0; index < candles.length; index += 1) {
     const candle = candles[index]!;
     for (const side of ['LONG', 'SHORT'] as const) {
@@ -127,20 +138,12 @@ function waveLayers(candles: Candle[]): { long: Wave[][]; short: Wave[][] } {
         bucket.current ? publicWave(bucket.current, 'CURRENT', side) : null,
       ].filter((wave): wave is Wave => wave !== null);
       layers[side === 'LONG' ? 'long' : 'short'][index] = current;
+      const previous = previousCompletedWave(bucket);
+      layers[side === 'LONG' ? 'longPrevious' : 'shortPrevious'][index] = previous ? publicWave(previous, 'PREVIOUS', side) : null;
     }
     for (const side of ['LONG', 'SHORT'] as const) advanceWaveState(states[side], candle, index);
   }
   return layers;
-}
-
-function secondExtremeReference(candles: Candle[], index: number, period: number, side: 'LONG' | 'SHORT'): number | undefined {
-  const candidates = candles.slice(Math.max(0, index - period), index).map((candle, offset) => ({ candle, index: Math.max(0, index - period) + offset }));
-  candidates.sort((left, right) => {
-    const difference = side === 'LONG' ? right.candle.high - left.candle.high : left.candle.low - right.candle.low;
-    return difference || right.index - left.index;
-  });
-  const reference = candidates[1]?.candle;
-  return side === 'LONG' ? reference?.low : reference?.high;
 }
 
 /** Every field is fixed from candles strictly before the execution candle. */
@@ -162,13 +165,17 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): (
     if (index < Math.max(period, 40)) return undefined;
     const recent = candles.slice(index - 5, index);
     const cross = enriched.slice(index - 20, index);
-    const long = settings.side !== 'SHORT' && recent.every(row => row.high < highs[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 < row.ma20);
-    const short = settings.side !== 'LONG' && recent.every(row => row.low > lows[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 > row.ma20);
+    const longWave = waves.longPrevious[index];
+    const shortWave = waves.shortPrevious[index];
+    const long = settings.side !== 'SHORT' && longWave !== null && longWave !== undefined && longWave.high > longWave.low
+      && recent.every(row => row.high < highs[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 < row.ma20);
+    const short = settings.side !== 'LONG' && shortWave !== null && shortWave !== undefined && shortWave.high > shortWave.low
+      && recent.every(row => row.low > lows[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 > row.ma20);
     return { atr: atr[index]!.complete ? atr[index]!.value : null,
       sum4: sums[index]! - sums[index - 4]!, sum9: sums[index]! - sums[index - 9]!, sum19: sums[index]! - sums[index - 19]!,
       high: highs[index]!, low: lows[index]!,
-      ...(long ? { secondHighLow: secondExtremeReference(candles, index, period, 'LONG'), longWaves: waves.long[index] ?? [] } : {}),
-      ...(short ? { secondLowHigh: secondExtremeReference(candles, index, period, 'SHORT'), shortWaves: waves.short[index] ?? [] } : {}),
+      ...(long ? { longPreviousWaveLow: longWave!.low, longWaveSize: longWave!.high - longWave!.low, longWaves: waves.long[index] ?? [] } : {}),
+      ...(short ? { shortPreviousWaveHigh: shortWave!.high, shortWaveSize: shortWave!.high - shortWave!.low, shortWaves: waves.short[index] ?? [] } : {}),
       long, short,
     };
   });
@@ -178,12 +185,12 @@ export const newHighRules = {
   long: [
     '현재 봉을 제외한 이전 N봉 최고가를 위로 돌파한 그 봉에서 즉시 1Unit 진입합니다. N은 입력값(기본 20)이며 실제 체결가가 돌파선 + 1ATR 이내여야 합니다.',
     '돌파 순간 현재가를 반영한 MA10 > MA20이고, 이전 20봉 안에 MA10 < MA20인 봉이 하나 이상 있어야 합니다.',
-    '이전 N봉 최고가가 최근 5개 완성봉 안에 한 번이라도 있으면 진입하지 않습니다. SL은 매수 기준 전전고점 캔들의 저가입니다. 매수 후 어떤 캔들이 실제 매수가 + 1×ATR을 돌파하면, 이후 캔들이 그 라인을 다시 하락 돌파할 때 청산합니다. 또한 현재가가 실제 매수가 + 2×ATR 이상이고 현재 MA5 < MA20이면 청산합니다.',
+    '이전 N봉 최고가가 최근 5개 완성봉 안에 한 번이라도 있으면 진입하지 않습니다. SL은 현재 파동 바로 이전 파동의 몸통 저점입니다. 이전 파동의 몸통 고점−저점 높이를 N으로 삼아 매수 직후 N 거리의 트레일링 스탑을 시작하고, 매수가에서 N의 배수만큼 상승할 때마다 간격을 N의 10%씩 줄입니다.',
   ],
   short: [
     '현재 봉을 제외한 이전 N봉 최저가를 아래로 돌파한 그 봉에서 즉시 1Unit 숏 진입합니다. 실제 체결가가 돌파선 − 1ATR 이상이어야 합니다.',
     '돌파 순간 현재가를 반영한 MA10 < MA20이고, 이전 20봉 안에 MA10 > MA20인 봉이 하나 이상 있어야 합니다.',
-    '이전 N봉 최저가가 최근 5개 완성봉 안에 한 번이라도 있으면 진입하지 않습니다. SL은 매수 기준 전전저점 캔들의 고가입니다. 매수 후 어떤 캔들이 실제 매수가 − 1×ATR을 돌파하면, 이후 캔들이 그 라인을 다시 상승 돌파할 때 청산합니다. 또한 현재가가 실제 매수가 − 2×ATR 이하이고 현재 MA5 > MA20이면 청산합니다.',
+    '이전 N봉 최저가가 최근 5개 완성봉 안에 한 번이라도 있으면 진입하지 않습니다. SL은 현재 파동 바로 이전 파동의 몸통 고점입니다. 이전 파동의 몸통 고점−저점 높이를 N으로 삼아 매수 직후 N 거리의 트레일링 스탑을 시작하고, 매수가에서 N의 배수만큼 하락할 때마다 간격을 N의 10%씩 줄입니다.',
   ],
-  common: 'ATR은 선택 주기 TR의 직전 20일 단순평균(1h 480봉·4h 120봉)이며 매 봉 시작 전에 확정합니다. 자료가 부족하면 신규 진입하지 않습니다. 고정 베팅액 1Unit으로 종목당 한 번만 진입합니다. 롱 SL은 전전고점 캔들의 저가, 숏 SL은 전전저점 캔들의 고가입니다. 고정 TP는 사용하지 않습니다. 롱은 매수 후 실제 매수가 + 1×ATR을 돌파한 캔들이 나온 뒤 다음 캔들에서 그 라인을 하락 돌파하면 청산하고, 현재가가 실제 매수가 + 2×ATR 이상이면서 현재 MA5 < MA20이어도 청산합니다. 숏은 매수 후 실제 매수가 − 1×ATR을 돌파한 캔들이 나온 뒤 다음 캔들에서 그 라인을 상승 돌파하면 청산하고, 현재가가 실제 매수가 − 2×ATR 이하이면서 현재 MA5 > MA20이어도 청산합니다. MA는 현재가를 반영해 봉 중간에도 계산합니다. 첫 돌파 순간 조건이 맞지 않거나 갭이 진입 허용 범위를 넘으면 같은 봉에서 추격/재시도하지 않습니다. 갭은 과거 돌파가가 아닌 관측 시가에 체결하며 진입/청산 0.02% 슬리피지·편도 0.055% 수수료를 반영합니다. 진입 범위는 슬리피지 반영 실제 체결가로 검사합니다. 두 OHLC 경로 중 낮은 계좌 평가액을 선택하고 동시 경계는 SL 우선입니다. 정확한 틱 재현은 아닙니다. 한 봉에서 청산 후 재진입하지 않으며 전체종목은 한 계좌·종목명 순서·봉 시작 가용자금만 사용합니다.',
+  common: 'ATR은 선택 주기 TR의 직전 20일 단순평균(1h 480봉·4h 120봉)이며 매 봉 시작 전에 확정합니다. 자료가 부족하면 신규 진입하지 않습니다. 고정 베팅액 1Unit으로 종목당 한 번만 진입합니다. 롱 SL은 이전 파동의 몸통 저점, 숏 SL은 이전 파동의 몸통 고점입니다. 이전 파동의 몸통 고점−저점 높이가 N이며 고정 TP·MA5/MA20 청산·ATR 재이탈 청산은 사용하지 않습니다. 롱 트레일링은 매수 직후 N 거리로 시작하고 매수가에서 N의 배수만큼 상승할 때마다 간격을 N의 10%씩 줄입니다. 숏은 하락할 때 대칭 적용합니다. 트레일링 간격은 0보다 작아지지 않으며 스탑은 유리한 방향으로만 이동합니다. MA는 현재가를 반영해 봉 중간에도 계산합니다. 첫 돌파 순간 조건이 맞지 않거나 갭이 진입 허용 범위를 넘으면 같은 봉에서 추격/재시도하지 않습니다. 갭은 과거 돌파가가 아닌 관측 시가에 체결하며 진입·트레일링 스탑 0.02% 슬리피지·편도 0.055% 수수료를 반영합니다. 진입 범위는 슬리피지 반영 실제 체결가로 검사합니다. 두 OHLC 경로 중 낮은 계좌 평가액을 선택하고 동시 경계는 고정 SL 우선입니다. 정확한 틱 재현은 아닙니다. 한 봉에서 청산 후 재진입하지 않으며 전체종목은 한 계좌·종목명 순서·봉 시작 가용자금만 사용합니다.',
 };
