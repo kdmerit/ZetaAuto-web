@@ -141,6 +141,7 @@ const reasonLabels: Record<string, string> = {
   PULLBACK_MA_EXIT: '눌림목 정배열 이탈 청산',
   ENVELOPE_CENTER: '엔벨로프 중심선 청산',
   ENVELOPE_OPPOSITE: '엔벨로프 반대 밴드 청산',
+  NEW_HIGH_CONDITIONAL_EXIT: '2ATR 도달·MA5/MA20 조건 청산',
 };
 
 function defaultRequest(settings: BacktestSettings, strategy: Strategy): BacktestRequestBody {
@@ -780,8 +781,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
 
           {strategy === 'NEW_HIGH' ? <>
             <label className="field-label">신고가 기준 봉수<input type="number" inputMode="numeric" min="6" max="1000" step="1" value={settings.newHighLookback ?? '20'} onChange={event => update('newHighLookback', event.target.value)} /><small>6~1000 · 기본 20 · 현재 봉 제외 · 최근 5봉에 고가/저가가 있으면 제외</small></label>
-            <p className="notice small">돌파 즉시 1회 진입 · 돌파선 ± 1ATR 이내만 매수 · 실제 매수가 기준 ± 2ATR SL·TP</p>
-            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 고정 베팅액으로 한 번만 진입합니다. 롱 TP는 매수가 + 2ATR, 숏 TP는 매수가 − 2ATR이며 이평선 이탈 청산은 사용하지 않습니다.</p>
+            <p className="notice small">돌파 즉시 1회 진입 · 돌파선 ± 1ATR 이내만 매수 · 실제 매수가 기준 ± 2ATR SL</p>
+            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 고정 베팅액으로 한 번만 진입합니다. 2ATR 수익구간에 도달한 뒤 롱은 MA5&lt;MA20, 숏은 MA5&gt;MA20이 되는 순간 전량 청산합니다.</p>
           </> : strategy === 'PULLBACK' ? (
             <>
               <label className="field-label">엔벨로프 SMA<input type="number" inputMode="numeric" min="1" max="120" step="1" value={settings.envelopeMaPeriod ?? '20'} onChange={event => update('envelopeMaPeriod', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>1~120 · 기본 20</small></label>

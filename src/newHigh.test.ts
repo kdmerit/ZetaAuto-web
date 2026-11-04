@@ -11,7 +11,7 @@ const settings: BacktestSettings = { mode: 'SINGLE', symbol: 'BTC', interval: '1
   fullTpWavePercent: '100', minDisparityPercent: '1', ma20HalfCloseEnabled: false, roiClosePercent: '100',
   minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1', volatilityTpEnabled: true, volatilityNextCloseEnabled: false, newHighLookback: '20' };
 const origin = Date.UTC(2026, 0, 1) / 1000;
-const definition: PreparedNewHigh = { atr: 2, sum9: 900, sum19: 1900, high: 101, low: 99, long: true, short: false };
+const definition: PreparedNewHigh = { atr: 2, sum4: 300, sum9: 900, sum19: 1900, high: 101, low: 99, long: true, short: false };
 function bar(i: number, open: number, high: number, low: number, close: number, overrides: Partial<PreparedNewHigh> = {}): PreparedBar {
   return { candle: { openTime: origin + i * 3600, closeTime: origin + (i + 1) * 3600, open, high, low, close, volume: 100 },
     signal: null, ma20: null, ma60Exit: null, newHigh: { ...definition, ...overrides } };
@@ -37,8 +37,8 @@ describe('new high/low causal strategy', () => {
     expect(currentNewHighSettings({ ...settings, interval: '15m', partialTpEnabled: true })).toMatchObject({ interval: '1h', partialTpEnabled: false });
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.51'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
-    expect(canResumeLocalJob({ version: '2.10.51', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.52'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
+    expect(canResumeLocalJob({ version: '2.10.52', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {
     const data = history(); data[585]!.high = 120; data[585]!.low = 50;
@@ -110,25 +110,32 @@ describe('new high/low causal strategy', () => {
     expect(state.entries).toBe(1); expect(state.positions.BTCUSDT!.executions).toHaveLength(1);
     expect(state.positions.BTCUSDT!.first).toBeCloseTo(101.1 * 1.0002);
   });
-  it('does not use MA exits and closes at the two-ATR long TP intrabar', () => {
+  it('does not use MA exits and closes at the two-ATR threshold when MA5 is below MA20', () => {
     const first = bar(0, 101.1, 101.5, 101.1, 101.5);
     const oneAverage = bar(1, 101.5, 101.5, 100.5, 101, { sum9: 918, atr: null });
     const state = simulate([first, oneAverage]); expect(state.positions.BTCUSDT).toBeDefined();
     expect(state.closed).toBe(0);
     const exit = bar(2, 101, 106, 101, 105.5, { atr: null });
     replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [exit] }], settings, exit.candle.openTime, exit.candle.closeTime, 3600);
-    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('FULL_TP');
-    expect(state.trades[0]!.exitPrice).toBeCloseTo(state.trades[0]!.entryPrice + 4); expect(state.trades[0]!.executions.at(-1)!.timing).toBe('INTRABAR');
+    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('NEW_HIGH_CONDITIONAL_EXIT');
+    expect(state.trades[0]!.exitPrice).toBeCloseTo((state.trades[0]!.entryPrice + 4) * .9998); expect(state.trades[0]!.executions.at(-1)!.timing).toBe('INTRABAR');
+    expect(state.trades[0]!.priceLines!.some(line => line.kind === 'TP')).toBe(false);
     expect(state.trades[0]!.netProfitUsdt).toBeCloseTo(state.realized);
+  });
+  it('waits for the MA5 condition after the long two-ATR threshold', () => {
+    const state = simulate([bar(0, 101.1, 101.5, 101.1, 101.5, { sum4: 400 })]);
+    const threshold = bar(1, 101.5, 106, 101.5, 105.5, { sum4: 400, atr: null });
+    replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [threshold] }], settings, threshold.candle.openTime, threshold.candle.closeTime, 3600);
+    expect(state.closed).toBe(0); expect(state.positions.BTCUSDT).toBeDefined();
   });
   it('uses the short two-ATR TP and keeps the initial SL two ATR above the fill', () => {
     const p = { ...settings, side: 'SHORT' as const };
-    const state = simulate([bar(0, 98.9, 98.9, 98.5, 98.5, { long: false, short: true })], p);
+    const state = simulate([bar(0, 98.9, 98.9, 98.5, 98.5, { long: false, short: true, sum4: 2200 })], p);
     expect(state.positions.BTCUSDT!.stop).toBeCloseTo(state.positions.BTCUSDT!.first + 4);
     expect(state.positions.BTCUSDT!.target).toBeCloseTo(state.positions.BTCUSDT!.first - 4);
-    const exit = bar(1, 99, 100, 94, 95, { long: false, short: true, atr: null });
+    const exit = bar(1, 99, 100, 94, 95, { long: false, short: true, sum4: 2200, atr: null });
     replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [exit] }], p, exit.candle.openTime, exit.candle.closeTime, 3600);
-    expect(state.trades[0]!.reason).toBe('FULL_TP'); expect(state.trades[0]!.exitPrice).toBeCloseTo(state.trades[0]!.entryPrice - 4);
+    expect(state.trades[0]!.reason).toBe('NEW_HIGH_CONDITIONAL_EXIT'); expect(state.trades[0]!.exitPrice).toBeLessThan(state.trades[0]!.entryPrice - 4 + 0.1);
   });
   it('keeps the initial stop and does not add after a strong move below TP', () => {
     const state = simulate([bar(0, 100.5, 104, 100.2, 103)]);
@@ -149,7 +156,7 @@ describe('new high/low causal strategy', () => {
   });
   it('takes TP instead of exiting on an MA cross', () => {
     const state = simulate([bar(0, 101.1, 101.5, 101.1, 101.5), bar(1, 101.5, 110, 99, 109)]);
-    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('FULL_TP'); expect(state.trades[0]!.netProfitUsdt).toBeGreaterThan(0);
+    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('NEW_HIGH_CONDITIONAL_EXIT'); expect(state.trades[0]!.netProfitUsdt).toBeGreaterThan(0);
     expect(state.fees).toBeLessThan(.12);
   });
   it('resumes JSON portfolio state exactly across entries and closes', () => {
@@ -161,7 +168,7 @@ describe('new high/low causal strategy', () => {
   it.each([1e-8, 10000])('preserves entries and account results when prices are scaled by %s', scale => {
     const bars = [bar(0, 101.1, 101.5, 101.1, 101.5), bar(1, 101.5, 103.6, 101.5, 103.5)];
     const scaled = bars.map(row => ({ ...row, candle: { ...row.candle, open: row.candle.open * scale, high: row.candle.high * scale, low: row.candle.low * scale, close: row.candle.close * scale },
-      newHigh: { ...row.newHigh!, atr: row.newHigh!.atr! * scale, sum9: row.newHigh!.sum9 * scale, sum19: row.newHigh!.sum19 * scale,
+      newHigh: { ...row.newHigh!, atr: row.newHigh!.atr! * scale, sum4: row.newHigh!.sum4 * scale, sum9: row.newHigh!.sum9 * scale, sum19: row.newHigh!.sum19 * scale,
         high: row.newHigh!.high * scale, low: row.newHigh!.low * scale } }));
     const normal = simulate(bars); const other = simulate(scaled);
     expect(other.entries).toBe(normal.entries);

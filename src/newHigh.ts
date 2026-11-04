@@ -4,6 +4,7 @@ import type { BacktestSettings, Candle } from './types';
 
 export interface PreparedNewHigh {
   atr: number | null;
+  sum4: number;
   sum9: number;
   sum19: number;
   high: number;
@@ -44,7 +45,7 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): (
     const recent = candles.slice(index - 5, index);
     const cross = enriched.slice(index - 20, index);
     return { atr: atr[index]!.complete ? atr[index]!.value : null,
-      sum9: sums[index]! - sums[index - 9]!, sum19: sums[index]! - sums[index - 19]!,
+      sum4: sums[index]! - sums[index - 4]!, sum9: sums[index]! - sums[index - 9]!, sum19: sums[index]! - sums[index - 19]!,
       high: highs[index]!, low: lows[index]!,
       long: settings.side !== 'SHORT' && recent.every(row => row.high < highs[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 < row.ma20),
       short: settings.side !== 'LONG' && recent.every(row => row.low > lows[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 > row.ma20),
@@ -56,12 +57,12 @@ export const newHighRules = {
   long: [
     '현재 봉을 제외한 이전 N봉 최고가를 위로 돌파한 그 봉에서 즉시 1Unit 진입합니다. N은 입력값(기본 20)이며 실제 체결가가 돌파선 + 1ATR 이내여야 합니다.',
     '돌파 순간 현재가를 반영한 MA10 > MA20이고, 이전 20봉 안에 MA10 < MA20인 봉이 하나 이상 있어야 합니다.',
-    '이전 N봉 최고가가 최근 5개 완성봉 안에 한 번이라도 있으면 진입하지 않습니다. SL은 실제 매수가 − 2×ATR, TP는 실제 매수가 + 2×ATR입니다.',
+    '이전 N봉 최고가가 최근 5개 완성봉 안에 한 번이라도 있으면 진입하지 않습니다. SL은 실제 매수가 − 2×ATR입니다. 현재가가 실제 매수가 + 2×ATR 이상이고 현재 MA5 < MA20이면 전량 청산합니다.',
   ],
   short: [
     '현재 봉을 제외한 이전 N봉 최저가를 아래로 돌파한 그 봉에서 즉시 1Unit 숏 진입합니다. 실제 체결가가 돌파선 − 1ATR 이상이어야 합니다.',
     '돌파 순간 현재가를 반영한 MA10 < MA20이고, 이전 20봉 안에 MA10 > MA20인 봉이 하나 이상 있어야 합니다.',
-    '이전 N봉 최저가가 최근 5개 완성봉 안에 한 번이라도 있으면 진입하지 않습니다. SL은 실제 매수가 + 2×ATR, TP는 실제 매수가 − 2×ATR입니다.',
+    '이전 N봉 최저가가 최근 5개 완성봉 안에 한 번이라도 있으면 진입하지 않습니다. SL은 실제 매수가 + 2×ATR입니다. 현재가가 실제 매수가 − 2×ATR 이하이고 현재 MA5 > MA20이면 전량 청산합니다.',
   ],
-  common: 'ATR은 선택 주기 TR의 직전 20일 단순평균(1h 480봉·4h 120봉)이며 매 봉 시작 전에 확정합니다. 자료가 부족하면 신규 진입하지 않습니다. 고정 베팅액 1Unit으로 종목당 한 번만 진입합니다. 자금이 부족하거나 SL 가격이 유효하지 않으면 진입하지 않습니다. TP는 롱 실제 매수가 + 2×ATR, 숏 실제 매수가 − 2×ATR이며 SL과 TP 모두 봉 중간에 닿으면 해당 가격으로 전량 청산합니다. 첫 돌파 순간 조건이 맞지 않거나 갭이 진입 허용 범위를 넘으면 같은 봉에서 추격/재시도하지 않습니다. 갭은 과거 돌파가가 아닌 관측 시가에 체결하며 진입/청산 0.02% 슬리피지·편도 0.055% 수수료를 반영합니다. 진입 범위는 슬리피지 반영 실제 체결가로 검사합니다. 두 OHLC 경로 중 낮은 계좌 평가액을 선택하고 동시 경계는 SL 우선입니다. 정확한 틱 재현은 아닙니다. 한 봉에서 청산 후 재진입하지 않으며 전체종목은 한 계좌·종목명 순서·봉 시작 가용자금만 사용합니다.',
+  common: 'ATR은 선택 주기 TR의 직전 20일 단순평균(1h 480봉·4h 120봉)이며 매 봉 시작 전에 확정합니다. 자료가 부족하면 신규 진입하지 않습니다. 고정 베팅액 1Unit으로 종목당 한 번만 진입합니다. 자금이 부족하거나 SL 가격이 유효하지 않으면 진입하지 않습니다. 고정 TP는 사용하지 않으며, 롱은 현재가가 실제 매수가 + 2×ATR 이상이면서 현재 MA5 < MA20일 때, 숏은 현재가가 실제 매수가 − 2×ATR 이하이면서 현재 MA5 > MA20일 때 전량 청산합니다. MA는 현재가를 반영해 봉 중간에도 계산합니다. 첫 돌파 순간 조건이 맞지 않거나 갭이 진입 허용 범위를 넘으면 같은 봉에서 추격/재시도하지 않습니다. 갭은 과거 돌파가가 아닌 관측 시가에 체결하며 진입/청산 0.02% 슬리피지·편도 0.055% 수수료를 반영합니다. 진입 범위는 슬리피지 반영 실제 체결가로 검사합니다. 두 OHLC 경로 중 낮은 계좌 평가액을 선택하고 동시 경계는 SL 우선입니다. 정확한 틱 재현은 아닙니다. 한 봉에서 청산 후 재진입하지 않으며 전체종목은 한 계좌·종목명 순서·봉 시작 가용자금만 사용합니다.',
 };
