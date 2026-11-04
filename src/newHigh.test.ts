@@ -37,8 +37,8 @@ describe('new high/low causal strategy', () => {
     expect(currentNewHighSettings({ ...settings, interval: '15m', partialTpEnabled: true })).toMatchObject({ interval: '1h', partialTpEnabled: false });
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.52'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
-    expect(canResumeLocalJob({ version: '2.10.52', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.53'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
+    expect(canResumeLocalJob({ version: '2.10.53', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {
     const data = history(); data[585]!.high = 120; data[585]!.low = 50;
@@ -128,7 +128,16 @@ describe('new high/low causal strategy', () => {
     replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [threshold] }], settings, threshold.candle.openTime, threshold.candle.closeTime, 3600);
     expect(state.closed).toBe(0); expect(state.positions.BTCUSDT).toBeDefined();
   });
-  it('uses the short two-ATR TP and keeps the initial SL two ATR above the fill', () => {
+  it('closes on a later candle retracing below the one-ATR line after it was crossed', () => {
+    const first = bar(0, 101.1, 101.5, 101.1, 101.5);
+    const breakthrough = bar(1, 101.5, 104, 100, 101);
+    const state = simulate([first, breakthrough]);
+    expect(state.closed).toBe(0); expect(state.positions.BTCUSDT!.newHighProfitLineHit).toBe(true);
+    const retrace = bar(2, 103.5, 103.8, 102.5, 102.8, { atr: null });
+    replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [retrace] }], settings, retrace.candle.openTime, retrace.candle.closeTime, 3600);
+    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('NEW_HIGH_PROFIT_RETRACE');
+  });
+  it('uses the short two-ATR threshold and keeps the initial SL two ATR above the fill', () => {
     const p = { ...settings, side: 'SHORT' as const };
     const state = simulate([bar(0, 98.9, 98.9, 98.5, 98.5, { long: false, short: true, sum4: 2200 })], p);
     expect(state.positions.BTCUSDT!.stop).toBeCloseTo(state.positions.BTCUSDT!.first + 4);
@@ -137,7 +146,7 @@ describe('new high/low causal strategy', () => {
     replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [exit] }], p, exit.candle.openTime, exit.candle.closeTime, 3600);
     expect(state.trades[0]!.reason).toBe('NEW_HIGH_CONDITIONAL_EXIT'); expect(state.trades[0]!.exitPrice).toBeLessThan(state.trades[0]!.entryPrice - 4 + 0.1);
   });
-  it('keeps the initial stop and does not add after a strong move below TP', () => {
+  it('keeps the initial stop and does not add after a strong move below the exit threshold', () => {
     const state = simulate([bar(0, 100.5, 104, 100.2, 103)]);
     expect(state.entries).toBe(1); expect(state.closed).toBe(0);
     const holding = state.positions.BTCUSDT!; expect(holding.executions).toHaveLength(1); expect(holding.stop).toBeCloseTo(holding.first - 4);
@@ -154,7 +163,7 @@ describe('new high/low causal strategy', () => {
     replayPortfolioBlock(previous, [{ symbol: 'BTCUSDT', bars: [out] }, { symbol: 'ZZZUSDT', bars: [entry] }], shortFunds, out.candle.openTime, out.candle.closeTime, 3600);
     expect(previous.cash).toBeGreaterThan(100); expect(previous.entries).toBe(1); expect(previous.positions.ZZZUSDT).toBeUndefined();
   });
-  it('takes TP instead of exiting on an MA cross', () => {
+  it('uses the conditional threshold instead of exiting on an MA cross alone', () => {
     const state = simulate([bar(0, 101.1, 101.5, 101.1, 101.5), bar(1, 101.5, 110, 99, 109)]);
     expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('NEW_HIGH_CONDITIONAL_EXIT'); expect(state.trades[0]!.netProfitUsdt).toBeGreaterThan(0);
     expect(state.fees).toBeLessThan(.12);
