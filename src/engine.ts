@@ -1042,7 +1042,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
-  if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 종가 진입하고, 초기 SL과 단계형 트레일링 SL로 청산합니다.';
+  if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 조건 충족 시 봉 중간 진입하고, 초기 SL과 단계형 트레일링 SL로 청산합니다.';
   if (strategy === 'ENVELOPE') return '1h 재돌파 진입·중심선 전량 청산에 일봉 MA20 추세 필터를 선택 적용하고, SMA·이격을 사용자 필터와 수익률·승률 정렬로 비교합니다.';
   if (strategy === 'PULLBACK') {
     return 'MA20·MA60·MA120 5봉 정배열과 MA60·MA120·이격 증가, 직전 10봉 엔벨로프 접촉 이력을 확인한 뒤 MA20 눌림에서 진입하고, MA60·엔벨로프와 정배열 해제로 청산합니다.';

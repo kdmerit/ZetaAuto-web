@@ -540,7 +540,7 @@ interface NewHighPath { state: PortfolioState; spent: number }
 function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, holding: Holding | undefined, lowFirst: boolean): NewHighPath {
   const state = initialPortfolio(available); const definition = bar.newHigh!; const candle = bar.candle;
   if (holding) state.positions[symbol] = structuredClone(holding);
-  let spent = 0;
+  let spent = 0; let attempted = holding !== undefined; let enteredThisCandle = false;
   const leverage = Number(settings.leverage);
   const riskAmount = settings.newHighSizingMode === 'RISK' ? newHighRiskAmount(settings) : undefined;
   const ma10 = (price: number) => (definition.sum9 + price) / 10;
@@ -569,20 +569,10 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
   };
   const stopReason = (p: Holding): string => (p.newHighTrailStep ?? 0) > 0 ? 'NEW_HIGH_TRAILING' : 'SL';
   const candleRange = candle.high - candle.low;
-  const candleQualifies = (side: 'LONG' | 'SHORT'): boolean => {
-    const long = side === 'LONG';
-    const directionConfirmed = long ? candle.close > candle.open && candle.close > definition.high : candle.close < candle.open && candle.close < definition.low;
-    if (!directionConfirmed) return false;
-    const rejection = candleRange > 0
-      ? long
-        ? (Math.max(0, candle.high - Math.max(candle.open, candle.close)) + Math.max(0, candle.open - candle.close)) / candleRange
-        : (Math.max(0, Math.min(candle.open, candle.close) - candle.low) + Math.max(0, candle.close - candle.open)) / candleRange
-      : 0;
-    return rejection < 0.7;
-  };
   const attempt = (side: 'LONG' | 'SHORT', price: number): void => {
+    attempted = true;
     const direction = side === 'LONG' ? 1 : -1;
-    if (!candleQualifies(side)) return;
+    if (direction * (price - candle.open) < 0) return;
     const fill = price * (1 + direction * slippage);
     const boundary = side === 'LONG' ? definition.high : definition.low;
     const currentMa60 = ma60(price);
@@ -594,38 +584,52 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     if (!(stop > 0) || (side === 'LONG' ? stop >= price : stop <= price)) return;
     const target = fill + direction * 2 * definition.atr!;
     enter(state, symbol, { strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime),
-      entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', newHighAtr: definition.atr!, ...(riskAmount !== undefined ? { riskAmount } : {}) }, candle, settings, true);
+      entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', newHighAtr: definition.atr!, ...(riskAmount !== undefined ? { riskAmount } : {}) }, candle, settings);
     const p = state.positions[symbol];
-    if (p) { p.newHighTrailStep = 0; spent += p.margin + p.margin * leverage * feeRate; }
+    if (p) { p.newHighTrailStep = 0; enteredThisCandle = true; spent += p.margin + p.margin * leverage * feeRate; }
   };
   const eligible = (side: 'LONG' | 'SHORT'): boolean => definition.atr !== null && definition.atr > 0 && (side === 'LONG' ? definition.long : definition.short);
-  const longEntry = definition.high; const shortEntry = definition.low;
+  const longEntry = definition.high + 0.5 * definition.atr!; const shortEntry = definition.low - 0.5 * definition.atr!;
   const atOpen = state.positions[symbol];
   if (atOpen) {
     advanceTrail(atOpen, candle.open);
     const long = atOpen.signal.side === 'LONG';
     if (long ? candle.open <= atOpen.stop : candle.open >= atOpen.stop) close(state, atOpen, candle.open, atOpen.qty, stopReason(atOpen), candle, true);
-  }
+  } else if (eligible('LONG') && candle.open >= longEntry) attempt('LONG', candle.open);
+  else if (eligible('SHORT') && candle.open <= shortEntry) attempt('SHORT', candle.open);
   const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
   for (let i = 1; i < path.length; i += 1) {
     let before = path[i - 1]!; const after = path[i]!;
     for (let count = 0; count < 3; count += 1) {
       const p = state.positions[symbol];
-      const events: { price: number; kind: 'SL' }[] = [];
+      const events: { price: number; kind: 'SL' | 'LONG' | 'SHORT' }[] = [];
       if (p) {
         advanceTrail(p, before); advanceTrail(p, after);
         const long = p.signal.side === 'LONG';
         if (long ? before >= p.stop && after <= p.stop : before <= p.stop && after >= p.stop) events.push({ price: p.stop, kind: 'SL' });
+      } else if (!attempted) {
+        if (eligible('LONG') && before < longEntry && after >= longEntry) events.push({ price: longEntry, kind: 'LONG' });
+        if (eligible('SHORT') && before > shortEntry && after <= shortEntry) events.push({ price: shortEntry, kind: 'SHORT' });
       }
       events.sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
       const event = events[0]; if (!event) break;
       if (event.kind === 'SL') { close(state, p!, event.price, p!.qty, stopReason(p!), candle); break; }
+      const direction = event.kind === 'LONG' ? 1 : -1;
+      attempt(event.kind, event.price + direction * tolerance(event.price));
       before = event.price;
     }
   }
-  if (!holding && !state.positions[symbol]) {
-    if (eligible('LONG') && candle.close > longEntry) attempt('LONG', candle.close);
-    else if (eligible('SHORT') && candle.close < shortEntry) attempt('SHORT', candle.close);
+  const newEntry = enteredThisCandle ? state.positions[symbol] : undefined;
+  if (newEntry) {
+    const long = newEntry.signal.side === 'LONG';
+    const directionConfirmed = long ? candle.close > candle.open && candle.close > definition.high : candle.close < candle.open && candle.close < definition.low;
+    const rejection = candleRange > 0
+      ? long
+        ? (Math.max(0, candle.high - Math.max(candle.open, candle.close)) + Math.max(0, candle.open - candle.close)) / candleRange
+        : (Math.max(0, Math.min(candle.open, candle.close) - candle.low) + Math.max(0, candle.close - candle.open)) / candleRange
+      : 0;
+    if (!directionConfirmed) close(state, newEntry, candle.close, newEntry.qty, 'NEW_HIGH_BREAKOUT_FAIL', candle);
+    else if (rejection >= 0.7) close(state, newEntry, candle.close, newEntry.qty, 'NEW_HIGH_CANDLE_REJECTION', candle);
   }
   const remaining = state.positions[symbol];
   if (remaining) remaining.mark = candle.close;
@@ -640,7 +644,7 @@ function replayNewHighRows(state: PortfolioState, rows: { symbol: string; bar: P
     }
     const available = Math.max(0, Math.min(budget, state.cash));
     const candidates = [true, false].map(lowFirst => newHighPath(symbol, bar, settings, available, state.positions[symbol], lowFirst));
-    // A profitable raised SL must not outrank the other path's earlier losing MA exit.
+    // Prefer the lower-equity OHLC path; a favorable raised SL must not hide the other path's earlier loss.
     const selected = candidates.sort((a, b) => portfolioEquity(a.state) - portfolioEquity(b.state)
       || Number(!!b.state.exitReasons.SL) - Number(!!a.state.exitReasons.SL))[0]!;
     mergePath(state, selected.state, symbol, available); budget = Math.max(0, budget - selected.spent);

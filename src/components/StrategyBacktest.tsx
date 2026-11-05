@@ -804,8 +804,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <label className="field-label">고정 손실액<input type="number" inputMode="decimal" min="0.01" step="0.01" disabled={settings.newHighSizingMode !== 'RISK'} value={settings.newHighRiskAmount ?? '100'} onChange={event => update('newHighRiskAmount', event.target.value)} /><small>고정 손실액 선택 시 활성화 · 초기 SL·수수료·슬리피지 기준 1회 허용 손실</small></label>
             </div>
             <label className="checkbox-row"><input type="checkbox" checked={settings.newHighMa60Enabled === true} onChange={event => update('newHighMa60Enabled', event.target.checked)} /><span>현재가 &gt; MA60 (롱) / 현재가 &lt; MA60 (숏)일 때만 매수</span></label>
-            <p className="notice small">종가 확정 후 1회 진입 · 돌파선 +0.5~1.0ATR 범위에서만 매수 · 양봉/음봉·꼬리 확인 · 단계형 트레일링 SL 적용</p>
-            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 한 번만 진입합니다. 롱은 양봉 종가가 이전 고가 위, 숏은 음봉 종가가 이전 저가 아래여야 하며, 진입 캔들의 반대쪽 꼬리·몸통 비율이 70% 이상이면 진입하지 않습니다. +1ATR부터 단계형 트레일링을 청산 시까지 계속 적용합니다. 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
+            <p className="notice small">조건 충족 시 봉 중간 1회 진입 · 돌파선 +0.5~1.0ATR 범위에서만 매수 · 종가/꼬리 확인 · 단계형 트레일링 SL 적용</p>
+            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 한 번만 진입합니다. 롱은 현재가가 시가보다 높고 숏은 현재가가 시가보다 낮을 때 진입하며, 진입 후 캔들 마감 시 반대쪽 꼬리·몸통 비율이 70% 이상이거나 돌파 방향으로 마감하지 않으면 같은 봉 종가에 청산합니다. +1ATR부터 단계형 트레일링을 청산 시까지 계속 적용합니다. 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
           </> : strategy === 'PULLBACK' ? (
             <>
               <label className="field-label">엔벨로프 SMA<input type="number" inputMode="numeric" min="1" max="120" step="1" value={settings.envelopeMaPeriod ?? '20'} onChange={event => update('envelopeMaPeriod', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>1~120 · 기본 20</small></label>
