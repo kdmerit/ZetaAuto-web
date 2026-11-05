@@ -416,8 +416,60 @@ function replayVolatilityMa5Entry(symbol: string, bar: PreparedBar, settings: Ba
  * the only entry attempt.
  */
 function replayReferenceEntry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
+  if (bar.referenceIntrabarCandles?.length) return replayReferenceIntrabarEntry(symbol, bar, settings, available);
   const candidates = [true, false].map(lowFirst => referenceEntryPath(symbol, bar, settings, available, lowFirst));
   return worstPath(candidates);
+}
+
+interface ReferenceEntryPath { state: PortfolioState; attempted: boolean }
+
+/** Replay one 15m candle for a reference setup, retaining the setup's one-attempt rule. */
+function referenceEntryCandlePath(
+  state: PortfolioState,
+  symbol: string,
+  signal: Signal,
+  candle: Candle,
+  settings: BacktestSettings,
+  attempted: boolean,
+  lowFirst: boolean,
+): ReferenceEntryPath {
+  const nextState = structuredClone(state);
+  const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
+  const touch = (before: number, after: number): boolean => before === signal.entry
+    || before < signal.entry && after >= signal.entry
+    || before > signal.entry && after <= signal.entry;
+  const attempt = (): void => {
+    attempted = true;
+    enter(nextState, symbol, signal, candle, settings);
+  };
+  if (!attempted && path[0] === signal.entry) attempt();
+  for (let index = 1; index < path.length; index += 1) {
+    let before = path[index - 1]!;
+    const after = path[index]!;
+    if (!attempted && touch(before, after)) {
+      attempt();
+      before = signal.entry;
+    }
+    const position = nextState.positions[symbol];
+    if (position) replaySegment(nextState, position, before, after, candle, settings);
+  }
+  return { state: nextState, attempted };
+}
+
+function worstReferenceEntryPath(candidates: ReferenceEntryPath[]): ReferenceEntryPath {
+  const stopped = candidates.filter(candidate => candidate.state.exitReasons.SL);
+  return (stopped.length ? stopped : candidates).sort((a, b) => portfolioEquity(a.state) - portfolioEquity(b.state))[0]!;
+}
+
+/** Use each 15m candle in chronological order instead of the parent candle's synthetic OHLC path. */
+function replayReferenceIntrabarEntry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
+  let selected: ReferenceEntryPath = { state: initialPortfolio(available), attempted: false };
+  for (const candle of [...bar.referenceIntrabarCandles!].sort((a, b) => a.openTime - b.openTime)) {
+    selected = worstReferenceEntryPath([true, false].map(lowFirst => referenceEntryCandlePath(
+      selected.state, symbol, bar.signal!, candle, settings, selected.attempted, lowFirst)));
+    if (selected.attempted && !selected.state.positions[symbol]) break;
+  }
+  return selected.state;
 }
 
 function referenceEntryPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, lowFirst: boolean): PortfolioState {
@@ -559,6 +611,11 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
   const position = state.positions[symbol];
   if (!position) return;
   if (position.signal.strategy === 'NEW_HIGH') return; // Replayed with intrabar funding together below.
+  if (position.signal.strategy === 'REFERENCE' && bar.referenceIntrabarCandles?.length) {
+    const selected = replayReferenceIntrabarHolding(position, bar, settings);
+    mergePath(state, selected, symbol);
+    return;
+  }
   if (position.signal.strategy === 'DISPARITY') {
     if (bar.ma60Exit === null) throw new Error(`${symbol}의 MA60 계산에 필요한 캔들이 부족합니다.`);
     position.target = bar.ma60Exit;
@@ -585,6 +642,23 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
       && (long ? bar.ma20 > bar.ma60 && bar.ma60 > bar.ma120 : bar.ma20 < bar.ma60 && bar.ma60 < bar.ma120);
     if (!aligned) close(state, remaining, bar.candle.close, remaining.qty, 'PULLBACK_MA_EXIT', bar.candle);
   }
+}
+
+/** Replay a held reference position through chronological 15m candles. */
+function replayReferenceIntrabarHolding(position: Holding, bar: PreparedBar, settings: BacktestSettings): PortfolioState {
+  const state = initialPortfolio(0);
+  state.positions[position.symbol] = structuredClone(position);
+  for (const candle of [...bar.referenceIntrabarCandles!].sort((a, b) => a.openTime - b.openTime)) {
+    const current = state.positions[position.symbol];
+    if (!current) break;
+    const childBar: PreparedBar = { ...bar, candle, signal: null };
+    const selected = worstPath([
+      replayPath(current, childBar, settings, true),
+      replayPath(current, childBar, settings, false),
+    ]);
+    mergePath(state, selected, position.symbol);
+  }
+  return state;
 }
 
 interface NewHighPath { state: PortfolioState; spent: number }

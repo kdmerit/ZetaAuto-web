@@ -522,6 +522,8 @@ export interface PreparedBar {
   envelopeBySide?: Partial<Record<'LONG' | 'SHORT', PreparedEnvelope>>;
   newHigh?: PreparedNewHigh;
   newHighIntrabarCandles?: Candle[];
+  /** Lower-timeframe candles used to replay reference entries and exits in order. */
+  referenceIntrabarCandles?: Candle[];
 }
 
 export interface PreparedSymbol {
@@ -542,6 +544,7 @@ export function prepareSymbolBlock(
   minuteCandles?: Candle[],
   dailyCandles?: Candle[],
   newHighIntrabarCandles?: Candle[],
+  referenceIntrabarCandles?: Candle[],
 ): PreparedSymbol {
   if (strategy === 'NEW_HIGH') {
     const definitions = prepareNewHigh(candles, settings);
@@ -591,6 +594,13 @@ export function prepareSymbolBlock(
     rows.push(minute);
     minuteGroups.set(at, rows);
   }
+  const referenceGroups = new Map<number, Candle[]>();
+  for (const intrabar of referenceIntrabarCandles ?? []) {
+    const parentOpenTime = Math.floor(intrabar.openTime / seconds) * seconds;
+    const rows = referenceGroups.get(parentOpenTime) ?? [];
+    rows.push(intrabar);
+    referenceGroups.set(parentOpenTime, rows);
+  }
   const byTime = new Map(signals.flatMap(signal => {
     const time = candles[signal.index]?.openTime;
     return time === undefined ? [] : [[time, {
@@ -613,6 +623,8 @@ export function prepareSymbolBlock(
         : {}),
       ...(byTime.get(candle.openTime)?.exitMode === 'VOLATILITY_TP' && minuteGroups.has(candle.openTime)
         ? { intrabarCandles: minuteGroups.get(candle.openTime) } : {}),
+      ...(strategy === 'REFERENCE' && referenceGroups.has(candle.openTime)
+        ? { referenceIntrabarCandles: referenceGroups.get(candle.openTime)!.sort((a, b) => a.openTime - b.openTime) } : {}),
     })).filter(bar => bar.candle.openTime >= start && bar.candle.openTime < end),
     waveState,
   };
@@ -963,13 +975,14 @@ export function runBacktest(
   onProgress?: ProgressCallback,
   minuteCandles?: Candle[],
   newHighIntrabarCandles?: Candle[],
+  referenceIntrabarCandles?: Candle[],
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
   if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK' || strategy === 'REFERENCE') {
     const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
     const start = candles[0]!.openTime;
     const end = candles.at(-1)!.closeTime;
-    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles, undefined, newHighIntrabarCandles);
+    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles, undefined, newHighIntrabarCandles, referenceIntrabarCandles);
     const state = initialPortfolio(Number(settings.initialCapitalUsdt));
     replayPortfolioBlock(state, [prepared], settings, start, end, intervalSeconds(settings.interval));
     const result = portfolioResult(state, settings);

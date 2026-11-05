@@ -88,4 +88,28 @@ describe('reference candle strategy', () => {
     const document = prepareSymbolBlock('BTCUSDT', rows, { ...settings, side: 'SHORT' }, 'REFERENCE', rows[1]!.openTime, rows.at(-1)!.closeTime);
     expect(document.bars[0]!.signal).toMatchObject({ strategy: 'REFERENCE', side: 'SHORT', entry: 100, stop: 120, target: 88 });
   });
+
+  it('uses chronological 15m candles so a parent-bar high cannot create a false TP', () => {
+    const rows = setupRows();
+    const referenceOpen = rows[1]!.openTime;
+    const child = (index: number, values: [number, number, number, number]): Candle => ({
+      openTime: referenceOpen + index * 900, closeTime: referenceOpen + (index + 1) * 900,
+      open: values[0], high: values[1], low: values[2], close: values[3], volume: 1,
+    });
+    const lowerTimeframe = [
+      child(0, [90, 105, 89, 104]),
+      child(1, [104, 111, 101, 109]),
+      child(2, [109, 110, 102, 108]),
+      child(3, [108, 109, 79, 85]),
+    ];
+    const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', referenceOpen, rows.at(-1)!.closeTime,
+      undefined, undefined, undefined, undefined, lowerTimeframe);
+    expect(document.bars[0]!.referenceIntrabarCandles).toHaveLength(4);
+    const state = initialPortfolio(1_000);
+    replayPortfolioBlock(state, [document], settings, referenceOpen, rows.at(-1)!.closeTime, 3600);
+    expect(state.entries).toBe(1);
+    expect(state.exitReasons).toEqual({ SL: 1 });
+    expect(state.trades[0]!.exitPrice).toBeCloseTo(79.984, 10);
+    expect(state.trades[0]!.executions.at(-1)!.candleOpenAt).toBe(referenceOpen + 3 * 900);
+  });
 });
