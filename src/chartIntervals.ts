@@ -7,7 +7,7 @@ import { atrWindowSeconds } from './atr';
 import { enrichMarketCandles } from './marketIndicators';
 import type { BacktestInterval, BacktestTrade, ChartData, ChartMarker, Wave } from './types';
 
-export const chartIntervals: BacktestInterval[] = ['15m', '1h', '4h', '1d'];
+export const chartIntervals: BacktestInterval[] = ['1h', '4h', '1d'];
 
 function chartEvents(chart: ChartData): ChartMarker[] {
   const events = new Map((chart.executions ?? []).map(event => [event.id, event]));

@@ -133,6 +133,7 @@ export type PriceLineKind =
   | 'TP'
   | 'PARTIAL_TP'
   | 'TRAILING_SL'
+  | 'TRAILING_REACHED'
   | 'EXIT';
 
 export interface PriceLine {
@@ -203,7 +204,7 @@ export interface BacktestTrade {
   /** Highest favorable ATR step reached before a NEW_HIGH exit. */
   newHighTrailStep?: number;
   /** All stepped trailing levels reached by a NEW_HIGH position. */
-  newHighTrailLevels?: { step: number; price: number }[];
+  newHighTrailLevels?: { step: number; price: number; reachedPrice?: number }[];
   signalIndex: number;
   entryIndex: number;
   exitIndex: number;

@@ -104,7 +104,10 @@ function normalizeServerTrade(value: Record<string, unknown>): BacktestTrade {
       if (!level || typeof level !== 'object') return [];
       const row = level as Record<string, unknown>;
       const step = Number(row.step); const price = Number(row.price);
-      return Number.isFinite(step) && Number.isFinite(price) ? [{ step, price }] : [];
+      const reachedPrice = row.reachedPrice == null ? undefined : Number(row.reachedPrice);
+      return Number.isFinite(step) && Number.isFinite(price)
+        ? [{ step, price, ...(Number.isFinite(reachedPrice) ? { reachedPrice } : {}) }]
+        : [];
     })
     : undefined;
   return {

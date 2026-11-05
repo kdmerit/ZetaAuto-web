@@ -460,6 +460,7 @@ export interface PreparedBar {
   pullbackEnvelope?: PreparedEnvelope;
   envelopeBySide?: Partial<Record<'LONG' | 'SHORT', PreparedEnvelope>>;
   newHigh?: PreparedNewHigh;
+  newHighIntrabarCandles?: Candle[];
 }
 
 export interface PreparedSymbol {
@@ -479,11 +480,22 @@ export function prepareSymbolBlock(
   previousWaveState?: WaveState,
   minuteCandles?: Candle[],
   dailyCandles?: Candle[],
+  newHighIntrabarCandles?: Candle[],
 ): PreparedSymbol {
   if (strategy === 'NEW_HIGH') {
     const definitions = prepareNewHigh(candles, settings);
+    const seconds = intervalSeconds(settings.interval);
+    const intrabarGroups = new Map<number, Candle[]>();
+    for (const intrabar of newHighIntrabarCandles ?? []) {
+      const parentOpenTime = Math.floor(intrabar.openTime / seconds) * seconds;
+      const rows = intrabarGroups.get(parentOpenTime) ?? [];
+      rows.push(intrabar);
+      intrabarGroups.set(parentOpenTime, rows);
+    }
     return { symbol, bars: candles.flatMap((candle, index) => candle.openTime < start || candle.openTime >= end ? [] : [{
-      candle, signal: null, ma20: null, ma60Exit: null, ...(definitions[index] ? { newHigh: definitions[index] } : {}),
+      candle, signal: null, ma20: null, ma60Exit: null,
+      ...(definitions[index] ? { newHigh: definitions[index] } : {}),
+      ...(intrabarGroups.has(candle.openTime) ? { newHighIntrabarCandles: intrabarGroups.get(candle.openTime)!.sort((a, b) => a.openTime - b.openTime) } : {}),
     }]) };
   }
   if (strategy === 'ENVELOPE') {
@@ -888,22 +900,26 @@ export function runBacktest(
   strategy: Strategy,
   onProgress?: ProgressCallback,
   minuteCandles?: Candle[],
+  newHighIntrabarCandles?: Candle[],
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
   if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK') {
     const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
     const start = candles[0]!.openTime;
     const end = candles.at(-1)!.closeTime;
-    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles);
+    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles, undefined, newHighIntrabarCandles);
     const state = initialPortfolio(Number(settings.initialCapitalUsdt));
     replayPortfolioBlock(state, [prepared], settings, start, end, intervalSeconds(settings.interval));
     const result = portfolioResult(state, settings);
-    const indices = new Map(candles.map((candle, index) => [candle.openTime, index]));
+    const indexFor = (time: number): number => {
+      const exact = candles.findIndex(candle => candle.openTime === time);
+      return exact >= 0 ? exact : candles.findIndex(candle => candle.openTime <= time && time < candle.closeTime);
+    };
     onProgress?.(candles.length, candles.length);
     return { ...result, candles, recentTrades: result.recentTrades.map(trade => {
-      const index = indices.get(trade.executions.find(fill => fill.kind === 'ENTRY')!.candleOpenAt) ?? -1;
+      const index = indexFor(trade.executions.find(fill => fill.kind === 'ENTRY')!.candleOpenAt);
       return { ...trade, entryIndex: index, signalIndex: index,
-        exitIndex: indices.get(trade.executions.at(-1)!.candleOpenAt) ?? -1,
+        exitIndex: indexFor(trade.executions.at(-1)!.candleOpenAt),
         signal: { ...trade.signal, index } };
     }) };
   }
@@ -961,7 +977,12 @@ export function buildLocalChart(
   const start = Math.max(0, Math.min(trade.entryIndex, trade.signalIndex) - 120);
   const end = Math.min(all.length, Math.max(trade.exitIndex, trade.entryIndex) + 121);
   const candles = all.slice(start, end);
-  const indexFor = (time: number): number => Math.max(0, candles.findIndex((candle) => candle.openTime === time));
+  const indexFor = (time: number): number => {
+    const exact = candles.findIndex(candle => candle.openTime === time);
+    if (exact >= 0) return exact;
+    const containing = candles.findIndex(candle => candle.openTime <= time && time < candle.closeTime);
+    return containing >= 0 ? containing : 0;
+  };
   const markers: ChartData['markers'] = trade.executions.map((execution, index) => {
     const label = execution.kind === 'CLOSE'
       ? 'C'
@@ -1003,7 +1024,16 @@ export function buildLocalChart(
   } else if (signal.strategy === 'ENVELOPE' || signal.strategy === 'NEW_HIGH') {
     lines.push(line('ENTRY', trade.executions.find(fill => fill.kind === 'ENTRY')?.price ?? trade.entryPrice));
     if (signal.strategy === 'NEW_HIGH') {
-      lines.push(...(trade.priceLines ?? []).filter(priceLine => priceLine.kind === 'TRAILING_SL').map(priceLine => ({ ...priceLine })));
+      const storedLines = trade.priceLines ?? [];
+      lines.push(...storedLines.filter(priceLine => priceLine.kind === 'TRAILING_SL' || priceLine.kind === 'TRAILING_REACHED').map(priceLine => ({ ...priceLine })));
+      const reachedStages = new Set(storedLines.filter(priceLine => priceLine.kind === 'TRAILING_REACHED').map(priceLine => priceLine.stage));
+      if (signal.newHighAtr !== undefined && Number.isFinite(signal.newHighAtr)) {
+        lines.push(...storedLines.filter(priceLine => priceLine.kind === 'TRAILING_SL' && priceLine.stage !== undefined && !reachedStages.has(priceLine.stage)).map(priceLine => ({
+          kind: 'TRAILING_REACHED' as const,
+          price: trade.entryPrice + (trade.side === 'LONG' ? 1 : -1) * priceLine.stage! * signal.newHighAtr!,
+          stage: priceLine.stage,
+        })));
+      }
     }
     lines.push(line('SL', signal.activeStop ?? signal.stop));
     if (signal.strategy === 'NEW_HIGH' && signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));

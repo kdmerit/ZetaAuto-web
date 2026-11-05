@@ -7,7 +7,7 @@ import { initialPortfolio, portfolioResult, replayPortfolioBlock, type Portfolio
 import { validateMinuteCandles } from './intrabar';
 import { atrWindowSeconds } from './atr';
 import { currentEnvelopeSettings, currentPullbackSettings } from './envelope';
-import { currentNewHighSettings, newHighWarmup } from './newHigh';
+import { currentNewHighSettings, newHighExecutionInterval, newHighWarmup } from './newHigh';
 import type { BacktestResult, BacktestSettings, Strategy } from './types';
 import { loadWeeklyUniverse, saveWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
 
@@ -21,7 +21,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'NEW_HIGH' ? '2.10.60' : strategy === 'ENVELOPE' ? '2.10.45' : strategy === 'VOLATILITY' ? '2.10.49' : localEngineVersion;
+  return strategy === 'NEW_HIGH' ? '2.10.61' : strategy === 'ENVELOPE' ? '2.10.45' : strategy === 'VOLATILITY' ? '2.10.49' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);
@@ -233,9 +233,13 @@ async function executeWithLease(
         const instrument = job.universe[job.cursor]!;
         const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings) : job.strategy === 'VOLATILITY' ? Math.max(atrWindowSeconds + seconds, 200 * seconds) : 200 * seconds;
         const candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
+        const executionInterval = job.strategy === 'NEW_HIGH' ? newHighExecutionInterval(job.settings.interval) : null;
+        const newHighIntrabarCandles = executionInterval
+          ? await ensureCandles(instrument, executionInterval, job.blockStart, blockEnd, blockEnd, signal)
+          : undefined;
         const daily = job.strategy === 'ENVELOPE' && job.settings.envelopeDailyTrend
           ? await ensureCandles(instrument, '1d', Math.floor(job.blockStart / 86400) * 86400 - 25 * 86400, Math.floor((blockEnd - seconds) / 86400) * 86400, undefined, signal) : undefined;
-        const prepared = prepareSymbolBlock(instrument.symbol, candles, job.settings, job.strategy, job.blockStart, blockEnd, job.waveStates[instrument.symbol], undefined, daily);
+        const prepared = prepareSymbolBlock(instrument.symbol, candles, job.settings, job.strategy, job.blockStart, blockEnd, job.waveStates[instrument.symbol], undefined, daily, newHighIntrabarCandles);
         for (const bar of prepared.bars) if (bar.signal && !instrument[bar.signal.side]) bar.signal = null;
         for (const bar of prepared.bars) if (bar.envelope) {
           bar.envelope.long &&= instrument.LONG;

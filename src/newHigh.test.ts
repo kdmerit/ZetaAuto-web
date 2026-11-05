@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import { prepareSymbolBlock, runBacktest } from './engine';
-import { currentNewHighSettings, newHighPeriod, newHighRiskAmount, newHighSlMultiplier, newHighWarmup, prepareNewHigh, type PreparedNewHigh } from './newHigh';
+import { currentNewHighSettings, newHighExecutionInterval, newHighPeriod, newHighRiskAmount, newHighSlMultiplier, newHighWarmup, prepareNewHigh, type PreparedNewHigh } from './newHigh';
 import { engineVersionFor, canResumeLocalJob } from './localJobs';
 import type { PreparedBar, PreparedSymbol } from './engine';
 import type { BacktestSettings, Candle } from './types';
@@ -30,7 +30,7 @@ function history(): Candle[] {
   });
 }
 describe('new high/low causal strategy', () => {
-  it('validates configurable N and only accepts 1h/4h without changing other engines', () => {
+  it('validates configurable N and accepts only supported new-high intervals without changing other engines', () => {
     expect(newHighPeriod(settings)).toBe(20); expect(newHighPeriod({ ...settings, newHighLookback: '1000' })).toBe(1000);
     expect(newHighSlMultiplier(settings)).toBe(2); expect(newHighSlMultiplier({ ...settings, newHighSlMultiplier: '1.5' })).toBe(1.5);
     expect(newHighRiskAmount(settings)).toBe(100); expect(newHighRiskAmount({ ...settings, newHighRiskAmount: '25' })).toBe(25);
@@ -39,10 +39,14 @@ describe('new high/low causal strategy', () => {
     for (const value of ['', '1', '5', '1001', '-5', '20.5', 'NaN']) expect(() => newHighPeriod({ ...settings, newHighLookback: value })).toThrow('봉수');
     expect(() => newHighPeriod({ ...settings, interval: '15m' })).toThrow('1h');
     expect(currentNewHighSettings({ ...settings, interval: '15m', partialTpEnabled: true })).toMatchObject({ interval: '1h', partialTpEnabled: false });
+    expect(newHighPeriod({ ...settings, interval: '1d' })).toBe(20);
+    expect(currentNewHighSettings({ ...settings, interval: '1d' }).interval).toBe('1d');
+    expect(newHighExecutionInterval('1h')).toBe('15m'); expect(newHighExecutionInterval('4h')).toBe('15m'); expect(newHighExecutionInterval('1d')).toBe('15m');
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.60'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
-    expect(canResumeLocalJob({ version: '2.10.60', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(newHighWarmup({ ...settings, interval: '1d' })).toBe(60 * 86400);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.61'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
+    expect(canResumeLocalJob({ version: '2.10.61', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {
     const data = history(); data[585]!.high = 120; data[585]!.low = 50;
@@ -117,8 +121,9 @@ describe('new high/low causal strategy', () => {
     expect(trade.executions).toHaveLength(2); expect(trade.executions[0]!.kind).toBe('ENTRY');
     expect(trade.reason).toBe('NEW_HIGH_TRAILING');
     expect(trade.newHighTrailStep).toBeGreaterThanOrEqual(2);
-    expect(trade.newHighTrailLevels).toEqual(expect.arrayContaining([{ step: 1, price: expect.any(Number) }, { step: 2, price: expect.any(Number) }]));
+    expect(trade.newHighTrailLevels).toEqual(expect.arrayContaining([expect.objectContaining({ step: 1, price: expect.any(Number) }), expect.objectContaining({ step: 2, price: expect.any(Number) })]));
     expect(trade.priceLines?.some(line => line.kind === 'TRAILING_SL')).toBe(true);
+    expect(trade.priceLines?.some(line => line.kind === 'TRAILING_REACHED' && line.stage === 2)).toBe(true);
     expect(state.cash).toBeGreaterThan(999); expect(state.fees).toBeGreaterThan(0);
     expect(portfolioResult(state, { ...settings, side })).not.toHaveProperty('pyramidFillCount');
   });
@@ -151,6 +156,25 @@ describe('new high/low causal strategy', () => {
     const retrace = bar(2, 107.5, 107.5, 104, 104.5, { sum4: 400, atr: 2 });
     replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [retrace] }], settings, retrace.candle.openTime, retrace.candle.closeTime, 3600);
     expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('NEW_HIGH_TRAILING');
+  });
+  it('uses lower-timeframe candles to place a later intrabar trailing exit', () => {
+    const entry = bar(0, 101.5, 102.3, 101.4, 102);
+    const parent = bar(1, 102, 108.5, 105, 105, { sum4: 400 });
+    parent.newHighIntrabarCandles = [
+      { openTime: origin + 3600, closeTime: origin + 4500, open: 102, high: 107, low: 106.5, close: 107, volume: 100 },
+      { openTime: origin + 4500, closeTime: origin + 5400, open: 107, high: 108.5, low: 106.5, close: 108, volume: 100 },
+      { openTime: origin + 5400, closeTime: origin + 6300, open: 108, high: 108.2, low: 105, close: 105, volume: 100 },
+    ];
+    const state = simulate([entry, parent]);
+    expect(state.closed).toBe(1);
+    expect(state.trades[0]!.executions.at(-1)!.candleOpenAt).toBe(origin + 5400);
+  });
+  it('uses a lower-timeframe candle for the breakout entry fill', () => {
+    const parent = bar(0, 101, 102.5, 100.5, 102);
+    parent.newHighIntrabarCandles = [{ openTime: origin + 900, closeTime: origin + 1800, open: 101, high: 102.2, low: 100.5, close: 102.1, volume: 100 }];
+    const state = simulate([parent]);
+    expect(state.entries).toBe(1);
+    expect(state.positions.BTCUSDT!.executions[0]!.candleOpenAt).toBe(origin + 900);
   });
   it('uses the short direction for the initial SL and stepped trailing levels', () => {
     const p = { ...settings, side: 'SHORT' as const };

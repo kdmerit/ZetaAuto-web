@@ -46,6 +46,7 @@ const lineStyles: Record<PriceLine['kind'], { label: string; color: string }> = 
   TP: { label: 'TP', color: '#39C98A' },
   PARTIAL_TP: { label: '부분 TP', color: '#39C98A' },
   TRAILING_SL: { label: '트레일링 SL', color: '#C084FC' },
+  TRAILING_REACHED: { label: '도달 ATR', color: '#F2C66D' },
   EXIT: { label: '청산가', color: '#AE7BFA' },
 };
 
@@ -387,7 +388,7 @@ function ChartSvg({
         {maDefinitions.filter((definition) => visibleMas[definition.key]).map((definition) => (
           <polyline key={definition.key} points={pointString(definition.key)} fill="none" stroke={definition.color} strokeWidth="2" opacity=".95" />
         ))}
-        {chart.priceLines.filter(priceLine => priceLine.kind !== 'TRAILING_SL').map((priceLine) => {
+        {chart.priceLines.filter(priceLine => priceLine.kind !== 'TRAILING_SL' && priceLine.kind !== 'TRAILING_REACHED').map((priceLine) => {
           const y = yFor(priceLine.price);
           if (!Number.isFinite(y) || y < 0 || y > plotHeight) return null;
           const style = priceLine.kind === 'EXIT' && chart.exitReason === 'SL' ? lineStyles.SL : lineStyles[priceLine.kind];
@@ -399,6 +400,13 @@ function ChartSvg({
           const color = 'hsl(' + (260 + Math.min(priceLine.stage ?? 1, 8) * 12) + ' 80% 72%)';
           return <line key={'solid-trail-' + (priceLine.stage ?? '') + '-' + priceLine.price} x1="0" x2={width} y1={y} y2={y} stroke={color} strokeWidth="1.8">
             <title>{'트레일링 SL +' + (priceLine.stage ?? 0) + 'ATR · ' + formatPrice(priceLine.price)}</title>
+          </line>;
+        })}
+        {chart.priceLines.filter(priceLine => priceLine.kind === 'TRAILING_REACHED').map((priceLine) => {
+          const y = yFor(priceLine.price);
+          if (!Number.isFinite(y) || y < 0 || y > plotHeight) return null;
+          return <line key={'reached-atr-' + (priceLine.stage ?? '') + '-' + priceLine.price} x1="0" x2={width} y1={y} y2={y} stroke="#F2C66D" strokeWidth="1.4" strokeDasharray="2 3">
+            <title>{'도달 +' + (priceLine.stage ?? 0) + 'ATR · ' + formatPrice(priceLine.price)}</title>
           </line>;
         })}
         {drawnCandles.map((candle, offset) => {

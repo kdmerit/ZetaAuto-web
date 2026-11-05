@@ -35,7 +35,7 @@ interface Holding {
   centerStopMoved?: boolean;
   pullbackMa60Exit?: number;
   newHighTrailStep?: number;
-  newHighTrailLevels?: { step: number; price: number }[];
+  newHighTrailLevels?: { step: number; price: number; reachedPrice?: number }[];
 }
 
 export interface PortfolioState {
@@ -88,6 +88,7 @@ export function portfolioEquity(state: PortfolioState): number {
 
 function priceLines(p: Holding): PriceLine[] {
   if (p.signal.strategy === 'NEW_HIGH') return [{ kind: 'ENTRY', price: p.first },
+    ...(p.newHighTrailLevels ?? []).flatMap(level => level.reachedPrice === undefined ? [] : [{ kind: 'TRAILING_REACHED' as const, price: level.reachedPrice, stage: level.step }]),
     ...(p.newHighTrailLevels ?? []).map(level => ({ kind: 'TRAILING_SL' as const, price: level.price, stage: level.step })),
     { kind: 'SL', price: p.stop },
     ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
@@ -536,7 +537,7 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
 }
 
 interface NewHighPath { state: PortfolioState; spent: number }
-/** Causal price-dependent MA5/10/20 with intrabar entry and post-entry candle confirmation. */
+/** Causal price-dependent MA5/10/20 with optional 15m execution candles and post-entry candle confirmation. */
 function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, holding: Holding | undefined, lowFirst: boolean): NewHighPath {
   const state = initialPortfolio(available); const definition = bar.newHigh!; const candle = bar.candle;
   if (holding) state.positions[symbol] = structuredClone(holding);
@@ -562,12 +563,14 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
       const lockedAtr = reached === 1 ? 0.2 : reached - 1;
       const nextStop = p.first + direction * lockedAtr * atr;
       if (direction * (nextStop - p.stop) > 0) p.stop = nextStop;
-      if (!p.newHighTrailLevels.some(level => level.step === reached)) p.newHighTrailLevels.push({ step: reached, price: nextStop });
+      if (!p.newHighTrailLevels.some(level => level.step === reached)) {
+        p.newHighTrailLevels.push({ step: reached, price: nextStop, reachedPrice: p.first + direction * reached * atr });
+      }
     }
     p.newHighTrailStep = step;
   };
   const stopReason = (p: Holding): string => (p.newHighTrailStep ?? 0) > 0 ? 'NEW_HIGH_TRAILING' : 'SL';
-  const attempt = (side: 'LONG' | 'SHORT', price: number): void => {
+  const attempt = (side: 'LONG' | 'SHORT', price: number, executionCandle: Candle = candle): void => {
     attempted = true;
     const direction = side === 'LONG' ? 1 : -1;
     if (direction * (price - candle.open) < 0) return;
@@ -582,7 +585,7 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     if (!(stop > 0) || (side === 'LONG' ? stop >= price : stop <= price)) return;
     const target = fill + direction * 2 * definition.atr!;
     enter(state, symbol, { strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime),
-      entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', newHighAtr: definition.atr!, ...(riskAmount !== undefined ? { riskAmount } : {}) }, candle, settings);
+      entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', newHighAtr: definition.atr!, ...(riskAmount !== undefined ? { riskAmount } : {}) }, executionCandle, settings);
     const p = state.positions[symbol];
     if (p) { p.newHighTrailStep = 0; enteredThisCandle = true; spent += p.margin + p.margin * leverage * feeRate; }
   };
@@ -593,30 +596,50 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     advanceTrail(atOpen, candle.open);
     const long = atOpen.signal.side === 'LONG';
     if (long ? candle.open <= atOpen.stop : candle.open >= atOpen.stop) close(state, atOpen, candle.open, atOpen.qty, stopReason(atOpen), candle, true);
-  } else if (eligible('LONG') && candle.open >= longEntry) attempt('LONG', candle.open);
-  else if (eligible('SHORT') && candle.open <= shortEntry) attempt('SHORT', candle.open);
-  const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
-  for (let i = 1; i < path.length; i += 1) {
-    let before = path[i - 1]!; const after = path[i]!;
-    for (let count = 0; count < 3; count += 1) {
-      const p = state.positions[symbol];
-      const events: { price: number; kind: 'SL' | 'LONG' | 'SHORT' }[] = [];
-      if (p && !enteredThisCandle) {
-        advanceTrail(p, before); advanceTrail(p, after);
-        const long = p.signal.side === 'LONG';
-        if (long ? before >= p.stop && after <= p.stop : before <= p.stop && after >= p.stop) events.push({ price: p.stop, kind: 'SL' });
-      } else if (!attempted) {
-        if (eligible('LONG') && before < longEntry && after >= longEntry) events.push({ price: longEntry, kind: 'LONG' });
-        if (eligible('SHORT') && before > shortEntry && after <= shortEntry) events.push({ price: shortEntry, kind: 'SHORT' });
-      }
-      events.sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
-      const event = events[0]; if (!event) break;
-      if (event.kind === 'SL') { close(state, p!, event.price, p!.qty, stopReason(p!), candle); break; }
-      const direction = event.kind === 'LONG' ? 1 : -1;
-      attempt(event.kind, event.price + direction * tolerance(event.price));
-      before = event.price;
-    }
   }
+  const processExecutionCandle = (executionCandle: Candle): void => {
+    const openingPosition = state.positions[symbol];
+    if (openingPosition && !enteredThisCandle) {
+      advanceTrail(openingPosition, executionCandle.open);
+      const long = openingPosition.signal.side === 'LONG';
+      if (long ? executionCandle.open <= openingPosition.stop : executionCandle.open >= openingPosition.stop) {
+        close(state, openingPosition, executionCandle.open, openingPosition.qty, stopReason(openingPosition), executionCandle, true);
+        return;
+      }
+    } else if (!openingPosition && !attempted) {
+      if (eligible('LONG') && executionCandle.open >= longEntry) attempt('LONG', executionCandle.open, executionCandle);
+      else if (eligible('SHORT') && executionCandle.open <= shortEntry) attempt('SHORT', executionCandle.open, executionCandle);
+    }
+    const path = lowFirst
+      ? [executionCandle.open, executionCandle.low, executionCandle.high, executionCandle.close]
+      : [executionCandle.open, executionCandle.high, executionCandle.low, executionCandle.close];
+    for (let i = 1; i < path.length; i += 1) {
+      let before = path[i - 1]!; const after = path[i]!;
+      for (let count = 0; count < 3; count += 1) {
+        const p = state.positions[symbol];
+        const events: { price: number; kind: 'SL' | 'LONG' | 'SHORT' }[] = [];
+        if (p && !enteredThisCandle) {
+          advanceTrail(p, before); advanceTrail(p, after);
+          const long = p.signal.side === 'LONG';
+          if (long ? before >= p.stop && after <= p.stop : before <= p.stop && after >= p.stop) events.push({ price: p.stop, kind: 'SL' });
+        } else if (!p && !attempted) {
+          if (eligible('LONG') && before < longEntry && after >= longEntry) events.push({ price: longEntry, kind: 'LONG' });
+          if (eligible('SHORT') && before > shortEntry && after <= shortEntry) events.push({ price: shortEntry, kind: 'SHORT' });
+        }
+        events.sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
+        const event = events[0]; if (!event) break;
+        if (event.kind === 'SL') {
+          close(state, p!, event.price, p!.qty, stopReason(p!), executionCandle);
+          return;
+        }
+        const direction = event.kind === 'LONG' ? 1 : -1;
+        attempt(event.kind, event.price + direction * tolerance(event.price), executionCandle);
+        before = event.price;
+      }
+    }
+  };
+  const executionCandles = bar.newHighIntrabarCandles?.length ? bar.newHighIntrabarCandles : [candle];
+  for (const executionCandle of executionCandles) processExecutionCandle(executionCandle);
   const remaining = state.positions[symbol];
   if (remaining) remaining.mark = candle.close;
   return { state, spent };

@@ -110,14 +110,24 @@ export async function chartForLocalTrade(
   const rows = await ensureCandles(instrument, settings.interval, start - warmup, end);
   const candles = (trade.signal.strategy === 'NEW_HIGH' || trade.signal.strategy === 'VOLATILITY' ? enrichMarketCandles(rows, settings.interval) : enrichCandles(rows)).filter(candle => candle.openTime >= start);
   if (!candles.length) throw new Error('차트에 표시할 캔들이 없습니다.');
-  const indexFor = (time: number): number => candles.findIndex(candle => candle.openTime === time);
+  const indexFor = (time: number): number => {
+    const exact = candles.findIndex(candle => candle.openTime === time);
+    return exact >= 0 ? exact : candles.findIndex(candle => candle.openTime <= time && time < candle.closeTime);
+  };
   const executions: ChartData['markers'] = trade.executions.map((execution, index) => ({
     id: `${trade.tradeId}:${index}`, orderId: `${trade.tradeId}:${index}`, kind: execution.kind,
     label: execution.kind === 'CLOSE' ? 'C' : execution.kind === 'PARTIAL_TP' ? trade.side === 'LONG' ? 'S' : 'B' : trade.side === 'LONG' ? 'B' : 'S',
     openTime: execution.candleOpenAt, price: execution.price, quantity: execution.quantity,
     candleIndex: indexFor(execution.candleOpenAt),
   }));
-  const fallback = buildLocalChart({ ...result, candles: rows }, { ...trade, entryIndex: rows.findIndex(candle => candle.openTime === first), signalIndex: rows.findIndex(candle => candle.openTime === first) }, settings);
+  const rowIndexFor = (time: number): number => {
+    const exact = rows.findIndex(candle => candle.openTime === time);
+    return exact >= 0 ? exact : rows.findIndex(candle => candle.openTime <= time && time < candle.closeTime);
+  };
+  const fallback = buildLocalChart({ ...result, candles: rows }, { ...trade,
+    entryIndex: rowIndexFor(first), signalIndex: rowIndexFor(first),
+    exitIndex: rowIndexFor(trade.executions.at(-1)?.candleOpenAt ?? trade.exitAt),
+  }, settings);
   return {
     symbol, interval: settings.interval, side: trade.side, referenceAt: new Date(first * 1000).toISOString(),
     referenceIndex: indexFor(first) < 0 ? null : indexFor(first), candles,
@@ -129,7 +139,7 @@ export async function chartForLocalTrade(
       return [{ ...wave, startIndex, endIndex }];
     }),
     markers: executions.filter(execution => execution.candleIndex >= 0), executions,
-    priceLines: trade.priceLines ?? fallback.priceLines,
+    priceLines: trade.signal.strategy === 'NEW_HIGH' ? fallback.priceLines : trade.priceLines ?? fallback.priceLines,
     ...(fallback.envelope ? { envelope: projectEnvelopeBands(rows, candles, fallback.envelope) } : {}),
   };
 }
