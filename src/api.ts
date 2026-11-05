@@ -97,6 +97,16 @@ async function request<T>(
 }
 
 function normalizeServerTrade(value: Record<string, unknown>): BacktestTrade {
+  const betAmountUsdt = value.betAmountUsdt == null ? undefined : Number(value.betAmountUsdt);
+  const newHighTrailStep = value.newHighTrailStep == null ? undefined : Number(value.newHighTrailStep);
+  const newHighTrailLevels = Array.isArray(value.newHighTrailLevels)
+    ? value.newHighTrailLevels.flatMap((level) => {
+      if (!level || typeof level !== 'object') return [];
+      const row = level as Record<string, unknown>;
+      const step = Number(row.step); const price = Number(row.price);
+      return Number.isFinite(step) && Number.isFinite(price) ? [{ step, price }] : [];
+    })
+    : undefined;
   return {
     tradeId: String(value.tradeId ?? `${value.symbol}-${value.exitAt}`),
     symbol: String(value.symbol),
@@ -108,6 +118,9 @@ function normalizeServerTrade(value: Record<string, unknown>): BacktestTrade {
     entryPrice: Number(value.entryPrice),
     exitPrice: Number(value.exitPrice),
     netProfitUsdt: Number(value.netProfitUsdt),
+    ...(Number.isFinite(betAmountUsdt) ? { betAmountUsdt } : {}),
+    ...(Number.isFinite(newHighTrailStep) ? { newHighTrailStep } : {}),
+    ...(newHighTrailLevels ? { newHighTrailLevels } : {}),
     signalIndex: -1,
     entryIndex: -1,
     exitIndex: -1,
@@ -315,7 +328,7 @@ function normalizeChart(value: ChartData): ChartData {
       low: Number(wave.low),
       high: Number(wave.high),
     })),
-    priceLines: value.priceLines.map((line) => ({ ...line, price: Number(line.price) })),
+    priceLines: value.priceLines.map((line) => ({ ...line, price: Number(line.price), ...(line.stage == null ? {} : { stage: Number(line.stage) }) })),
     referenceAt: String(value.referenceAt),
   };
 }

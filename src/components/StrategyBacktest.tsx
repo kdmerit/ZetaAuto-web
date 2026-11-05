@@ -89,7 +89,7 @@ export function defaultSettings(): BacktestSettings {
     newHighLookback: '20',
     newHighSlMultiplier: '2',
     newHighMa60Enabled: false,
-    newHighEntryAtrLimit: '0.5',
+    newHighEntryAtrLimit: '1',
     newHighSizingMode: 'BET',
     newHighRiskAmount: '100',
   };
@@ -146,7 +146,6 @@ const reasonLabels: Record<string, string> = {
   PULLBACK_MA_EXIT: '눌림목 정배열 이탈 청산',
   ENVELOPE_CENTER: '엔벨로프 중심선 청산',
   ENVELOPE_OPPOSITE: '엔벨로프 반대 밴드 청산',
-  NEW_HIGH_CONDITIONAL_EXIT: '2ATR 도달·MA5/MA20 조건 청산',
   NEW_HIGH_TRAILING: '단계형 트레일링 청산',
   NEW_HIGH_BREAKOUT_FAIL: '돌파봉 종가 확인 실패',
   NEW_HIGH_CANDLE_REJECTION: '돌파봉 긴 윗꼬리·아랫꼬리 청산',
@@ -787,23 +786,26 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
 
           <div className="field-grid three">
             <label className="field-label">가상 초기자금<input inputMode="decimal" value={settings.initialCapitalUsdt} onChange={(event) => update('initialCapitalUsdt', event.target.value)} /></label>
-            <label className="field-label">고정 베팅액<input inputMode="decimal" disabled={strategy === 'NEW_HIGH' && settings.newHighSizingMode === 'RISK'} value={settings.betAmountUsdt} onChange={(event) => update('betAmountUsdt', event.target.value)} /></label>
+            {strategy !== 'NEW_HIGH' ? <label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={(event) => update('betAmountUsdt', event.target.value)} /></label> : null}
             <label className="field-label">레버리지<input inputMode="decimal" value={settings.leverage} onChange={(event) => update('leverage', event.target.value)} /><small>1~{leverageMaximum}배</small></label>
           </div>
 
           {strategy === 'NEW_HIGH' ? <>
             <label className="field-label">신고가 기준 봉수<input type="number" inputMode="numeric" min="6" max="1000" step="1" value={settings.newHighLookback ?? '20'} onChange={event => update('newHighLookback', event.target.value)} /><small>6~1000 · 기본 20 · 현재 봉 제외 · 최근 5봉에 고가/저가가 있으면 제외</small></label>
             <label className="field-label">SL 배수 (ATR)<input type="number" inputMode="decimal" min="0.1" max="10" step="0.1" value={settings.newHighSlMultiplier ?? '2'} onChange={event => update('newHighSlMultiplier', event.target.value)} /><small>0.1~10.0 · 기본 2.0 · 롱 매수가−ATR×배수 / 숏 매수가+ATR×배수</small></label>
-            <label className="field-label">돌파 허용범위 (ATR)<input type="number" inputMode="decimal" min="0.3" max="0.5" step="0.1" value={settings.newHighEntryAtrLimit ?? '0.5'} onChange={event => update('newHighEntryAtrLimit', event.target.value)} /><small>0.3~0.5 · 기본 0.5 · 돌파선에서 이 범위 안일 때만 진입</small></label>
+            <label className="field-label">돌파 허용 상한 (ATR)<input type="number" inputMode="decimal" min="0.5" max="1" step="0.1" value={settings.newHighEntryAtrLimit ?? '1'} onChange={event => update('newHighEntryAtrLimit', event.target.value)} /><small>0.5~1.0 · 기본 1.0 · 돌파선 +0.5ATR 이상, 입력값 이하에서만 진입</small></label>
             <div className="sizing-choice" role="radiogroup" aria-label="신고가 포지션 금액 기준">
               <span className="sizing-choice-label">포지션 금액 기준</span>
               <label className={`radio-option${settings.newHighSizingMode !== 'RISK' ? ' selected' : ''}`}><input type="radio" name="newHighSizingMode" checked={settings.newHighSizingMode !== 'RISK'} onChange={() => update('newHighSizingMode', 'BET')} /><span>고정 베팅액</span></label>
               <label className={`radio-option${settings.newHighSizingMode === 'RISK' ? ' selected' : ''}`}><input type="radio" name="newHighSizingMode" checked={settings.newHighSizingMode === 'RISK'} onChange={() => update('newHighSizingMode', 'RISK')} /><span>고정 손실액</span></label>
             </div>
-            <label className="field-label">고정 손실액<input type="number" inputMode="decimal" min="0.01" step="0.01" disabled={settings.newHighSizingMode !== 'RISK'} value={settings.newHighRiskAmount ?? '100'} onChange={event => update('newHighRiskAmount', event.target.value)} /><small>고정 손실액 선택 시 활성화 · 초기 SL·수수료·슬리피지 기준 1회 허용 손실</small></label>
+            <div className="field-grid two sizing-inputs">
+              <label className="field-label">고정 베팅액<input inputMode="decimal" disabled={settings.newHighSizingMode === 'RISK'} value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /><small>고정 베팅액 선택 시 활성화</small></label>
+              <label className="field-label">고정 손실액<input type="number" inputMode="decimal" min="0.01" step="0.01" disabled={settings.newHighSizingMode !== 'RISK'} value={settings.newHighRiskAmount ?? '100'} onChange={event => update('newHighRiskAmount', event.target.value)} /><small>고정 손실액 선택 시 활성화 · 초기 SL·수수료·슬리피지 기준 1회 허용 손실</small></label>
+            </div>
             <label className="checkbox-row"><input type="checkbox" checked={settings.newHighMa60Enabled === true} onChange={event => update('newHighMa60Enabled', event.target.checked)} /><span>현재가 &gt; MA60 (롱) / 현재가 &lt; MA60 (숏)일 때만 매수</span></label>
-            <p className="notice small">돌파 즉시 1회 진입 · 돌파선 ± 입력한 0.3~0.5ATR 이내만 매수 · 돌파봉 종가·양봉/음봉 확인 · 단계형 트레일링 SL 적용</p>
-            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 한 번만 진입합니다. 롱은 양봉 종가가 이전 고가 위, 숏은 음봉 종가가 이전 저가 아래여야 하며, 진입 캔들의 반대쪽 꼬리·몸통 비율이 70% 이상이면 같은 봉 종가에 청산합니다. +1ATR부터 단계형 트레일링을 청산 시까지 계속 적용하고, 2ATR 수익구간에서는 롱 MA5&lt;MA20·숏 MA5&gt;MA20 조건도 적용합니다.</p>
+            <p className="notice small">종가 확정 후 1회 진입 · 돌파선 +0.5~1.0ATR 범위에서만 매수 · 양봉/음봉·꼬리 확인 · 단계형 트레일링 SL 적용</p>
+            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 한 번만 진입합니다. 롱은 양봉 종가가 이전 고가 위, 숏은 음봉 종가가 이전 저가 아래여야 하며, 진입 캔들의 반대쪽 꼬리·몸통 비율이 70% 이상이면 진입하지 않습니다. +1ATR부터 단계형 트레일링을 청산 시까지 계속 적용합니다. 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
           </> : strategy === 'PULLBACK' ? (
             <>
               <label className="field-label">엔벨로프 SMA<input type="number" inputMode="numeric" min="1" max="120" step="1" value={settings.envelopeMaPeriod ?? '20'} onChange={event => update('envelopeMaPeriod', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>1~120 · 기본 20</small></label>
@@ -909,6 +911,9 @@ function HistoryList({
 }
 
 function ResultCard({ result, onOpenTrade }: { result: BacktestResult; onOpenTrade: (trade: BacktestTrade) => void }) {
+  const reasonLabel = (trade: BacktestTrade): string => trade.reason === 'NEW_HIGH_TRAILING' && trade.newHighTrailStep
+    ? `단계형 트레일링 청산 (+${trade.newHighTrailStep}ATR 단계)`
+    : reasonLabels[trade.reason] ?? trade.reason;
   return (
     <section className="surface-card result-card">
       <div className="result-heading">
@@ -930,9 +935,10 @@ function ResultCard({ result, onOpenTrade }: { result: BacktestResult; onOpenTra
           <h3>최근 청산 내역 (최대 100건)</h3>
           {[...result.recentTrades].reverse().slice(0, 100).map((trade) => (
             <button className="trade-row" type="button" key={trade.tradeId} onClick={() => onOpenTrade(trade)}>
-              <strong>{trade.symbol} · {trade.side === 'LONG' ? '롱' : '숏'} · {reasonLabels[trade.reason] ?? trade.reason}</strong>
+              <strong>{trade.symbol} · {trade.side === 'LONG' ? '롱' : '숏'} · {reasonLabel(trade)}</strong>
               <span>{new Date(trade.entryAt * 1000).toLocaleString('ko-KR')} {trade.executions.find(fill => fill.kind === 'ENTRY')?.timing === 'INTRABAR' ? '진입봉 (봉 중간 체결 추정)' : '진입'}</span>
               <span>{new Date(trade.exitAt * 1000).toLocaleString('ko-KR')} {trade.executions.at(-1)?.timing === 'INTRABAR' ? '청산봉 (봉 중간 체결 추정)' : '청산'}</span>
+              <span>베팅 금액 {money(trade.betAmountUsdt ?? result.betAmountUsdt)} USDT{trade.newHighTrailStep ? ` · 도달 +${trade.newHighTrailStep}ATR` : ''}</span>
               <em className={trade.netProfitUsdt >= 0 ? 'positive' : 'negative'}>청산 손익 {money(trade.netProfitUsdt)} USDT · 체결 차트 보기 ›</em>
             </button>
           ))}

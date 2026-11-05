@@ -15,6 +15,7 @@ interface Holding {
   opened: number;
   first: number;
   entry: number;
+  betAmountUsdt: number;
   qty: number;
   margin: number;
   reserved: number;
@@ -34,6 +35,7 @@ interface Holding {
   centerStopMoved?: boolean;
   pullbackMa60Exit?: number;
   newHighTrailStep?: number;
+  newHighTrailLevels?: { step: number; price: number }[];
 }
 
 export interface PortfolioState {
@@ -85,7 +87,9 @@ export function portfolioEquity(state: PortfolioState): number {
 }
 
 function priceLines(p: Holding): PriceLine[] {
-  if (p.signal.strategy === 'NEW_HIGH') return [{ kind: 'ENTRY', price: p.first }, { kind: 'SL', price: p.stop },
+  if (p.signal.strategy === 'NEW_HIGH') return [{ kind: 'ENTRY', price: p.first },
+    ...(p.newHighTrailLevels ?? []).map(level => ({ kind: 'TRAILING_SL' as const, price: level.price, stage: level.step })),
+    { kind: 'SL', price: p.stop },
     ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
   if (p.signal.strategy === 'ENVELOPE') return [{ kind: 'ENTRY', price: p.first }, { kind: 'SL', price: p.stop },
     ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
@@ -124,7 +128,7 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_CONDITIONAL_EXIT', 'NEW_HIGH_TRAILING', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT'].includes(reason);
+  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_TRAILING', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT'].includes(reason);
   const fill = market ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
   const qty = Math.min(p.qty, quantity);
   const profit = gross(p, fill, qty);
@@ -143,7 +147,8 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
     tradeId: `local:${p.symbol}:${p.opened}:${candle.openTime}:${p.executions.length}`,
     symbol: p.symbol, side: p.signal.side, entryAt: p.opened,
     exitAt: p.executions.at(-1)!.at,
-    entryPrice: p.entry, exitPrice: fill, quantity: qty, reason, netProfitUsdt: p.signal.strategy === 'NEW_HIGH' ? p.net : profit - fee,
+    entryPrice: p.entry, exitPrice: fill, quantity: qty, reason, netProfitUsdt: p.signal.strategy === 'NEW_HIGH' ? p.net : profit - fee, betAmountUsdt: p.betAmountUsdt,
+    ...(p.signal.strategy === 'NEW_HIGH' ? { newHighTrailStep: p.newHighTrailStep ?? 0, newHighTrailLevels: structuredClone(p.newHighTrailLevels ?? []) } : {}),
     signalIndex: p.signal.index, entryIndex: p.signal.index, exitIndex: -1,
     signal: { ...p.signal, target: p.target, partial: p.partial ?? undefined, second: p.secondFill ?? p.second,
       initialStop: p.signal.stop, activeStop: p.stop, averageEntry: p.entry },
@@ -161,7 +166,7 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   }
 }
 
-function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Candle, settings: BacktestSettings): void {
+function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Candle, settings: BacktestSettings, confirmedClose = false): void {
   if (state.positions[symbol] || settings.side !== 'BOTH' && settings.side !== signal.side) return;
   state.signals += 1;
   const leverage = Number(settings.leverage);
@@ -188,8 +193,9 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     ? entry - direction * signal.volatilityAtr * 2
     : signal.strategy === 'ENVELOPE' ? entry * (1 - direction * signal.envelopeDeviationPercent! / 100) : signal.stop;
   const effectiveSignal = activeStop === signal.stop ? signal : { ...signal, stop: activeStop };
+  const intrabarEntry = signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH';
   const p: Holding = {
-    symbol, signal: effectiveSignal, opened: signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH' ? candle.openTime : candle.closeTime, first: entry, entry, qty: riskSizedQuantity ?? margin * leverage / entry,
+    symbol, signal: effectiveSignal, opened: intrabarEntry && !confirmedClose ? candle.openTime : candle.closeTime, first: entry, entry, betAmountUsdt: bet, qty: riskSizedQuantity ?? margin * leverage / entry,
     margin, reserved: bet - margin, reservedFee: (bet - margin) * leverage * feeRate,
     pending: split, second: split ? (entry + signal.stop) / 2 : entry,
     ...(signal.strategy === 'ENVELOPE' && settings.envelopeRisk?.symbol === symbol ? { risk: settings.envelopeRisk } : {}),
@@ -207,9 +213,8 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   state.realized -= fee;
   state.fees += fee;
   state.entries += 1;
-  const entryAtOpen = signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5'
-    || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH';
-  recordFill(p, 'ENTRY', entry, p.qty, candle, entryAtOpen);
+  const entryAtOpen = intrabarEntry && !confirmedClose;
+  recordFill(p, 'ENTRY', entry, p.qty, candle, entryAtOpen, confirmedClose);
   if (signal.exitMode === 'BAR_CLOSE') close(state, p, candle.close, p.qty, 'SESSION_CLOSE', candle);
 }
 
@@ -535,12 +540,11 @@ interface NewHighPath { state: PortfolioState; spent: number }
 function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, holding: Holding | undefined, lowFirst: boolean): NewHighPath {
   const state = initialPortfolio(available); const definition = bar.newHigh!; const candle = bar.candle;
   if (holding) state.positions[symbol] = structuredClone(holding);
-  let spent = 0; let attempted = holding !== undefined; let enteredThisCandle = false;
+  let spent = 0;
   const leverage = Number(settings.leverage);
   const riskAmount = settings.newHighSizingMode === 'RISK' ? newHighRiskAmount(settings) : undefined;
   const ma10 = (price: number) => (definition.sum9 + price) / 10;
   const ma20 = (price: number) => (definition.sum19 + price) / 20;
-  const ma5 = (price: number) => (definition.sum4 + price) / 5;
   const ma60 = (price: number): number | null => definition.sum59 !== undefined && Number.isFinite(definition.sum59)
     ? (definition.sum59 + price) / 60 : null;
   const slMultiplier = newHighSlMultiplier(settings);
@@ -548,105 +552,80 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
   const tolerance = (...values: number[]) => Math.max(Number.MIN_VALUE, ...values.map(value => Math.abs(value) * Number.EPSILON * 16));
   const advanceTrail = (p: Holding, price: number): void => {
     const atr = p.signal.newHighAtr ?? Math.abs(p.target - p.first) / 2;
-    if (atr === null || !Number.isFinite(atr) || atr <= 0) return;
+    if (!Number.isFinite(atr) || atr <= 0) return;
     const direction = p.signal.side === 'LONG' ? 1 : -1;
     const progress = direction * (price - p.first) / atr;
     const step = progress >= 1 ? Math.floor(progress + 1e-10) : 0;
     const currentStep = p.newHighTrailStep ?? 0;
     if (step <= currentStep) return;
-    const lockedAtr = step === 1 ? 0.2 : step - 1;
-    const nextStop = p.first + direction * lockedAtr * atr;
-    if (direction * (nextStop - p.stop) > 0) p.stop = nextStop;
+    p.newHighTrailLevels ??= [];
+    for (let reached = currentStep + 1; reached <= step; reached += 1) {
+      const lockedAtr = reached === 1 ? 0.2 : reached - 1;
+      const nextStop = p.first + direction * lockedAtr * atr;
+      if (direction * (nextStop - p.stop) > 0) p.stop = nextStop;
+      if (!p.newHighTrailLevels.some(level => level.step === reached)) p.newHighTrailLevels.push({ step: reached, price: nextStop });
+    }
     p.newHighTrailStep = step;
   };
   const stopReason = (p: Holding): string => (p.newHighTrailStep ?? 0) > 0 ? 'NEW_HIGH_TRAILING' : 'SL';
-  const conditionalExitPrice = (p: Holding, before: number, after: number): number | null => {
-    const long = p.signal.side === 'LONG';
-    const maCross = (definition.sum19 - 4 * definition.sum4) / 3;
-    const condition = (price: number) => long
-      ? price >= p.target && ma5(price) < ma20(price)
-      : price <= p.target && ma5(price) > ma20(price);
-    if (!Number.isFinite(maCross) || before === after) return condition(before) ? before : null;
-    const change = after - before;
-    const points = [0, 1];
-    for (const boundary of [p.target, maCross]) {
-      const fraction = (boundary - before) / change;
-      if (fraction > 0 && fraction < 1) points.push(fraction);
-    }
-    points.sort((a, b) => a - b);
-    for (let index = 0; index < points.length - 1; index += 1) {
-      const start = points[index]!; const end = points[index + 1]!;
-      if (condition(before + change * ((start + end) / 2))) return before + change * start;
-    }
-    return condition(after) ? after : null;
+  const candleRange = candle.high - candle.low;
+  const candleQualifies = (side: 'LONG' | 'SHORT'): boolean => {
+    const long = side === 'LONG';
+    const directionConfirmed = long ? candle.close > candle.open && candle.close > definition.high : candle.close < candle.open && candle.close < definition.low;
+    if (!directionConfirmed) return false;
+    const rejection = candleRange > 0
+      ? long
+        ? (Math.max(0, candle.high - Math.max(candle.open, candle.close)) + Math.max(0, candle.open - candle.close)) / candleRange
+        : (Math.max(0, Math.min(candle.open, candle.close) - candle.low) + Math.max(0, candle.close - candle.open)) / candleRange
+      : 0;
+    return rejection < 0.7;
   };
   const attempt = (side: 'LONG' | 'SHORT', price: number): void => {
-    attempted = true;
     const direction = side === 'LONG' ? 1 : -1;
-    if (direction * (price - candle.open) < 0) return;
+    if (!candleQualifies(side)) return;
     const fill = price * (1 + direction * slippage);
     const boundary = side === 'LONG' ? definition.high : definition.low;
     const currentMa60 = ma60(price);
     if (direction * (ma10(price) - ma20(price)) <= 0
       || settings.newHighMa60Enabled === true && (currentMa60 === null || direction * (price - currentMa60) <= 0)
+      || direction * (fill - boundary) < 0.5 * definition.atr! - tolerance(fill, boundary, definition.atr!)
       || direction * (fill - boundary) > entryAtrLimit * definition.atr! + tolerance(fill, boundary, definition.atr!)) return;
     const stop = fill - direction * slMultiplier * definition.atr!;
     if (!(stop > 0) || (side === 'LONG' ? stop >= price : stop <= price)) return;
     const target = fill + direction * 2 * definition.atr!;
     enter(state, symbol, { strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime),
-      entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', newHighAtr: definition.atr!, ...(riskAmount !== undefined ? { riskAmount } : {}) }, candle, settings);
+      entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', newHighAtr: definition.atr!, ...(riskAmount !== undefined ? { riskAmount } : {}) }, candle, settings, true);
     const p = state.positions[symbol];
-    if (p) { p.newHighTrailStep = 0; enteredThisCandle = true; spent += p.margin + p.margin * leverage * feeRate; }
+    if (p) { p.newHighTrailStep = 0; spent += p.margin + p.margin * leverage * feeRate; }
   };
   const eligible = (side: 'LONG' | 'SHORT'): boolean => definition.atr !== null && definition.atr > 0 && (side === 'LONG' ? definition.long : definition.short);
-  const crossPrice = definition.sum19 - 2 * definition.sum9;
   const longEntry = definition.high; const shortEntry = definition.low;
   const atOpen = state.positions[symbol];
   if (atOpen) {
     advanceTrail(atOpen, candle.open);
     const long = atOpen.signal.side === 'LONG';
     if (long ? candle.open <= atOpen.stop : candle.open >= atOpen.stop) close(state, atOpen, candle.open, atOpen.qty, stopReason(atOpen), candle, true);
-    else if (conditionalExitPrice(atOpen, candle.open, candle.open) !== null) close(state, atOpen, candle.open, atOpen.qty, 'NEW_HIGH_CONDITIONAL_EXIT', candle, true);
-  } else if (eligible('LONG') && candle.open > longEntry) attempt('LONG', candle.open);
-  else if (eligible('SHORT') && candle.open < shortEntry) attempt('SHORT', candle.open);
+  }
   const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
   for (let i = 1; i < path.length; i += 1) {
     let before = path[i - 1]!; const after = path[i]!;
     for (let count = 0; count < 3; count += 1) {
       const p = state.positions[symbol];
-      const events: { price: number; kind: 'SL' | 'EXIT' | 'LONG' | 'SHORT' }[] = [];
+      const events: { price: number; kind: 'SL' }[] = [];
       if (p) {
         advanceTrail(p, before); advanceTrail(p, after);
         const long = p.signal.side === 'LONG';
         if (long ? before >= p.stop && after <= p.stop : before <= p.stop && after >= p.stop) events.push({ price: p.stop, kind: 'SL' });
-        const exit = conditionalExitPrice(p, before, after);
-        if (exit !== null) events.push({ price: exit, kind: 'EXIT' });
-      } else if (!attempted) {
-        if (eligible('LONG') && before <= longEntry && after > longEntry) events.push({ price: longEntry, kind: 'LONG' });
-        if (eligible('SHORT') && before >= shortEntry && after < shortEntry) events.push({ price: shortEntry, kind: 'SHORT' });
       }
       events.sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
       const event = events[0]; if (!event) break;
-      if (event.kind === 'SL' || event.kind === 'EXIT') { close(state, p!, event.price, p!.qty, event.kind === 'SL' ? stopReason(p!) : 'NEW_HIGH_CONDITIONAL_EXIT', candle); break; }
-      if (event.kind === 'LONG' || event.kind === 'SHORT') {
-        const direction = event.kind === 'LONG' ? 1 : -1;
-        attempt(event.kind, event.price === crossPrice ? event.price + direction * tolerance(event.price) : event.price);
-      }
+      if (event.kind === 'SL') { close(state, p!, event.price, p!.qty, stopReason(p!), candle); break; }
       before = event.price;
     }
   }
-  const newEntry = enteredThisCandle ? state.positions[symbol] : undefined;
-  if (newEntry) {
-    const long = newEntry.signal.side === 'LONG';
-    const range = candle.high - candle.low;
-    const directionConfirmed = long ? candle.close > candle.open && candle.close > longEntry : candle.close < candle.open && candle.close < shortEntry;
-    const wick = range > 0
-      ? long
-        ? (Math.max(0, candle.high - Math.max(candle.open, candle.close)) + Math.max(0, candle.open - candle.close)) / range
-        : (Math.max(0, Math.min(candle.open, candle.close) - candle.low) + Math.max(0, candle.close - candle.open)) / range
-      : 0;
-    if (!directionConfirmed) close(state, newEntry, candle.close, newEntry.qty, 'NEW_HIGH_BREAKOUT_FAIL', candle);
-    else if (wick >= 0.7) close(state, newEntry, candle.close, newEntry.qty, 'NEW_HIGH_CANDLE_REJECTION', candle);
+  if (!holding && !state.positions[symbol]) {
+    if (eligible('LONG') && candle.close > longEntry) attempt('LONG', candle.close);
+    else if (eligible('SHORT') && candle.close < shortEntry) attempt('SHORT', candle.close);
   }
   const remaining = state.positions[symbol];
   if (remaining) remaining.mark = candle.close;

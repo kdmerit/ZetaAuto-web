@@ -30,10 +30,10 @@ export function newHighSlMultiplier(settings: BacktestSettings): number {
   return value;
 }
 export function newHighEntryAtrLimit(settings: BacktestSettings): number {
-  const text = settings.newHighEntryAtrLimit ?? '0.5';
+  const text = settings.newHighEntryAtrLimit ?? '1';
   const value = Number(text);
-  if (!/^\d+(?:\.\d{1,2})?$/.test(text) || !Number.isFinite(value) || value < 0.3 || value > 0.5) {
-    throw new Error('신고가 돌파 허용범위는 0.3~0.5 ATR로 입력해 주세요.');
+  if (!/^\d+(?:\.\d{1,2})?$/.test(text) || !Number.isFinite(value) || value < 0.5 || value > 1) {
+    throw new Error('신고가 돌파 허용범위는 0.5~1.0 ATR로 입력해 주세요.');
   }
   return value;
 }
@@ -49,7 +49,7 @@ export function newHighWarmup(settings: BacktestSettings): number {
   return Math.max(atrWindowSeconds + intervalSeconds(settings.interval), (newHighPeriod(settings) + 40) * intervalSeconds(settings.interval));
 }
 export function currentNewHighSettings(settings: BacktestSettings): BacktestSettings {
-  return { ...settings, interval: settings.interval === '4h' ? '4h' : '1h', newHighLookback: settings.newHighLookback ?? '20', newHighSlMultiplier: settings.newHighSlMultiplier ?? '2', newHighMa60Enabled: settings.newHighMa60Enabled === true, newHighEntryAtrLimit: settings.newHighEntryAtrLimit ?? '0.5', newHighSizingMode: settings.newHighSizingMode === 'RISK' ? 'RISK' : 'BET', newHighRiskAmount: settings.newHighRiskAmount ?? settings.betAmountUsdt, partialTpEnabled: false };
+  return { ...settings, interval: settings.interval === '4h' ? '4h' : '1h', newHighLookback: settings.newHighLookback ?? '20', newHighSlMultiplier: settings.newHighSlMultiplier ?? '2', newHighMa60Enabled: settings.newHighMa60Enabled === true, newHighEntryAtrLimit: settings.newHighEntryAtrLimit ?? '1', newHighSizingMode: settings.newHighSizingMode === 'RISK' ? 'RISK' : 'BET', newHighRiskAmount: settings.newHighRiskAmount ?? settings.betAmountUsdt, partialTpEnabled: false };
 }
 
 /** Every field is fixed from candles strictly before the execution candle. */
@@ -82,16 +82,16 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): (
 
 export const newHighRules = {
   long: [
-    '현재 봉을 제외한 이전 N봉 최고가를 위로 돌파한 그 봉에서 즉시 진입합니다. N은 입력값(기본 20)이며 실제 체결가가 돌파선 + 입력한 0.3~0.5ATR 허용범위 이내여야 합니다.',
-    '돌파 순간 현재가를 반영한 MA10 > MA20이고, 이전 20봉 안에 MA10 < MA20인 봉이 하나 이상 있어야 합니다.',
-    '매수 캔들은 양봉이고 종가가 이전 N봉 최고가보다 높아야 합니다. 매수 캔들의 윗꼬리와 음봉 몸통 합계가 전체 길이의 70% 이상이면 같은 봉 종가에 청산합니다. SL은 실제 매수가 − (입력 SL 배수×ATR)입니다.',
-    '수익이 +1ATR에 도달하면 SL을 매수가+0.2ATR, +2ATR에 도달하면 매수가+1ATR로 옮깁니다. +3ATR부터는 도달 배수−1만큼의 수익 구간에 SL을 계속 올립니다. +2ATR 이상에서 MA5 < MA20이면 별도로 청산합니다.',
+    '현재 봉을 제외한 이전 N봉 최고가를 위로 돌파하고 종가가 확정된 뒤 매수합니다. N은 입력값(기본 20)이며 실제 체결가가 돌파선 + 0.5~1.0ATR 사이여야 합니다.',
+    '종가 확정 시 현재가를 반영한 MA10 > MA20이고, 이전 20봉 안에 MA10 < MA20인 봉이 하나 이상 있어야 합니다.',
+    '매수 캔들은 양봉이고 종가가 이전 N봉 최고가보다 높아야 합니다. 윗꼬리와 음봉 몸통 합계가 전체 길이의 70% 이상이면 진입하지 않습니다. SL은 실제 매수가 − (입력 SL 배수×ATR)입니다.',
+    '수익이 +1ATR에 도달하면 SL을 매수가+0.2ATR, +2ATR에 도달하면 매수가+1ATR로 옮깁니다. +3ATR부터는 도달 배수−1만큼의 수익 구간에 SL을 계속 올립니다. 청산은 초기 SL 또는 단계형 트레일링 SL로만 합니다.',
   ],
   short: [
-    '현재 봉을 제외한 이전 N봉 최저가를 아래로 돌파한 그 봉에서 즉시 진입합니다. 실제 체결가가 돌파선 − 입력한 0.3~0.5ATR 허용범위 이상이어야 합니다.',
-    '돌파 순간 현재가를 반영한 MA10 < MA20이고, 이전 20봉 안에 MA10 > MA20인 봉이 하나 이상 있어야 합니다.',
-    '매수 캔들은 음봉이고 종가가 이전 N봉 최저가보다 낮아야 합니다. 매수 캔들의 아랫꼬리와 양봉 몸통 합계가 전체 길이의 70% 이상이면 같은 봉 종가에 청산합니다. SL은 실제 매수가 + (입력 SL 배수×ATR)입니다.',
-    '수익이 +1ATR에 도달하면 SL을 매수가−0.2ATR, +2ATR에 도달하면 매수가−1ATR로 옮깁니다. +3ATR부터는 도달 배수−1만큼의 수익 구간에 SL을 계속 내립니다. +2ATR 이상에서 MA5 > MA20이면 별도로 청산합니다.',
+    '현재 봉을 제외한 이전 N봉 최저가를 아래로 돌파하고 종가가 확정된 뒤 매수합니다. 실제 체결가가 돌파선 − 0.5~1.0ATR 사이여야 합니다.',
+    '종가 확정 시 현재가를 반영한 MA10 < MA20이고, 이전 20봉 안에 MA10 > MA20인 봉이 하나 이상 있어야 합니다.',
+    '매수 캔들은 음봉이고 종가가 이전 N봉 최저가보다 낮아야 합니다. 아랫꼬리와 양봉 몸통 합계가 전체 길이의 70% 이상이면 진입하지 않습니다. SL은 실제 매수가 + (입력 SL 배수×ATR)입니다.',
+    '수익이 +1ATR에 도달하면 SL을 매수가−0.2ATR, +2ATR에 도달하면 매수가−1ATR로 옮깁니다. +3ATR부터는 도달 배수−1만큼의 수익 구간에 SL을 계속 내립니다. 청산은 초기 SL 또는 단계형 트레일링 SL로만 합니다.',
   ],
-  common: 'ATR은 선택 주기 TR의 직전 20일 단순평균(1h 480봉·4h 120봉)이며 매 봉 시작 전에 확정합니다. 자료가 부족하면 신규 진입하지 않습니다. 고정 베팅액 또는 고정 손실액 중 선택한 기준으로 종목당 한 번만 진입합니다. 고정 손실액을 선택하면 초기 SL 거리와 수수료·슬리피지를 기준으로 수량을 계산합니다. 자금이 부족하거나 SL 가격이 유효하지 않으면 진입하지 않습니다. 현재가 MA60 조건을 켜면 롱은 체결 순간 현재가가 MA60보다 높고 숏은 MA60보다 낮아야 합니다. +1ATR부터 단계형 트레일링 SL을 청산 시까지 적용하며, +2ATR 이상에서 MA5·MA20 조건이 맞으면 별도 청산합니다. MA는 현재가를 반영해 봉 중간에도 계산합니다. 첫 돌파 순간 조건이 맞지 않거나 갭이 진입 허용 범위를 넘으면 같은 봉에서 추격/재시도하지 않습니다. 갭은 과거 돌파가가 아닌 관측 시가에 체결하며 진입/청산 0.02% 슬리피지·편도 0.055% 수수료를 반영합니다. 두 OHLC 경로 중 낮은 계좌 평가액을 선택하고 동시 경계는 SL 우선입니다. 정확한 틱 재현은 아닙니다. 한 봉에서 청산 후 재진입하지 않으며 전체종목은 한 계좌·종목명 순서·봉 시작 가용자금만 사용합니다.',
+  common: 'ATR은 선택 주기 TR의 직전 20일 단순평균(1h 480봉·4h 120봉)이며 매 봉 시작 전에 확정합니다. 자료가 부족하면 신규 진입하지 않습니다. 고정 베팅액 또는 고정 손실액 중 선택한 기준으로 종목당 한 번만 진입합니다. 고정 손실액을 선택하면 초기 SL 거리와 수수료·슬리피지를 기준으로 수량을 계산합니다. 자금이 부족하거나 SL 가격이 유효하지 않으면 진입하지 않습니다. 현재가 MA60 조건을 켜면 롱은 체결 순간 현재가가 MA60보다 높고 숏은 MA60보다 낮아야 합니다. +1ATR부터 단계형 트레일링 SL을 청산 시까지 적용하며, 별도 MA5·MA20 청산은 사용하지 않습니다. MA10·MA20·양봉/음봉·꼬리 조건은 종가 확정 후 판단하며, 매수 체결도 종가로 합니다. 갭은 돌파선에서 0.5~1.0ATR 범위를 벗어나면 진입하지 않습니다. 진입/청산 0.02% 슬리피지·편도 0.055% 수수료를 반영합니다. 두 OHLC 경로 중 낮은 계좌 평가액을 선택하고 동시 경계는 SL 우선입니다. 정확한 틱 재현은 아닙니다. 한 봉에서 청산 후 재진입하지 않으며 전체종목은 한 계좌·종목명 순서·봉 시작 가용자금만 사용합니다.',
 };
