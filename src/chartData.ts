@@ -68,7 +68,7 @@ export function tradeChartFills(chart: ChartData): { entry: ChartMarker | null; 
 
 export function entryCandleIndex(chart: ChartData): number | null {
   const opened = firstEntryTime(chart);
-  const entryIndex = opened === null ? -1 : chart.candles.findIndex((candle) => candle.openTime === opened);
+  const entryIndex = opened === null ? -1 : chart.candles.findIndex((candle) => candle.openTime <= opened && opened < candle.closeTime);
   if (entryIndex >= 0) return entryIndex;
   if (chart.referenceIndex !== null && chart.candles[chart.referenceIndex]) return chart.referenceIndex;
   return chart.candles.length > 0 ? 0 : null;
@@ -78,6 +78,11 @@ export function mergeChartPages(older: ChartData, current: ChartData): ChartData
   const byTime = new Map([...older.candles, ...current.candles].map((candle) => [candle.openTime, candle]));
   const candles = [...byTime.values()].sort((left, right) => left.openTime - right.openTime);
   const indices = new Map(candles.map((candle, index) => [candle.openTime, index]));
+  const indexAt = (time: number): number => {
+    const exact = indices.get(time);
+    if (exact !== undefined) return exact;
+    return candles.findIndex(candle => candle.openTime <= time && time < candle.closeTime);
+  };
   const events = new Map<string, ChartMarker>();
   for (const event of [
     ...older.markers, ...(older.executions ?? []),
@@ -85,7 +90,7 @@ export function mergeChartPages(older: ChartData, current: ChartData): ChartData
   ]) events.set(event.id, event);
   const executions = [...events.values()].map((event) => ({
     ...event,
-    candleIndex: indices.get(event.openTime) ?? -1,
+    candleIndex: indexAt(event.openTime),
   }));
   const waveRanges = new Map([...older.waves, ...current.waves].map((wave) => [wave.label, wave]));
   const waves = [...waveRanges.values()].flatMap((wave) => {

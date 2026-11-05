@@ -148,11 +148,11 @@ describe('new high/low causal strategy', () => {
   });
   it('moves the stop through every favorable ATR step and exits through the stepped trailing stop', () => {
     const first = bar(0, 101.5, 102.3, 101.4, 102, { sum4: 400 });
-    const breakthrough = bar(1, 106, 108.1, 106.5, 107.5, { sum4: 400, atr: 2 });
+    const breakthrough = bar(1, 106, 108.1, 107.5, 107.5, { sum4: 400, atr: 2 });
     const state = simulate([first, breakthrough]);
     const holding = state.positions.BTCUSDT!;
     expect(state.closed).toBe(0); expect(holding.newHighTrailStep).toBe(3);
-    expect(holding.stop).toBeCloseTo(holding.first + 4); expect(holding.newHighTrailLevels).toHaveLength(3);
+    expect(holding.stop).toBeCloseTo(holding.first + 5); expect(holding.newHighTrailLevels).toHaveLength(3);
     const retrace = bar(2, 107.5, 107.5, 104, 104.5, { sum4: 400, atr: 2 });
     replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [retrace] }], settings, retrace.candle.openTime, retrace.candle.closeTime, 3600);
     expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('NEW_HIGH_TRAILING');
@@ -181,7 +181,7 @@ describe('new high/low causal strategy', () => {
     const state = simulate([bar(0, 98.5, 98.6, 97.7, 97.8, { long: false, short: true, sum4: 2200 })], p);
     expect(state.positions.BTCUSDT!.stop).toBeCloseTo(state.positions.BTCUSDT!.first + 4);
     expect(state.positions.BTCUSDT!.target).toBeCloseTo(state.positions.BTCUSDT!.first - 4);
-    const exit = bar(1, 95, 95.5, 93.5, 94, { long: false, short: true, sum4: 2200, atr: null });
+    const exit = bar(1, 95, 95.5, 94.5, 95, { long: false, short: true, sum4: 2200, atr: null });
     replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [exit] }], p, exit.candle.openTime, exit.candle.closeTime, 3600);
     expect(state.closed).toBe(0); expect(state.positions.BTCUSDT!.stop).toBeLessThan(state.positions.BTCUSDT!.first);
   });

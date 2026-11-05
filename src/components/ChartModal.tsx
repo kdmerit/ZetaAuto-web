@@ -11,7 +11,7 @@ interface ChartModalProps {
   chart: ChartData;
   onClose: () => void;
   onLoadOlder?: () => Promise<boolean>;
-  onFocusCandle?: (openTime: number) => Promise<boolean>;
+  onFocusCandle?: (openTime: number) => Promise<number | null>;
   onIntervalChange?: (interval: BacktestInterval, focusAt: number) => Promise<number | null>;
   loadingOlder?: boolean;
   historyError?: string | null;
@@ -478,11 +478,11 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
     setFocusing(true);
     setFocusError(null);
     try {
-      if (!chart.candles.some(candle => candle.openTime === fill.openTime)) {
-        if (!onFocusCandle || !await onFocusCandle(fill.openTime)) return;
-      }
+      const currentCandle = chart.candles.find(candle => candle.openTime <= fill.openTime && fill.openTime < candle.closeTime);
+      const focusOpenTime = currentCandle?.openTime ?? (onFocusCandle ? await onFocusCandle(fill.openTime) : null);
+      if (focusOpenTime === null) return;
       setSelection(null);
-      setFocusRequest(current => ({ openTime: fill.openTime, revision: current.revision + 1 }));
+      setFocusRequest(current => ({ openTime: focusOpenTime, revision: current.revision + 1 }));
     } catch {
       setFocusError('체결 캔들을 불러오지 못했습니다. 다시 눌러 주세요.');
     } finally {

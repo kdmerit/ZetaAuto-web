@@ -560,7 +560,7 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     if (step <= currentStep) return;
     p.newHighTrailLevels ??= [];
     for (let reached = currentStep + 1; reached <= step; reached += 1) {
-      const lockedAtr = reached === 1 ? 0.2 : reached - 1;
+      const lockedAtr = reached === 1 ? 0.5 : reached - 0.5;
       const nextStop = p.first + direction * lockedAtr * atr;
       if (direction * (nextStop - p.stop) > 0) p.stop = nextStop;
       if (!p.newHighTrailLevels.some(level => level.step === reached)) {

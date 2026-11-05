@@ -43,7 +43,7 @@ export function withChartExecutionTimes(chart: ChartData, trade: BacktestTrade):
 /** A close at the boundary belongs to the candle that just finished. */
 export function markerAtInterval(event: ChartMarker, interval: BacktestInterval, sourceInterval: BacktestInterval): number {
   const original = event.sourceOpenTime ?? event.openTime;
-  if (interval === sourceInterval) return original;
+  if (interval === sourceInterval) return Math.floor(original / intervalSeconds(interval)) * intervalSeconds(interval);
   const at = event.executedAt ?? original;
   const effective = event.timing === 'BAR_CLOSE' ? at - 1 : at;
   const seconds = intervalSeconds(interval);
