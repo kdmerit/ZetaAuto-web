@@ -54,6 +54,12 @@ describe('editable SMA envelope and EMA/Wilder ATR envelope', () => {
     expect(bands[1]!.center).toBeCloseTo(106.6666666667, 8); expect(bands[1]!.upper - bands[1]!.center).toBeCloseTo(15, 10);
     expect(bands[2]!.center).toBeCloseTo(102.2222222222, 8); expect(bands[2]!.upper - bands[2]!.center).toBeCloseTo(19.5, 10);
   });
+  it('draws a standard population-deviation Bollinger band from the selected completed closes', () => {
+    const result = withMarketIndicators(chart([candle(0, 100), candle(1, 102), candle(2, 104)]), { ...defaultMarketIndicators, bollingerPeriod: '3', bollingerMultiplier: '2.0' });
+    const band = result.bollinger!.bands[0]!;
+    expect(result.bollinger!.bands).toHaveLength(1);
+    expect(band.center).toBe(102); expect(band.upper).toBeCloseTo(105.2659863237, 8); expect(band.lower).toBeCloseTo(98.7340136763, 8);
+  });
   it('removes only the indicator containing a zero, preserving the other independent indicator', () => {
     const source = chart([candle(0), candle(1)]); const p = { ...defaultMarketIndicators, smaPeriod: '1', deviationPercent: '1.0' };
     for (const key of ['smaPeriod', 'deviationPercent'] as const) {
@@ -61,6 +67,9 @@ describe('editable SMA envelope and EMA/Wilder ATR envelope', () => {
     }
     for (const key of ['emaPeriod', 'atrPeriod', 'atrMultiplier'] as const) {
       const result = withMarketIndicators(source, { ...p, [key]: '0' }); expect(result.atrEnvelope).toBeUndefined(); expect(result.envelope).toBeDefined();
+    }
+    for (const key of ['bollingerPeriod', 'bollingerMultiplier'] as const) {
+      const result = withMarketIndicators(source, { ...p, [key]: '0' }); expect(result.bollinger).toBeUndefined(); expect(result.envelope).toBeDefined();
     }
   });
   it('is causal, preserves the source, and never retains fake trade metadata in a standalone chart', () => {
@@ -72,8 +81,8 @@ describe('editable SMA envelope and EMA/Wilder ATR envelope', () => {
     const trade = { ...source, market: undefined }; expect(withMarketIndicators(trade, defaultMarketIndicators)).toBe(trade);
   });
   it('accepts inclusive input limits and rejects invalid, fractional-period or overprecision inputs', () => {
-    expect(() => marketIndicatorParameters({ smaPeriod: '120', deviationPercent: '20.0', emaPeriod: '0', atrPeriod: '120', atrMultiplier: '20.0' })).not.toThrow();
-    for (const invalid of [{ smaPeriod: '121' }, { smaPeriod: '1.5' }, { smaPeriod: '-1' }, { smaPeriod: '' }, { deviationPercent: '20.1' }, { deviationPercent: '1.01' }, { emaPeriod: '121' }, { atrPeriod: '-1' }, { atrMultiplier: 'Infinity' }, { atrMultiplier: '20.1' }]) {
+    expect(() => marketIndicatorParameters({ ...defaultMarketIndicators, smaPeriod: '120', deviationPercent: '20.0', emaPeriod: '0', atrPeriod: '120', atrMultiplier: '20.0', bollingerPeriod: '120', bollingerMultiplier: '10.0' })).not.toThrow();
+    for (const invalid of [{ smaPeriod: '121' }, { smaPeriod: '1.5' }, { smaPeriod: '-1' }, { smaPeriod: '' }, { deviationPercent: '20.1' }, { deviationPercent: '1.01' }, { emaPeriod: '121' }, { atrPeriod: '-1' }, { atrMultiplier: 'Infinity' }, { atrMultiplier: '20.1' }, { bollingerPeriod: '121' }, { bollingerPeriod: '1.5' }, { bollingerMultiplier: '10.1' }, { bollingerMultiplier: '1.01' }]) {
       expect(() => marketIndicatorParameters({ ...defaultMarketIndicators, ...invalid })).toThrow();
     }
   });

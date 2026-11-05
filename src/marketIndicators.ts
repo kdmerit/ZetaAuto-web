@@ -9,22 +9,25 @@ export interface MarketIndicatorSettings {
   emaPeriod: string;
   atrPeriod: string;
   atrMultiplier: string;
+  bollingerPeriod: string;
+  bollingerMultiplier: string;
 }
 export const marketIndicatorStorageKey = 'zetaauto.web.marketChart.indicators.v1';
-export const defaultMarketIndicators: MarketIndicatorSettings = { smaPeriod: '20', deviationPercent: '0.0', emaPeriod: '20', atrPeriod: '14', atrMultiplier: '2.0' };
+export const defaultMarketIndicators: MarketIndicatorSettings = { smaPeriod: '20', deviationPercent: '0.0', emaPeriod: '20', atrPeriod: '14', atrMultiplier: '2.0', bollingerPeriod: '20', bollingerMultiplier: '2.0' };
 export const volumeWindowSeconds = 120 * 86400;
 
 function period(value: string, label: string): number {
   if (!/^\d+$/.test(value) || Number(value) > 120) throw new Error(`${label}은 0~120 정수로 입력해 주세요.`);
   return Number(value);
 }
-function decimal(value: string, label: string): number {
-  if (!/^\d+(\.\d)?$/.test(value) || !Number.isFinite(Number(value)) || Number(value) > 20) throw new Error(`${label}은 0.0~20.0으로 입력해 주세요. (소수 한 자리)`);
+function decimal(value: string, label: string, maximum = 20): number {
+  if (!/^\d+(\.\d)?$/.test(value) || !Number.isFinite(Number(value)) || Number(value) > maximum) throw new Error(`${label}은 0.0~${maximum.toFixed(1)}으로 입력해 주세요. (소수 한 자리)`);
   return Number(value);
 }
 export function marketIndicatorParameters(settings: MarketIndicatorSettings) {
   return { sma: period(settings.smaPeriod, 'SMA'), deviation: decimal(settings.deviationPercent, '엔벨로프 이격'),
-    ema: period(settings.emaPeriod, 'EMA'), atr: period(settings.atrPeriod, 'ATR 기간'), multiplier: decimal(settings.atrMultiplier, 'ATR 승수') };
+    ema: period(settings.emaPeriod, 'EMA'), atr: period(settings.atrPeriod, 'ATR 기간'), multiplier: decimal(settings.atrMultiplier, 'ATR 승수'),
+    bollingerPeriod: period(settings.bollingerPeriod, '볼린저밴드 기간'), bollingerMultiplier: decimal(settings.bollingerMultiplier, '볼린저밴드 표준편차 배수', 10) };
 }
 export function loadMarketIndicators(): MarketIndicatorSettings {
   try {
@@ -64,14 +67,23 @@ export function withMarketIndicators(chart: ChartData, settings: MarketIndicator
   const p = marketIndicatorParameters(settings);
   const envelope: NonNullable<ChartData['envelope']> = { interval: chart.interval, period: p.sma, deviationPercent: p.deviation, bands: [] };
   const atrEnvelope: NonNullable<ChartData['atrEnvelope']> = { emaPeriod: p.ema, atrPeriod: p.atr, multiplier: p.multiplier, bands: [] };
+  const bollinger: NonNullable<ChartData['bollinger']> = { period: p.bollingerPeriod, multiplier: p.bollingerMultiplier, bands: [] };
   const rows = chart.market.sourceCandles;
   const first = chart.candles[0]?.openTime ?? Infinity; const last = chart.candles.at(-1)?.openTime ?? -Infinity;
   const smaEnabled = p.sma > 0 && p.deviation > 0;
   const atrEnabled = p.ema > 0 && p.atr > 0 && p.multiplier > 0;
-  let sum = 0; let ema: number | null = null; let atr: number | null = null;
+  const bollingerEnabled = p.bollingerPeriod > 0 && p.bollingerMultiplier > 0;
+  let sum = 0; let ema: number | null = null; let atr: number | null = null; let bollingerSum = 0; let bollingerSquareSum = 0;
   for (let index = 0; index < rows.length; index += 1) {
     const candle = rows[index]!;
     if (smaEnabled) { sum += candle.close; if (index >= p.sma) sum -= rows[index - p.sma]!.close; }
+    if (bollingerEnabled) {
+      bollingerSum += candle.close; bollingerSquareSum += candle.close * candle.close;
+      if (index >= p.bollingerPeriod) {
+        const previousClose = rows[index - p.bollingerPeriod]!.close;
+        bollingerSum -= previousClose; bollingerSquareSum -= previousClose * previousClose;
+      }
+    }
     if (atrEnabled) {
       const tr = trueRange(candle, rows[index - 1]?.close);
       ema = ema === null ? candle.close : ema + 2 / (p.ema + 1) * (candle.close - ema);
@@ -84,6 +96,12 @@ export function withMarketIndicators(chart: ChartData, settings: MarketIndicator
       envelope.bands.push({ openTime: candle.openTime, center, upper: center * (1 + p.deviation / 100), lower: center * (1 - p.deviation / 100) });
     }
     if (atrEnabled && ema !== null && atr !== null) atrEnvelope.bands.push({ openTime: candle.openTime, center: ema, upper: ema + p.multiplier * atr, lower: ema - p.multiplier * atr });
+    if (bollingerEnabled && index + 1 >= p.bollingerPeriod) {
+      const center = bollingerSum / p.bollingerPeriod;
+      const variance = Math.max(0, bollingerSquareSum / p.bollingerPeriod - center * center);
+      const width = p.bollingerMultiplier * Math.sqrt(variance);
+      bollinger.bands.push({ openTime: candle.openTime, center, upper: center + width, lower: center - width });
+    }
   }
-  return { ...chart, side: null, markers: [], executions: [], waves: [], priceLines: [], envelope: smaEnabled ? envelope : undefined, atrEnvelope: atrEnabled ? atrEnvelope : undefined };
+  return { ...chart, side: null, markers: [], executions: [], waves: [], priceLines: [], envelope: smaEnabled ? envelope : undefined, atrEnvelope: atrEnabled ? atrEnvelope : undefined, bollinger: bollingerEnabled ? bollinger : undefined };
 }

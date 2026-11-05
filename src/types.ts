@@ -164,6 +164,11 @@ export interface ChartData {
     multiplier: number;
     bands: { openTime: number; center: number; upper: number; lower: number }[];
   };
+  bollinger?: {
+    period: number;
+    multiplier: number;
+    bands: { openTime: number; center: number; upper: number; lower: number }[];
+  };
   /** Final fill metadata used to distinguish a stop from a normal exit. */
   exitReason?: string;
   exitProfit?: boolean;

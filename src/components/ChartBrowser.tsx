@@ -10,6 +10,9 @@ const intervalKey = 'zetaauto.web.marketChart.interval';
 function savedQuery(): string { try { return normalizeChartQuery(localStorage.getItem(queryKey) ?? ''); } catch { return ''; } }
 function savedInterval(): BacktestInterval { try { const saved = localStorage.getItem(intervalKey); return chartIntervals.includes(saved as BacktestInterval) ? saved as BacktestInterval : '1h'; } catch { return '1h'; } }
 function remember(key: string, value: string): void { try { localStorage.setItem(key, value); } catch { /* Optional preference. */ } }
+function isEditableElement(element: Element | null): element is HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement {
+  return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement;
+}
 
 export function ChartBrowser() {
   const [query, setQuery] = useState(savedQuery); const [instruments, setInstruments] = useState<Instrument[]>([]);
@@ -32,6 +35,13 @@ export function ChartBrowser() {
   useEffect(() => {
     const back = (event: PopStateEvent): void => {
       if (event.state?.zetaautoChart || !historyOpen.current) return;
+      const activeElement = document.activeElement;
+      if (isEditableElement(activeElement)) {
+        activeElement.blur();
+        const state = event.state && typeof event.state === 'object' ? event.state : {};
+        window.history.pushState({ ...state, zetaautoApp: true, screen: 'CHARTS', zetaautoChart: true }, '');
+        return;
+      }
       historyOpen.current = false; cancel(); commitChart(null); setLoadingPage(false); setLoadingSymbol(null);
     };
     window.addEventListener('popstate', back);

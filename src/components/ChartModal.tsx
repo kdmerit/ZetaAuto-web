@@ -141,23 +141,24 @@ function ChartSvg({
   const { min, max, maxVolume } = useMemo(
     () => {
       const range = visibleCandleRange(chart.candles, rangeStart, rangeEnd);
-      if (!chart.envelope && !chart.atrEnvelope) return range;
+      if (!chart.envelope && !chart.atrEnvelope && !chart.bollinger) return range;
       const first = chart.candles[rangeStart]?.openTime ?? 0;
       const last = chart.candles[rangeEnd]?.openTime ?? 0;
       let low = range.min; let high = range.max;
-      for (const band of [...(chart.envelope?.bands ?? []), ...(chart.atrEnvelope?.bands ?? [])]) if (band.openTime >= first && band.openTime <= last) {
+      for (const band of [...(chart.envelope?.bands ?? []), ...(chart.atrEnvelope?.bands ?? []), ...(chart.bollinger?.bands ?? [])]) if (band.openTime >= first && band.openTime <= last) {
         low = Math.min(low, band.lower); high = Math.max(high, band.upper);
       }
       const padding = (high - low) * 0.02;
       return { min: low - padding, max: high + padding, maxVolume: range.maxVolume };
     },
-    [chart.candles, chart.envelope, chart.atrEnvelope, rangeStart, rangeEnd],
+    [chart.candles, chart.envelope, chart.atrEnvelope, chart.bollinger, rangeStart, rangeEnd],
   );
   const drawStart = Math.max(0, rangeStart - 1);
   const drawEnd = Math.min(chart.candles.length - 1, rangeEnd + 1);
   const drawnCandles = chart.candles.slice(drawStart, drawEnd + 1);
   const envelopeByTime = useMemo(() => new Map(chart.envelope?.bands.map(band => [band.openTime, band]) ?? []), [chart.envelope]);
   const atrByTime = useMemo(() => new Map(chart.atrEnvelope?.bands.map(band => [band.openTime, band]) ?? []), [chart.atrEnvelope]);
+  const bollingerByTime = useMemo(() => new Map(chart.bollinger?.bands.map(band => [band.openTime, band]) ?? []), [chart.bollinger]);
   const reportViewTime = (): void => {
     const host = scrollRef.current;
     if (!host) return;
@@ -368,6 +369,11 @@ function ChartSvg({
           points={drawnCandles.flatMap((candle, offset) => { const band = atrByTime.get(candle.openTime); return band ? [`${(drawStart + offset + .5) * step},${yFor(band[key])}`] : []; }).join(' ')}
           fill="none" stroke={key === 'center' ? '#F2C66D' : '#64D8E8'} strokeWidth={key === 'center' ? 1.2 : 1.8} opacity=".95" strokeDasharray={key === 'center' ? '3 4' : undefined}>
           <title>{`ATR 엔벨로프 ${key === 'upper' ? '상단' : key === 'lower' ? '하단' : '중심선'} · EMA${chart.atrEnvelope!.emaPeriod} · ATR${chart.atrEnvelope!.atrPeriod} ×${chart.atrEnvelope!.multiplier}`}</title>
+        </polyline>) : null}
+        {chart.bollinger ? (['upper', 'center', 'lower'] as const).map(key => <polyline key={`bollinger-${key}`} className={`bollinger-band bollinger-${key}`}
+          points={drawnCandles.flatMap((candle, offset) => { const band = bollingerByTime.get(candle.openTime); return band ? [`${(drawStart + offset + .5) * step},${yFor(band[key])}`] : []; }).join(' ')}
+          fill="none" stroke="#F0B45D" strokeWidth={key === 'center' ? 1.1 : 1.7} opacity={key === 'center' ? '.7' : '.9'} strokeDasharray={key === 'center' ? '3 4' : undefined}>
+          <title>{`볼린저밴드 ${key === 'upper' ? '상단' : key === 'lower' ? '하단' : '중심선'} · 기간${chart.bollinger!.period} · 표준편차 ×${chart.bollinger!.multiplier}`}</title>
         </polyline>) : null}
         {chart.waves.filter((wave) => wave.startIndex <= drawEnd && wave.endIndex >= drawStart).map((wave) => {
           const x = Math.max(0, wave.startIndex) * step;
