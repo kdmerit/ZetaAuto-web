@@ -41,9 +41,10 @@ import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
 import { currentNewHighSettings, newHighPeriod, newHighRiskAmount, newHighRules, newHighSlMultiplier } from '../newHigh';
+import { currentReferenceSettings, referenceRules, referenceTpPercent } from '../reference';
 
 const strategySettings = (strategy: Strategy, value: BacktestSettings): BacktestSettings => strategy === 'NEW_HIGH'
-  ? currentNewHighSettings(value) : strategy === 'ENVELOPE' ? currentEnvelopeSettings(value) : strategy === 'PULLBACK' ? currentPullbackSettings(value) : value;
+  ? currentNewHighSettings(value) : strategy === 'REFERENCE' ? currentReferenceSettings(value) : strategy === 'ENVELOPE' ? currentEnvelopeSettings(value) : strategy === 'PULLBACK' ? currentPullbackSettings(value) : value;
 
 interface StrategyBacktestProps {
   strategy: Strategy;
@@ -91,6 +92,7 @@ export function defaultSettings(): BacktestSettings {
     newHighMa60Enabled: false,
     newHighSizingMode: 'BET',
     newHighRiskAmount: '100',
+    referenceTpPercent: '80',
   };
 }
 
@@ -149,12 +151,13 @@ const reasonLabels: Record<string, string> = {
   NEW_HIGH_NEXT_CANDLE_BREAK: '다음 캔들 진입봉 저가·고가 이탈 청산',
   NEW_HIGH_BREAKOUT_FAIL: '돌파봉 종가 확인 실패',
   NEW_HIGH_CANDLE_REJECTION: '돌파봉 긴 윗꼬리·아랫꼬리 청산',
+  REFERENCE_TP: '기준봉 TP 청산',
 };
 
 function defaultRequest(settings: BacktestSettings, strategy: Strategy): BacktestRequestBody {
   // The optional AWS fallback still runs VOLATILITY v1. Do not silently send a
   // v2 request to that incompatible calculation. Old server histories stay readable.
-  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK') throw new Error('이 전략은 이 기기에서 분석합니다.');
+  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK' || strategy === 'REFERENCE') throw new Error('이 전략은 이 기기에서 분석합니다.');
   const body: BacktestRequestBody = {
     strategy,
     mode: settings.mode,
@@ -321,7 +324,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
         if (saved && requestId === resultRequestRef.current) { setResult(saved.result); analysisSettingsRef.current = { ...defaults, ...saved.settings }; }
         return;
       }
-      if (strategy === 'ENVELOPE' || strategy === 'NEW_HIGH') return;
+      if (strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'REFERENCE') return;
       const job = await getServerBacktest(contextRef.current, strategy);
       if (job && requestId === resultRequestRef.current) {
         setServerJob(job);
@@ -419,6 +422,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
       newHighPeriod(settings); newHighSlMultiplier(settings);
       if (newHighRiskSizing) newHighRiskAmount(settings);
     }
+    if (strategy === 'REFERENCE') referenceTpPercent(settings);
     const start = Date.parse(`${settings.startDate}T${settings.startTime}:00+09:00`);
     const end = settings.endDate ? Date.parse(`${settings.endDate}T${settings.endTime}:00+09:00`) : Date.now();
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start > Date.now()) throw new Error('분석 기간을 확인해 주세요.');
@@ -660,7 +664,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
   };
 
   const activeServer = serverJob && ['QUEUED', 'RUNNING'].includes(serverJob.status);
-  const title = strategy === 'NEW_HIGH' ? '신고가' : strategy === 'PULLBACK' ? '눌림목' : strategy === 'DISPARITY' ? '이격매매' : strategy === 'ENVELOPE' ? '엔벨로프' : '변동성 돌파';
+  const title = strategy === 'NEW_HIGH' ? '신고가' : strategy === 'REFERENCE' ? '기준봉' : strategy === 'PULLBACK' ? '눌림목' : strategy === 'DISPARITY' ? '이격매매' : strategy === 'ENVELOPE' ? '엔벨로프' : '변동성 돌파';
   const resultTrades = result?.recentTrades ? [...result.recentTrades].reverse() : [];
   const currentHistorySymbol = historyScopeSymbol(settings);
   const historyLabel = settings.mode === 'ALL'
@@ -687,6 +691,14 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <div className="condition-copy"><strong>롱 포지션</strong>{newHighRules.long.map((text, index) => <p key={text}>{index + 1}. {text}</p>)}
                 <strong>숏 포지션</strong>{newHighRules.short.map((text, index) => <p key={text}>{index + 1}. {text}</p>)}
                 <strong>공통 체결·자금 기준</strong><p>{newHighRules.common}</p>
+              </div>
+            ) : strategy === 'REFERENCE' ? (
+              <div className="condition-copy">
+                <strong>롱 포지션</strong>
+                {referenceRules.long.map((text, index) => <p key={text}>{index + 1}. {text}</p>)}
+                <strong>숏 포지션</strong>
+                {referenceRules.short.map((text, index) => <p key={text}>{index + 1}. {text}</p>)}
+                <p>{referenceRules.common}</p>
               </div>
             ) : strategy === 'PULLBACK' ? (
               <div className="condition-copy">
@@ -774,8 +786,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           </div>
 
           <h2>{strategy === 'ENVELOPE' ? '중심선 · 매매 기준 1h' : '캔들 주기'}</h2>
-          {strategy === 'ENVELOPE' ? <p className="notice small">1시간봉 고정</p> : <div className={`segmented${strategy === 'NEW_HIGH' ? '' : ' four'}`}>
-            {(strategy === 'NEW_HIGH' ? ['1h', '4h', '1d'] as const : ['15m', '1h', '4h', '1d'] as const).map((interval) => <button key={interval} type="button" className={settings.interval === interval ? 'selected' : ''} onClick={() => update('interval', interval)}>{interval.toUpperCase()}</button>)}
+          {strategy === 'ENVELOPE' ? <p className="notice small">1시간봉 고정</p> : <div className={`segmented${strategy === 'NEW_HIGH' || strategy === 'REFERENCE' ? '' : ' four'}`}>
+            {(strategy === 'NEW_HIGH' || strategy === 'REFERENCE' ? ['1h', '4h', '1d'] as const : ['15m', '1h', '4h', '1d'] as const).map((interval) => <button key={interval} type="button" className={settings.interval === interval ? 'selected' : ''} onClick={() => update('interval', interval)}>{interval.toUpperCase()}</button>)}
           </div>}
 
           <h2>분석 기간 (한국시간)</h2>
@@ -807,7 +819,12 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             <label className="checkbox-row"><input type="checkbox" checked={settings.newHighMa60Enabled === true} onChange={event => update('newHighMa60Enabled', event.target.checked)} /><span>현재가 &gt; MA60 (롱) / 현재가 &lt; MA60 (숏)일 때만 매수</span></label>
             <p className="notice small">조건 충족 시 봉 중간 1회 진입 · 돌파선 +0.5~1.0ATR 범위에서만 매수 · 단계형 트레일링 SL 적용</p>
             <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h·4h·1d 모두 15분봉을 함께 확인해 봉 안의 진입·SL·트레일링 순서를 계산합니다. 종목당 한 번만 진입합니다. 롱은 현재가가 시가보다 높고 숏은 현재가가 시가보다 낮을 때 진입합니다. 진입한 선택 주기 캔들에서는 SL·트레일링 청산을 발동하지 않고 다음 선택 주기 캔들부터 적용합니다. 바로 다음 선택 주기 캔들에서 진입봉 저가(롱)·고가(숏)를 이탈하면 즉시 청산합니다. ATR 단계에 처음 도달한 15분봉에서는 새 트레일링 SL로 청산하지 않고 다음 15분봉부터 적용합니다. +1ATR부터 단계형 트레일링을 청산 시까지 계속 적용합니다. 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
-          </> : strategy === 'PULLBACK' ? (
+          </> : strategy === 'REFERENCE' ? (
+            <>
+              <label className="field-label">TP 비율 (%)<input type="number" inputMode="decimal" min="51" max="200" step="1" value={settings.referenceTpPercent ?? '80'} onChange={event => update('referenceTpPercent', event.target.value)} /><small>51~200 · 기본 80 · 기준봉 저가/고가에서 전체 범위 기준</small></label>
+              <p className="notice small">거래량·몸통이 직전 봉의 2배 이상인 양봉/음봉을 기준봉으로 삼고, 중심선에서 1회 진입합니다. 바로 다음 봉은 기준봉 경계를 넘지 않고 중심선을 재터치하며 거래량이 낮을 때만 진입합니다. SL은 기준봉 저가/고가, TP는 입력 비율입니다.</p>
+            </>
+          ) : strategy === 'PULLBACK' ? (
             <>
               <label className="field-label">엔벨로프 SMA<input type="number" inputMode="numeric" min="1" max="120" step="1" value={settings.envelopeMaPeriod ?? '20'} onChange={event => update('envelopeMaPeriod', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>1~120 · 기본 20</small></label>
               <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" inputMode="decimal" min="0.1" max="20" step="0.1" value={settings.envelopeDeviationPercent ?? '5.0'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 기본 5.0</small></label>
@@ -832,7 +849,9 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           ) : (
             <></>
           )}
-          {strategy === 'VOLATILITY' ? (
+          {strategy === 'REFERENCE' ? (
+            <p className="muted small">롱은 양봉 기준봉의 중심선에서 매수하고 기준봉 저가에 SL, 저가에서 전체 범위의 TP 비율만큼 오른 가격에 TP를 둡니다. 숏은 반대로 적용합니다. 기준봉 자체의 중심선 터치와 바로 다음 봉의 유효한 재터치만 확인하며, 이후 캔들에서는 매수하지 않습니다. 선택 주기는 1h·4h·1d입니다.</p>
+          ) : strategy === 'VOLATILITY' ? (
             <p className="muted small">매수 캔들의 고가·저가 경계 안에서 MA5 절반 돌파와 몸통 2배가 충족되는 가격을 추정해 진입하며, SL은 실제 매수가 ±2ATR로 고정합니다. ATR은 선택 주기의 직전 20일 TR 단순평균이며, 실제 매수가보다 유리한 구간에서만 완성 캔들의 고가·저가 중간값이 MA5를 이탈하면 종가에 청산합니다.</p>
           ) : strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' && strategy !== 'PULLBACK' ? (
             <>
@@ -848,7 +867,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           </div>
           {!running && !statisticsRunning && !activeServer && localJob?.status === 'PAUSED' && canResumeLocalJob(localJob) ? <button className="outline-button" type="button" onClick={() => run(true)}>분석 이어하기</button> : null}
           {localJob && localJob.status !== 'COMPLETED' ? <p className="muted small">화면을 끄거나 탭을 닫으면 분석이 정지될 수 있습니다. 다시 열어 ‘분석 이어하기’를 누르면 저장된 지점부터 계속합니다.</p> : null}
-          {error && strategy !== 'VOLATILITY' && strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' && strategy !== 'PULLBACK' && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
+          {error && strategy !== 'VOLATILITY' && strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' && strategy !== 'PULLBACK' && strategy !== 'REFERENCE' && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
           <button
             className="outline-button history-toggle"
             type="button"

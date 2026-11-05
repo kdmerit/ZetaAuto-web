@@ -3,6 +3,7 @@ import { calendarAtr } from './atr';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import { bandFor, envelopeParameters, priorMovingAverages, projectDailyTrend, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
 import { prepareNewHigh, type PreparedNewHigh } from './newHigh';
+import { referenceTpPercent } from './reference';
 import { enrichMarketCandles } from './marketIndicators';
 import type {
   BacktestResult,
@@ -446,6 +447,66 @@ function volatilitySignals(
   return signals;
 }
 
+/**
+ * A reference candle is a two-bar entry setup. The reference candle itself and
+ * only its immediate successor may carry a signal; the portfolio replay keeps
+ * the setup identity so the successor cannot create a second entry after the
+ * reference candle has already been attempted.
+ */
+function referenceSignals(
+  candles: Candle[],
+  settings: BacktestSettings,
+): Signal[] {
+  const tpPercent = referenceTpPercent(settings);
+  const signals: Signal[] = [];
+  for (let index = 1; index < candles.length; index += 1) {
+    const reference = candles[index]!;
+    const previous = candles[index - 1]!;
+    const previousBody = Math.abs(previous.close - previous.open);
+    const referenceBody = Math.abs(reference.close - reference.open);
+    const range = reference.high - reference.low;
+    if (!Number.isFinite(previousBody) || previousBody <= 0 || !Number.isFinite(referenceBody)
+      || !Number.isFinite(reference.volume) || !Number.isFinite(previous.volume)
+      || reference.volume < previous.volume * 2 || referenceBody < previousBody * 2 || range <= 0) continue;
+
+    const side: 'LONG' | 'SHORT' | null = reference.close > reference.open ? 'LONG' : reference.close < reference.open ? 'SHORT' : null;
+    if (!side || settings.side !== 'BOTH' && settings.side !== side) continue;
+    const center = (reference.high + reference.low) / 2;
+    const target = side === 'LONG'
+      ? reference.low + range * tpPercent / 100
+      : reference.high - range * tpPercent / 100;
+    const base = {
+      strategy: 'REFERENCE' as const,
+      side,
+      entry: center,
+      stop: side === 'LONG' ? reference.low : reference.high,
+      target,
+      initialTarget: target,
+      exitMode: 'REFERENCE_TOUCH' as const,
+      referenceOpenTime: reference.openTime,
+    };
+    // The OHLC range always contains its midpoint. To keep the distinction
+    // between an actual same-candle touch and the documented next-candle
+    // fallback, accept the reference candle when its body crosses the center
+    // or when the directional wick returns to it (upper wick for long,
+    // lower wick for short).
+    const sameCandleEntry = side === 'LONG'
+      ? reference.open <= center || reference.high > reference.close
+      : reference.open >= center || reference.low < reference.close;
+    if (sameCandleEntry) signals.push({ ...base, index, referenceRole: 'REFERENCE' });
+
+    const next = candles[index + 1];
+    if (!next || !Number.isFinite(next.volume) || next.volume >= reference.volume) continue;
+    const nextTouchesCenter = next.low <= center && next.high >= center;
+    const nextRespectsBoundary = side === 'LONG' ? next.high <= reference.high : next.low >= reference.low;
+    if (!nextTouchesCenter || !nextRespectsBoundary) continue;
+    // Keep the direction local to the setup. The next candle need not be a
+    // same-colour candle; the center-line retest is the entry condition.
+    signals.push({ ...base, index: index + 1, referenceRole: 'NEXT' });
+  }
+  return signals;
+}
+
 export interface PreparedEnvelope extends EnvelopeBand { long: boolean; short: boolean; parentOpenTime?: number; sourceInterval?: BacktestInterval; dailyTrendChangePercent?: number | null }
 export interface PreparedBar {
   candle: Candle;
@@ -516,7 +577,8 @@ export function prepareSymbolBlock(
   const currentPullback = strategy === 'PULLBACK' && (settings.envelopeMaPeriod !== undefined || settings.envelopeDeviationPercent !== undefined);
   const waveState = strategy === 'PULLBACK' && !currentPullback ? structuredClone(previousWaveState ?? initialWaveState()) : undefined;
   const signals = strategy === 'PULLBACK' ? currentPullback ? pullbackSignals(candles, settings) : legacyPullbackSignals(candles, settings, waveState)
-    : strategy === 'DISPARITY' ? disparitySignals(candles, settings) : volatilitySignals(candles, settings);
+    : strategy === 'DISPARITY' ? disparitySignals(candles, settings)
+      : strategy === 'REFERENCE' ? referenceSignals(candles, settings) : volatilitySignals(candles, settings);
   const pullbackBands = currentPullback ? (() => {
     const { percent, period } = pullbackEnvelopeParameters(settings);
     return { percent, centers: priorMovingAverages(candles, period) };
@@ -903,7 +965,7 @@ export function runBacktest(
   newHighIntrabarCandles?: Candle[],
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
-  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK') {
+  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK' || strategy === 'REFERENCE') {
     const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
     const start = candles[0]!.openTime;
     const end = candles.at(-1)!.closeTime;
@@ -1037,6 +1099,10 @@ export function buildLocalChart(
     }
     lines.push(line('SL', signal.activeStop ?? signal.stop));
     if (signal.strategy === 'NEW_HIGH' && signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
+  } else if (signal.strategy === 'REFERENCE') {
+    lines.push(line('ENTRY', trade.entryPrice));
+    lines.push(line('SL', signal.activeStop ?? signal.stop));
+    lines.push(line('TP', signal.target));
   } else {
     lines.push(line('ENTRY', trade.entryPrice));
     if (signal.volatilityStopEnabled === true) lines.push(line('SL', signal.activeStop ?? signal.stop));
@@ -1072,6 +1138,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
+  if (strategy === 'REFERENCE') return '거래량·몸통 2배 기준봉의 중심선 재진입을 확인하고 기준봉 저가·고가 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 조건 충족 시 봉 중간 진입하고, 초기 SL과 단계형 트레일링 SL로 청산합니다.';
   if (strategy === 'ENVELOPE') return '1h 재돌파 진입·중심선 전량 청산에 일봉 MA20 추세 필터를 선택 적용하고, SMA·이격을 사용자 필터와 수익률·승률 정렬로 비교합니다.';
   if (strategy === 'PULLBACK') {

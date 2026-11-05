@@ -8,6 +8,7 @@ import { validateMinuteCandles } from './intrabar';
 import { atrWindowSeconds } from './atr';
 import { currentEnvelopeSettings, currentPullbackSettings } from './envelope';
 import { currentNewHighSettings, newHighExecutionInterval, newHighWarmup } from './newHigh';
+import { currentReferenceSettings } from './reference';
 import type { BacktestResult, BacktestSettings, Strategy } from './types';
 import { loadWeeklyUniverse, saveWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
 
@@ -21,7 +22,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'NEW_HIGH' ? '2.10.63' : strategy === 'ENVELOPE' ? '2.10.45' : strategy === 'VOLATILITY' ? '2.10.49' : localEngineVersion;
+  return strategy === 'REFERENCE' ? '2.10.64' : strategy === 'NEW_HIGH' ? '2.10.63' : strategy === 'ENVELOPE' ? '2.10.45' : strategy === 'VOLATILITY' ? '2.10.49' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);
@@ -166,7 +167,8 @@ async function executeWithLease(
       const copied = structuredClone(options.settings);
       const settings = options.strategy === 'NEW_HIGH' ? currentNewHighSettings(copied)
         : options.strategy === 'ENVELOPE' ? currentEnvelopeSettings(copied)
-          : options.strategy === 'PULLBACK' ? currentPullbackSettings(copied) : copied;
+          : options.strategy === 'PULLBACK' ? currentPullbackSettings(copied)
+            : options.strategy === 'REFERENCE' ? currentReferenceSettings(copied) : copied;
       const { start, end } = analysisWindow(settings);
       previousJob = await readValue<SavedJob>('jobs', options.strategy);
       job = {

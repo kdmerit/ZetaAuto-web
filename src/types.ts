@@ -1,4 +1,4 @@
-export type Strategy = 'PULLBACK' | 'DISPARITY' | 'VOLATILITY' | 'ENVELOPE' | 'NEW_HIGH';
+export type Strategy = 'PULLBACK' | 'DISPARITY' | 'VOLATILITY' | 'ENVELOPE' | 'NEW_HIGH' | 'REFERENCE';
 export type EnvelopeExitMode = 'CENTER' | 'OPPOSITE' | 'HALF';
 
 export interface ContractRisk {
@@ -62,6 +62,7 @@ export interface BacktestSettings {
   newHighMa60Enabled?: boolean;
   newHighSizingMode?: 'BET' | 'RISK';
   newHighRiskAmount?: string;
+  referenceTpPercent?: string;
 }
 
 export interface Candle {
@@ -248,7 +249,10 @@ export interface Signal {
   breakoutRangePercent?: number;
   breakoutRange?: number;
   breakoutLevel?: number;
-  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'VOLATILITY_MA5' | 'ENVELOPE_TOUCH' | 'PULLBACK_ENVELOPE' | 'NEW_HIGH_TOUCH';
+  /** Reference candle identity used to prevent a setup from being reused after its two-bar window. */
+  referenceOpenTime?: number;
+  referenceRole?: 'REFERENCE' | 'NEXT';
+  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'VOLATILITY_MA5' | 'ENVELOPE_TOUCH' | 'PULLBACK_ENVELOPE' | 'NEW_HIGH_TOUCH' | 'REFERENCE_TOUCH';
   envelopeDeviationPercent?: number;
   envelopeExitMode?: EnvelopeExitMode;
   envelopeMaPeriod?: number;

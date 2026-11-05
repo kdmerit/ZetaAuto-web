@@ -18,6 +18,7 @@ const menuItems: MenuItem[] = [
   { id: 'PULLBACK', title: '눌림목 백테스트', strategy: 'PULLBACK' },
   { id: 'DISPARITY', title: '이격매매 백테스트', strategy: 'DISPARITY' },
   { id: 'VOLATILITY', title: '변동성 돌파 백테스트', strategy: 'VOLATILITY' },
+  { id: 'REFERENCE', title: '기준봉 백테스트', strategy: 'REFERENCE' },
   { id: 'ENVELOPE', title: '엔벨로프 백테스트', strategy: 'ENVELOPE' },
 ];
 

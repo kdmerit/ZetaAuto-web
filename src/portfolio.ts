@@ -66,6 +66,8 @@ export interface PortfolioState {
   equityCurve: { at: number; equityUsdt: number }[];
   envelopeParents?: Record<string, { openTime: number; blocked: boolean }>;
   envelopeReclaims?: Record<string, { outsideAt: number }>;
+  /** A reference setup may be attempted only once across its reference/next-bar window. */
+  referenceAttempts?: Record<string, boolean>;
 }
 
 export function initialPortfolio(capital: number): PortfolioState {
@@ -74,6 +76,7 @@ export function initialPortfolio(capital: number): PortfolioState {
     wins: 0, losses: 0, winningProfit: 0, losingLoss: 0, breakeven: 0, signals: 0, insufficientFunds: 0, secondFills: 0,
     exitReasons: {}, peak: capital, maxDrawdown: 0, observedBars: 0,
     dataStartAt: null, dataEndAt: null, equityCurve: [],
+    referenceAttempts: {},
   };
 }
 
@@ -102,6 +105,11 @@ function priceLines(p: Holding): PriceLine[] {
     ...(p.signal.volatilityStopEnabled === true ? [{ kind: 'SL' as const, price: p.stop }] : []),
     ...(p.signal.exitMode === 'VOLATILITY_CLOSE' || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false ? [{ kind: 'TP' as const, price: p.target }] : []),
   ];
+  if (p.signal.strategy === 'REFERENCE') return [
+    { kind: 'ENTRY', price: p.first },
+    { kind: 'SL', price: p.stop },
+    { kind: 'TP', price: p.target },
+  ];
   if (p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE') return [{ kind: 'ENTRY', price: p.first }];
   const split = p.signal.strategy === 'PULLBACK';
   const lines: PriceLine[] = [{ kind: split ? 'FIRST_ENTRY' : 'ENTRY', price: p.first }];
@@ -115,7 +123,7 @@ function priceLines(p: Holding): PriceLine[] {
 }
 
 function recordFill(p: Holding, kind: Execution['kind'], price: number, quantity: number, candle: Candle, opening = false, confirmedClose = false): void {
-  const intrabarMode = p.signal.exitMode === 'VOLATILITY_TP' || p.signal.exitMode === 'ENVELOPE_TOUCH' || p.signal.exitMode === 'PULLBACK_ENVELOPE' || p.signal.exitMode === 'NEW_HIGH_TOUCH'
+  const intrabarMode = p.signal.exitMode === 'VOLATILITY_TP' || p.signal.exitMode === 'ENVELOPE_TOUCH' || p.signal.exitMode === 'PULLBACK_ENVELOPE' || p.signal.exitMode === 'NEW_HIGH_TOUCH' || p.signal.exitMode === 'REFERENCE_TOUCH'
     || p.signal.exitMode === 'VOLATILITY_MA5';
   const intrabar = intrabarMode && !confirmedClose && (kind === 'ENTRY' ? opening : !opening);
   const parentOpenTime = (candle as Candle & { parentOpenTime?: number }).parentOpenTime ?? candle.openTime;
@@ -197,14 +205,14 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     ? entry - direction * signal.volatilityAtr * 2
     : signal.strategy === 'ENVELOPE' ? entry * (1 - direction * signal.envelopeDeviationPercent! / 100) : signal.stop;
   const effectiveSignal = activeStop === signal.stop ? signal : { ...signal, stop: activeStop };
-  const intrabarEntry = signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH';
+  const intrabarEntry = signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH' || signal.exitMode === 'REFERENCE_TOUCH';
   const p: Holding = {
     symbol, signal: effectiveSignal, opened: intrabarEntry && !confirmedClose ? candle.openTime : candle.closeTime, first: entry, entry, betAmountUsdt: bet, qty: riskSizedQuantity ?? margin * leverage / entry,
     margin, reserved: bet - margin, reservedFee: (bet - margin) * leverage * feeRate,
     pending: split, second: split ? (entry + signal.stop) / 2 : entry,
     ...(signal.strategy === 'ENVELOPE' && settings.envelopeRisk?.symbol === symbol ? { risk: settings.envelopeRisk } : {}),
     target,
-    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' && signal.strategy !== 'NEW_HIGH' && signal.exitMode !== 'PULLBACK_ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
+    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' && signal.strategy !== 'NEW_HIGH' && signal.strategy !== 'REFERENCE' && signal.exitMode !== 'PULLBACK_ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
     partialDone: false, stop: activeStop, mark: candle.close, net: -fee, executions: [],
   };
   if (signal.strategy === 'ENVELOPE') {
@@ -287,7 +295,8 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
     const disparity = p.signal.strategy === 'DISPARITY';
     const reason = p.signal.strategy === 'ENVELOPE' ? p.signal.envelopeExitMode === 'CENTER' ? 'ENVELOPE_CENTER' : 'ENVELOPE_OPPOSITE'
       : p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE' ? 'PULLBACK_ENVELOPE'
-      : disparity ? 'MA60_TOUCH' : 'FULL_TP';
+      : p.signal.strategy === 'REFERENCE' ? 'REFERENCE_TP'
+        : disparity ? 'MA60_TOUCH' : 'FULL_TP';
     close(state, p, disparity ? price : p.target, p.qty, reason, candle, opening);
   }
 }
@@ -400,8 +409,47 @@ function replayVolatilityMa5Entry(symbol: string, bar: PreparedBar, settings: Ba
   return state;
 }
 
+/**
+ * Replay a reference/next-bar center-line touch without assuming that the
+ * candle closed before the order was filled. Both admissible OHLC paths are
+ * evaluated by the caller, and the first center-line crossing on each path is
+ * the only entry attempt.
+ */
+function replayReferenceEntry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
+  const candidates = [true, false].map(lowFirst => referenceEntryPath(symbol, bar, settings, available, lowFirst));
+  return worstPath(candidates);
+}
+
+function referenceEntryPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, lowFirst: boolean): PortfolioState {
+  const state = initialPortfolio(available);
+  const signal = bar.signal!;
+  const candle = { ...bar.candle, parentOpenTime: bar.candle.openTime };
+  const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
+  let attempted = false;
+  const touch = (before: number, after: number): boolean => before === signal.entry
+    || before < signal.entry && after >= signal.entry
+    || before > signal.entry && after <= signal.entry;
+  const attempt = (): void => {
+    attempted = true;
+    enter(state, symbol, signal, candle, settings);
+  };
+  if (path[0] === signal.entry) attempt();
+  for (let index = 1; index < path.length; index += 1) {
+    let before = path[index - 1]!;
+    const after = path[index]!;
+    if (!attempted && touch(before, after)) {
+      attempt();
+      before = signal.entry;
+    }
+    const position = state.positions[symbol];
+    if (position) replaySegment(state, position, before, after, candle, settings);
+  }
+  return state;
+}
+
 function replayIntrabarEntry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
   if (bar.signal?.exitMode === 'VOLATILITY_MA5') return replayVolatilityMa5Entry(symbol, bar, settings, available);
+  if (bar.signal?.exitMode === 'REFERENCE_TOUCH') return replayReferenceEntry(symbol, bar, settings, available);
   const minutes = bar.intrabarCandles ?? [];
   validateMinuteCandles(bar.candle, minutes);
   let state = initialPortfolio(available);
@@ -751,9 +799,12 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
     for (const { symbol, bar } of rows) {
       const parameters = options.settingsForSymbol?.[symbol] ?? settings;
       const hasEnvelope = !!(bar.envelope || bar.envelopeBySide);
-      const intrabarSignal = bar.signal?.exitMode === 'VOLATILITY_TP' || bar.signal?.exitMode === 'VOLATILITY_MA5';
+      const intrabarSignal = bar.signal?.exitMode === 'VOLATILITY_TP' || bar.signal?.exitMode === 'VOLATILITY_MA5' || bar.signal?.exitMode === 'REFERENCE_TOUCH';
       const hasIntrabarData = intrabarSignal;
       if (occupiedAtOpen.has(symbol) || !hasIntrabarData && !hasEnvelope) continue;
+      const referenceKey = bar.signal?.exitMode === 'REFERENCE_TOUCH' && bar.signal.referenceOpenTime !== undefined
+        ? `${symbol}:${bar.signal.referenceOpenTime}` : null;
+      if (referenceKey && state.referenceAttempts?.[referenceKey]) continue;
       if (bar.envelope?.parentOpenTime !== undefined && state.envelopeParents?.[symbol]?.blocked) continue;
       if (bar.envelope && parameters.envelopeEntryMode !== 'RECLAIM' && !(bar.envelope.long && bar.candle.low <= bar.envelope.lower)
         && !(bar.envelope.short && bar.candle.high >= bar.envelope.upper)) continue;
@@ -773,6 +824,10 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
           .map(priority => envelopeEntryPath(symbol, entryBar, parameters, available, lowFirst, options.settingsForSymbolSide?.[symbol], priority, reclaimAllowed))))
         : replayIntrabarEntry(symbol, bar, parameters, available);
       mergePath(state, selected, symbol, available);
+      if (referenceKey) {
+        state.referenceAttempts ??= {};
+        state.referenceAttempts[referenceKey] = true;
+      }
       if (selected.entries) {
         entered.add(symbol);
         if (bar.envelope?.parentOpenTime !== undefined) state.envelopeParents![symbol]!.blocked = true;
@@ -799,7 +854,7 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
     }
     for (const { symbol, bar } of rows) {
       const signal = bar.signal;
-      const completedEntry = signal?.exitMode !== 'VOLATILITY_MA5';
+      const completedEntry = signal?.exitMode !== 'VOLATILITY_MA5' && signal?.exitMode !== 'REFERENCE_TOUCH';
       if (signal && signal.exitMode !== 'VOLATILITY_TP' && completedEntry) enter(state, symbol, signal, bar.candle, options.settingsForSymbol?.[symbol] ?? settings);
     }
     if (!rows.length) continue;
