@@ -894,7 +894,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           {activeServer ? <ProgressBar completed={serverJob.completedBars} total={Math.max(serverJob.totalBars, 1)} label={`${serverJob.phase === 'UNIVERSE' ? '종목 확인' : serverJob.phase === 'DATA' ? '캔들 조회' : '전략 계산'} · ${serverJob.status === 'QUEUED' ? '대기 중' : '분석 중'}`} /> : null}
         </section>
 
-        {result ? <ResultCard result={result} onOpenTrade={(trade) => void openTrade(trade)} /> : null}
+        {result ? <ResultCard result={result} leverage={analysisSettingsRef.current.leverage} onOpenTrade={(trade) => void openTrade(trade)} /> : null}
       </div>
       {chartLoading ? <div className="modal-backdrop"><div className="loading-card">체결 차트를 불러오는 중입니다…</div></div> : null}
       {chart ? <ChartModal chart={chart} onClose={closeChart} onLoadOlder={selectedTrade && hasOlder ? loadOlder : undefined} onFocusCandle={focusChartCandle} onIntervalChange={changeChartInterval} loadingOlder={loadingOlder} historyError={chartError} /> : null}
@@ -930,7 +930,7 @@ function HistoryList({
   );
 }
 
-function ResultCard({ result, onOpenTrade }: { result: BacktestResult; onOpenTrade: (trade: BacktestTrade) => void }) {
+function ResultCard({ result, leverage, onOpenTrade }: { result: BacktestResult; leverage?: string; onOpenTrade: (trade: BacktestTrade) => void }) {
   const reasonLabel = (trade: BacktestTrade): string => trade.reason === 'NEW_HIGH_TRAILING' && trade.newHighTrailStep
     ? `단계형 트레일링 청산 (+${trade.newHighTrailStep}ATR 단계)`
     : reasonLabels[trade.reason] ?? trade.reason;
@@ -947,6 +947,7 @@ function ResultCard({ result, onOpenTrade }: { result: BacktestResult; onOpenTra
         <div><span>진입 · 청산</span><strong>{result.entryCount} · {result.closedTradeCount}</strong></div>
         <div><span>수익 · 손실</span><strong>{result.winCount} · {result.lossCount}</strong></div>
         <div><span>최대 낙폭</span><strong>{percent(result.maxDrawdownPercent)}</strong></div>
+        <div><span>레버리지</span><strong>{leverage ? `${leverage}배` : '—'}</strong></div>
       </div>
       <p className="muted small">관찰 캔들 {result.observedBars.toLocaleString()}개 · 수수료 {money(result.feesUsdt)} USDT · 2차 체결 {result.secondFillCount}회</p>
       {result.failedSymbols?.length ? <p className="notice small">캔들 누락으로 제외된 종목 {result.failedSymbols.length}개: {result.failedSymbols.slice(0, 8).join(', ')}{result.failedSymbols.length > 8 ? ' 외' : ''}</p> : null}
