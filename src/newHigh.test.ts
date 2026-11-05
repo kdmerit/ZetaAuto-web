@@ -45,8 +45,8 @@ describe('new high/low causal strategy', () => {
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
     expect(newHighWarmup({ ...settings, interval: '1d' })).toBe(60 * 86400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.61'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
-    expect(canResumeLocalJob({ version: '2.10.61', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.62'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
+    expect(canResumeLocalJob({ version: '2.10.62', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {
     const data = history(); data[585]!.high = 120; data[585]!.low = 50;
@@ -168,6 +168,27 @@ describe('new high/low causal strategy', () => {
     const state = simulate([entry, parent]);
     expect(state.closed).toBe(1);
     expect(state.trades[0]!.executions.at(-1)!.candleOpenAt).toBe(origin + 5400);
+  });
+  it('does not close on the same 15m candle that first reaches a trailing stage', () => {
+    const entry = bar(0, 101.5, 102.3, 101.4, 102);
+    const parent = bar(1, 102.5, 104.2, 102.2, 103.8, { sum4: 400 });
+    parent.newHighIntrabarCandles = [{
+      openTime: origin + 3600, closeTime: origin + 4500,
+      open: 102.5, high: 104.2, low: 102.2, close: 103.8, volume: 100,
+    }];
+    const state = simulate([entry, parent]);
+    expect(state.closed).toBe(0);
+    expect(state.positions.BTCUSDT).toBeDefined();
+    expect(state.positions.BTCUSDT!.newHighTrailStep).toBe(1);
+
+    const next = bar(2, 103.8, 104, 102.8, 103, { sum4: 400 });
+    next.newHighIntrabarCandles = [{
+      openTime: origin + 7200, closeTime: origin + 8100,
+      open: 103.8, high: 104, low: 102.8, close: 103, volume: 100,
+    }];
+    replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [next] }], settings, next.candle.openTime, next.candle.closeTime, 3600);
+    expect(state.closed).toBe(1);
+    expect(state.trades[0]!.reason).toBe('NEW_HIGH_TRAILING');
   });
   it('uses a lower-timeframe candle for the breakout entry fill', () => {
     const parent = bar(0, 101, 102.5, 100.5, 102);

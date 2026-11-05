@@ -550,14 +550,14 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     ? (definition.sum59 + price) / 60 : null;
   const slMultiplier = newHighSlMultiplier(settings);
   const tolerance = (...values: number[]) => Math.max(Number.MIN_VALUE, ...values.map(value => Math.abs(value) * Number.EPSILON * 16));
-  const advanceTrail = (p: Holding, price: number): void => {
+  const advanceTrail = (p: Holding, price: number): boolean => {
     const atr = p.signal.newHighAtr ?? Math.abs(p.target - p.first) / 2;
-    if (!Number.isFinite(atr) || atr <= 0) return;
+    if (!Number.isFinite(atr) || atr <= 0) return false;
     const direction = p.signal.side === 'LONG' ? 1 : -1;
     const progress = direction * (price - p.first) / atr;
     const step = progress >= 1 ? Math.floor(progress + 1e-10) : 0;
     const currentStep = p.newHighTrailStep ?? 0;
-    if (step <= currentStep) return;
+    if (step <= currentStep) return false;
     p.newHighTrailLevels ??= [];
     for (let reached = currentStep + 1; reached <= step; reached += 1) {
       const lockedAtr = reached === 1 ? 0.5 : reached - 0.5;
@@ -568,6 +568,7 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
       }
     }
     p.newHighTrailStep = step;
+    return true;
   };
   const stopReason = (p: Holding): string => (p.newHighTrailStep ?? 0) > 0 ? 'NEW_HIGH_TRAILING' : 'SL';
   const attempt = (side: 'LONG' | 'SHORT', price: number, executionCandle: Candle = candle): void => {
@@ -592,15 +593,24 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
   const eligible = (side: 'LONG' | 'SHORT'): boolean => definition.atr !== null && definition.atr > 0 && (side === 'LONG' ? definition.long : definition.short);
   const longEntry = definition.high + 0.5 * definition.atr!; const shortEntry = definition.low - 0.5 * definition.atr!;
   const atOpen = state.positions[symbol];
+  let trailReachedAtParentOpen = false;
   if (atOpen) {
-    advanceTrail(atOpen, candle.open);
+    trailReachedAtParentOpen = advanceTrail(atOpen, candle.open);
     const long = atOpen.signal.side === 'LONG';
     if (long ? candle.open <= atOpen.stop : candle.open >= atOpen.stop) close(state, atOpen, candle.open, atOpen.qty, stopReason(atOpen), candle, true);
   }
   const processExecutionCandle = (executionCandle: Candle): void => {
+    // A 15m candle that first reaches an ATR stage cannot also close through
+    // the newly moved stop. The stop becomes active from the next 15m candle.
+    let trailReachedThisCandle = trailReachedAtParentOpen;
+    trailReachedAtParentOpen = false;
+    const noteTrailAdvance = (p: Holding, price: number): void => {
+      const advanced = advanceTrail(p, price);
+      trailReachedThisCandle ||= advanced;
+    };
     const openingPosition = state.positions[symbol];
     if (openingPosition && !enteredThisCandle) {
-      advanceTrail(openingPosition, executionCandle.open);
+      noteTrailAdvance(openingPosition, executionCandle.open);
       const long = openingPosition.signal.side === 'LONG';
       if (long ? executionCandle.open <= openingPosition.stop : executionCandle.open >= openingPosition.stop) {
         close(state, openingPosition, executionCandle.open, openingPosition.qty, stopReason(openingPosition), executionCandle, true);
@@ -619,9 +629,12 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
         const p = state.positions[symbol];
         const events: { price: number; kind: 'SL' | 'LONG' | 'SHORT' }[] = [];
         if (p && !enteredThisCandle) {
-          advanceTrail(p, before); advanceTrail(p, after);
+          noteTrailAdvance(p, before);
+          noteTrailAdvance(p, after);
           const long = p.signal.side === 'LONG';
-          if (long ? before >= p.stop && after <= p.stop : before <= p.stop && after >= p.stop) events.push({ price: p.stop, kind: 'SL' });
+          if (!trailReachedThisCandle && (long ? before >= p.stop && after <= p.stop : before <= p.stop && after >= p.stop)) {
+            events.push({ price: p.stop, kind: 'SL' });
+          }
         } else if (!p && !attempted) {
           if (eligible('LONG') && before < longEntry && after >= longEntry) events.push({ price: longEntry, kind: 'LONG' });
           if (eligible('SHORT') && before > shortEntry && after <= shortEntry) events.push({ price: shortEntry, kind: 'SHORT' });
