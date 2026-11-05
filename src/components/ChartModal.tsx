@@ -34,6 +34,9 @@ const maDefinitions = [
   { key: 'ma60' as const, label: 'MA60', color: '#39C98A' },
   { key: 'ma120' as const, label: 'MA120', color: '#AAB4C6' },
 ];
+const MIN_CHART_ZOOM = 0.25;
+const MAX_CHART_ZOOM = 10;
+const MAX_CHART_WIDTH = 80_000;
 
 const lineStyles: Record<PriceLine['kind'], { label: string; color: string }> = {
   ENTRY: { label: '매수가', color: '#F0A34A' },
@@ -125,7 +128,7 @@ function ChartSvg({
   }, []);
   const selectedIndex = selection === null ? -1 : chart.candles.findIndex((candle) => candle.openTime === selection.openTime);
   const baseWidth = Math.max(760, Math.min(12_000, chart.candles.length * 14));
-  const widthForZoom = (factor: number): number => Math.max(viewport.width || 320, Math.min(24_000, baseWidth * factor));
+  const widthForZoom = (factor: number): number => Math.max(viewport.width || 320, Math.min(MAX_CHART_WIDTH, baseWidth * factor));
   const width = widthForZoom(zoom.factor);
   const height = Math.max(150, viewport.height);
   const volumeHeight = 64.8;
@@ -341,7 +344,7 @@ function ChartSvg({
             const [first, second] = [...pointersRef.current.values()];
             if (!first || !second) return;
             const distance = Math.hypot(first.x - second.x, first.y - second.y);
-            const factor = Math.max(0.25, Math.min(4, pinch.factor * distance / pinch.distance));
+            const factor = Math.max(MIN_CHART_ZOOM, Math.min(MAX_CHART_ZOOM, pinch.factor * distance / pinch.distance));
             const centerX = (first.x + second.x) / 2 - scrollRef.current.getBoundingClientRect().left;
             pendingZoomLeftRef.current = pinch.anchorIndex * widthForZoom(factor) / Math.max(chart.candles.length, 1) - centerX;
             setZoom({ factor });
