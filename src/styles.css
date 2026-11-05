@@ -96,6 +96,11 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .field-label small { color: #aab6c8; font-size: 12px; font-weight: 400; }
 .checkbox-row { display: flex; align-items: center; gap: 10px; color: #f4f7fb; font-weight: 700; }
 .checkbox-row input, .ma-toggle input { width: 20px; height: 20px; accent-color: #7ea2ff; }
+.sizing-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; border: 0; padding: 0; margin: 0; }
+.sizing-choice-label { grid-column: 1 / -1; color: #f4f7fb; font-weight: 700; }
+.radio-option { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 10px; border: 1px solid #34435b; border-radius: 10px; background: transparent; color: #aab6c8; font-weight: 700; }
+.radio-option.selected { border-color: #7ea2ff; background: #202d42; color: #f4f7fb; }
+.radio-option input { width: 18px; height: 18px; accent-color: #7ea2ff; }
 .action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .analysis-fields { display: contents; border: 0; padding: 0; margin: 0; min-width: 0; }
 .analysis-fields:disabled { opacity: .8; }

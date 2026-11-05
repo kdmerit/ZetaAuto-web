@@ -60,6 +60,9 @@ export interface BacktestSettings {
   newHighLookback?: string;
   newHighSlMultiplier?: string;
   newHighMa60Enabled?: boolean;
+  newHighEntryAtrLimit?: string;
+  newHighSizingMode?: 'BET' | 'RISK';
+  newHighRiskAmount?: string;
 }
 
 export interface Candle {
@@ -228,6 +231,10 @@ export interface Signal {
   volatilityStopEnabled?: boolean;
   volatilityPriorExtreme?: number;
   volatilityEntryLimit?: number;
+  /** Maximum net loss budget used to size a NEW_HIGH position. */
+  riskAmount?: number;
+  /** ATR fixed at the NEW_HIGH entry, used by the stepped trailing stop. */
+  newHighAtr?: number;
   volatilityTpEnabled?: boolean;
   volatilityNextCloseEnabled?: boolean;
   breakoutRangePercent?: number;

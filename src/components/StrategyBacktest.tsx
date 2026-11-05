@@ -40,7 +40,7 @@ import { EnvelopeTrendControl } from './EnvelopeTrendControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
-import { currentNewHighSettings, newHighPeriod, newHighRules, newHighSlMultiplier } from '../newHigh';
+import { currentNewHighSettings, newHighEntryAtrLimit, newHighPeriod, newHighRiskAmount, newHighRules, newHighSlMultiplier } from '../newHigh';
 
 const strategySettings = (strategy: Strategy, value: BacktestSettings): BacktestSettings => strategy === 'NEW_HIGH'
   ? currentNewHighSettings(value) : strategy === 'ENVELOPE' ? currentEnvelopeSettings(value) : strategy === 'PULLBACK' ? currentPullbackSettings(value) : value;
@@ -89,6 +89,9 @@ export function defaultSettings(): BacktestSettings {
     newHighLookback: '20',
     newHighSlMultiplier: '2',
     newHighMa60Enabled: false,
+    newHighEntryAtrLimit: '0.5',
+    newHighSizingMode: 'BET',
+    newHighRiskAmount: '100',
   };
 }
 
@@ -144,7 +147,9 @@ const reasonLabels: Record<string, string> = {
   ENVELOPE_CENTER: '엔벨로프 중심선 청산',
   ENVELOPE_OPPOSITE: '엔벨로프 반대 밴드 청산',
   NEW_HIGH_CONDITIONAL_EXIT: '2ATR 도달·MA5/MA20 조건 청산',
-  NEW_HIGH_PROFIT_RETRACE: '1ATR 돌파 후 재이탈 청산',
+  NEW_HIGH_TRAILING: '단계형 트레일링 청산',
+  NEW_HIGH_BREAKOUT_FAIL: '돌파봉 종가 확인 실패',
+  NEW_HIGH_CANDLE_REJECTION: '돌파봉 긴 윗꼬리·아랫꼬리 청산',
 };
 
 function defaultRequest(settings: BacktestSettings, strategy: Strategy): BacktestRequestBody {
@@ -404,13 +409,17 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     if (!/^\d{4}-\d{2}-\d{2}$/.test(settings.startDate) || !/^\d{2}:\d{2}$/.test(settings.startTime)) throw new Error('시작일·시간을 확인해 주세요.');
     if (settings.endDate && (!/^\d{4}-\d{2}-\d{2}$/.test(settings.endDate) || !/^\d{2}:\d{2}$/.test(settings.endTime))) throw new Error('종료일·시간을 확인해 주세요.');
     if (!/^\d+(\.\d{1,2})?$/.test(settings.initialCapitalUsdt) || Number(settings.initialCapitalUsdt) < 10) throw new Error('초기자금을 확인해 주세요.');
-    if (!/^\d+(\.\d{1,2})?$/.test(settings.betAmountUsdt) || Number(settings.betAmountUsdt) < 1 || Number(settings.betAmountUsdt) > Number(settings.initialCapitalUsdt)) throw new Error('고정 베팅액을 확인해 주세요.');
+    const newHighRiskSizing = strategy === 'NEW_HIGH' && settings.newHighSizingMode === 'RISK';
+    if (!newHighRiskSizing && (!/^\d+(\.\d{1,2})?$/.test(settings.betAmountUsdt) || Number(settings.betAmountUsdt) < 1 || Number(settings.betAmountUsdt) > Number(settings.initialCapitalUsdt))) throw new Error('고정 베팅액을 확인해 주세요.');
     if (!/^\d{1,4}(\.\d{1,2})?$/.test(settings.leverage) || Number(settings.leverage) < 1 || Number(settings.leverage) > leverageMaximum) throw new Error(`레버리지는 1~${leverageMaximum}배로 입력해 주세요.`);
     if (strategy === 'DISPARITY' && (!/^(0\.[1-9]|[1-9](\.\d)?|10(\.0)?)$/.test(settings.minDisparityPercent))) throw new Error('MA60 이격률은 0.1~10.0%로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^([1-9]|[1-9]\d|100)$/.test(settings.roiClosePercent))) throw new Error('ROI 손실 청산은 1~100 정수로 입력해 주세요.');
     if (strategy === 'ENVELOPE') envelopeParameters(settings);
     if (strategy === 'PULLBACK') pullbackEnvelopeParameters(settings);
-    if (strategy === 'NEW_HIGH') { newHighPeriod(settings); newHighSlMultiplier(settings); }
+    if (strategy === 'NEW_HIGH') {
+      newHighPeriod(settings); newHighSlMultiplier(settings); newHighEntryAtrLimit(settings);
+      if (newHighRiskSizing) newHighRiskAmount(settings);
+    }
     const start = Date.parse(`${settings.startDate}T${settings.startTime}:00+09:00`);
     const end = settings.endDate ? Date.parse(`${settings.endDate}T${settings.endTime}:00+09:00`) : Date.now();
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start > Date.now()) throw new Error('분석 기간을 확인해 주세요.');
@@ -778,16 +787,23 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
 
           <div className="field-grid three">
             <label className="field-label">가상 초기자금<input inputMode="decimal" value={settings.initialCapitalUsdt} onChange={(event) => update('initialCapitalUsdt', event.target.value)} /></label>
-            <label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={(event) => update('betAmountUsdt', event.target.value)} /></label>
+            <label className="field-label">고정 베팅액<input inputMode="decimal" disabled={strategy === 'NEW_HIGH' && settings.newHighSizingMode === 'RISK'} value={settings.betAmountUsdt} onChange={(event) => update('betAmountUsdt', event.target.value)} /></label>
             <label className="field-label">레버리지<input inputMode="decimal" value={settings.leverage} onChange={(event) => update('leverage', event.target.value)} /><small>1~{leverageMaximum}배</small></label>
           </div>
 
           {strategy === 'NEW_HIGH' ? <>
             <label className="field-label">신고가 기준 봉수<input type="number" inputMode="numeric" min="6" max="1000" step="1" value={settings.newHighLookback ?? '20'} onChange={event => update('newHighLookback', event.target.value)} /><small>6~1000 · 기본 20 · 현재 봉 제외 · 최근 5봉에 고가/저가가 있으면 제외</small></label>
             <label className="field-label">SL 배수 (ATR)<input type="number" inputMode="decimal" min="0.1" max="10" step="0.1" value={settings.newHighSlMultiplier ?? '2'} onChange={event => update('newHighSlMultiplier', event.target.value)} /><small>0.1~10.0 · 기본 2.0 · 롱 매수가−ATR×배수 / 숏 매수가+ATR×배수</small></label>
+            <label className="field-label">돌파 허용범위 (ATR)<input type="number" inputMode="decimal" min="0.3" max="0.5" step="0.1" value={settings.newHighEntryAtrLimit ?? '0.5'} onChange={event => update('newHighEntryAtrLimit', event.target.value)} /><small>0.3~0.5 · 기본 0.5 · 돌파선에서 이 범위 안일 때만 진입</small></label>
+            <div className="sizing-choice" role="radiogroup" aria-label="신고가 포지션 금액 기준">
+              <span className="sizing-choice-label">포지션 금액 기준</span>
+              <label className={`radio-option${settings.newHighSizingMode !== 'RISK' ? ' selected' : ''}`}><input type="radio" name="newHighSizingMode" checked={settings.newHighSizingMode !== 'RISK'} onChange={() => update('newHighSizingMode', 'BET')} /><span>고정 베팅액</span></label>
+              <label className={`radio-option${settings.newHighSizingMode === 'RISK' ? ' selected' : ''}`}><input type="radio" name="newHighSizingMode" checked={settings.newHighSizingMode === 'RISK'} onChange={() => update('newHighSizingMode', 'RISK')} /><span>고정 손실액</span></label>
+            </div>
+            <label className="field-label">고정 손실액<input type="number" inputMode="decimal" min="0.01" step="0.01" disabled={settings.newHighSizingMode !== 'RISK'} value={settings.newHighRiskAmount ?? '100'} onChange={event => update('newHighRiskAmount', event.target.value)} /><small>고정 손실액 선택 시 활성화 · 초기 SL·수수료·슬리피지 기준 1회 허용 손실</small></label>
             <label className="checkbox-row"><input type="checkbox" checked={settings.newHighMa60Enabled === true} onChange={event => update('newHighMa60Enabled', event.target.checked)} /><span>현재가 &gt; MA60 (롱) / 현재가 &lt; MA60 (숏)일 때만 매수</span></label>
-            <p className="notice small">돌파 즉시 1회 진입 · 돌파선 ± 1ATR 이내만 매수 · 입력한 SL 배수×ATR 적용</p>
-            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 고정 베팅액으로 한 번만 진입합니다. 1ATR 라인을 돌파한 뒤 다음 캔들에서 재이탈하면 청산하며, 2ATR 수익구간에서는 롱 MA5&lt;MA20·숏 MA5&gt;MA20 조건도 적용합니다.</p>
+            <p className="notice small">돌파 즉시 1회 진입 · 돌파선 ± 입력한 0.3~0.5ATR 이내만 매수 · 돌파봉 종가·양봉/음봉 확인 · 단계형 트레일링 SL 적용</p>
+            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 한 번만 진입합니다. 롱은 양봉 종가가 이전 고가 위, 숏은 음봉 종가가 이전 저가 아래여야 하며, 진입 캔들의 반대쪽 꼬리·몸통 비율이 70% 이상이면 같은 봉 종가에 청산합니다. +1ATR부터 단계형 트레일링을 청산 시까지 계속 적용하고, 2ATR 수익구간에서는 롱 MA5&lt;MA20·숏 MA5&gt;MA20 조건도 적용합니다.</p>
           </> : strategy === 'PULLBACK' ? (
             <>
               <label className="field-label">엔벨로프 SMA<input type="number" inputMode="numeric" min="1" max="120" step="1" value={settings.envelopeMaPeriod ?? '20'} onChange={event => update('envelopeMaPeriod', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>1~120 · 기본 20</small></label>
