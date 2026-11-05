@@ -922,7 +922,7 @@ function HistoryList({
             <strong>{entry.symbol === 'ALL' ? '전체종목' : `${entry.symbol}USDT`}</strong>
             <em className={entry.result.returnPercent >= 0 ? 'positive' : 'negative'}>{percent(entry.result.returnPercent)}</em>
           </span>
-          <span>{entry.interval.toUpperCase()} · {historyPeriod(entry.settings)}</span>
+          <span>{entry.interval.toUpperCase()} · 레버리지 {entry.settings.leverage}배 · {historyPeriod(entry.settings)}</span>
           <small>저장 {new Date(entry.savedAt).toLocaleDateString('ko-KR')}</small>
         </button>
       ))}
