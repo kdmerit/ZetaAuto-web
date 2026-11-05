@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cacheCandles, lease, openCacheDatabase, readValue, writeValue } from './database';
 import { canResumeLocalJob, engineVersionFor, executeLocalJob, loadLocalJob, loadLocalResult, type LocalJobView } from './localJobs';
-import { ensureCandles, instrumentEligibility, listInstruments } from './marketData';
+import { ensureCandles, instrumentEligibility, listInstruments, MissingCandleError } from './marketData';
 import type { BacktestSettings, Candle } from './types';
 import { universeRetentionMs, weeklyUniverseDatabaseKey, type WeeklyUniverseSnapshot } from './universeCache';
 import { dailyTrendRows } from './test/envelopeFixtures';
@@ -191,6 +191,23 @@ describe('durable local analysis', () => {
     expect(paused.message).toContain('temporary candle failure');
     await executeLocalJob({ strategy: 'VOLATILITY', resumeId: paused.id }, () => undefined, new AbortController().signal);
     expect((await loadLocalJob('VOLATILITY'))?.status).toBe('COMPLETED');
+  });
+  it('skips a permanently missing-candle symbol in ALL mode and completes the remaining universe', async () => {
+    vi.mocked(listInstruments).mockResolvedValue([
+      { symbol: 'DATAUSDT', launchAt: origin - 200 * 3600 },
+      { symbol: 'GOODUSDT', launchAt: origin - 200 * 3600 },
+    ]);
+    const loader = vi.mocked(ensureCandles).getMockImplementation()!;
+    vi.mocked(ensureCandles).mockImplementation(async (instrument, ...args) => {
+      if (instrument.symbol === 'DATAUSDT') throw new MissingCandleError('DATAUSDT', '1h', origin);
+      return loader(instrument, ...args);
+    });
+    await executeLocalJob({ strategy: 'VOLATILITY', settings }, () => undefined, new AbortController().signal);
+    const completed = (await loadLocalJob('VOLATILITY'))!;
+    expect(completed.status).toBe('COMPLETED');
+    expect(completed.universeCount).toBe(1);
+    expect(completed.failedSymbols).toEqual(['DATAUSDT']);
+    expect(completed.result?.failedSymbols).toEqual(['DATAUSDT']);
   });
   it('does not request minute ordering data for the selected-timeframe strategy', async () => {
     const snapshot = { ...settings, volatilityTpEnabled: false, volatilityNextCloseEnabled: true };

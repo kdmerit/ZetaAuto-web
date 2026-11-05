@@ -870,7 +870,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           {notice && notice !== error ? <p className="notice">{notice}</p> : null}
           {error ? <p className="error" role="alert">{error}</p> : null}
           {running || localJob?.status === 'PAUSED' ? <ProgressBar completed={progress.completed} total={progress.total || Math.max(estimateBars(settings), 1)} label={progress.phase} /> : null}
-          {localJob ? <p className="muted small">분석 대상 {localJob.universeCount.toLocaleString()}종목 · 슬리피지 제외 {localJob.excludedCount.toLocaleString()}종목{localJob.status === 'COMPLETED' ? ' · 완료' : localJob.status === 'PAUSED' ? ' · 일시정지' : ''}</p> : null}
+          {localJob ? <p className="muted small">분석 대상 {localJob.universeCount.toLocaleString()}종목 · 슬리피지 제외 {localJob.excludedCount.toLocaleString()}종목{localJob.failedSymbols.length ? ` · 캔들 누락 제외 ${localJob.failedSymbols.length}종목` : ''}{localJob.status === 'COMPLETED' ? ' · 완료' : localJob.status === 'PAUSED' ? ' · 일시정지' : ''}</p> : null}
           {localJob?.settings.mode === 'ALL' && localJob.universeCheckedAt ? <p className="muted small">전체종목 필터: {new Date(localJob.universeCheckedAt).toLocaleString('ko-KR')} 검사 · 7일 공통 재사용</p> : null}
           {activeServer ? <ProgressBar completed={serverJob.completedBars} total={Math.max(serverJob.totalBars, 1)} label={`${serverJob.phase === 'UNIVERSE' ? '종목 확인' : serverJob.phase === 'DATA' ? '캔들 조회' : '전략 계산'} · ${serverJob.status === 'QUEUED' ? '대기 중' : '분석 중'}`} /> : null}
         </section>
@@ -930,6 +930,7 @@ function ResultCard({ result, onOpenTrade }: { result: BacktestResult; onOpenTra
         <div><span>최대 낙폭</span><strong>{percent(result.maxDrawdownPercent)}</strong></div>
       </div>
       <p className="muted small">관찰 캔들 {result.observedBars.toLocaleString()}개 · 수수료 {money(result.feesUsdt)} USDT · 2차 체결 {result.secondFillCount}회</p>
+      {result.failedSymbols?.length ? <p className="notice small">캔들 누락으로 제외된 종목 {result.failedSymbols.length}개: {result.failedSymbols.slice(0, 8).join(', ')}{result.failedSymbols.length > 8 ? ' 외' : ''}</p> : null}
       {Object.keys(result.exitReasons).length > 0 ? <div className="reason-list">{Object.entries(result.exitReasons).map(([reason, count]) => <span key={reason}>{reasonLabels[reason] ?? reason} {count}</span>)}</div> : null}
       {result.recentTrades.length > 0 ? (
         <div className="trade-list">

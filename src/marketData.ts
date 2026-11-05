@@ -5,6 +5,15 @@ import type { CandleInterval, BacktestSettings, Candle } from './types';
 
 export interface Instrument { symbol: string; launchAt: number }
 export interface EligibleInstrument extends Instrument { LONG: boolean; SHORT: boolean }
+export class MissingCandleError extends Error {
+  constructor(public readonly symbol: string, public readonly interval: CandleInterval, public readonly openTime: number) {
+    super(`${symbol}의 ${new Date(openTime * 1000).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} 캔들이 누락되었습니다. 다시 이어가 주세요.`);
+    this.name = 'MissingCandleError';
+  }
+}
+export function isMissingCandleError(error: unknown): boolean {
+  return error instanceof MissingCandleError;
+}
 interface PublicSnapshot<T> { expiresAt: number; data: T }
 interface ListingPrefix { emptyUntil: number; firstAt?: number }
 interface BybitEnvelope<T> { retCode: number; result: T }
@@ -181,11 +190,14 @@ export async function ensureCandles(instrument: Instrument, interval: CandleInte
       cursor = emptyUntil - seconds;
       continue;
     }
-    // Retry the precise absent bar once in case a broad response was temporarily incomplete.
-    const retried = await download(instrument.symbol, interval, cursor, cursor + seconds, signal);
-    await cacheCandles(instrument.symbol, interval, retried);
-    retried.forEach(candle => byTime.set(candle.openTime, candle));
-    if (!byTime.has(cursor)) throw new Error(`${instrument.symbol}의 ${new Date(cursor * 1000).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} 캔들이 누락되었습니다. 다시 이어가 주세요.`);
+    // Retry the precise absent bar several times in case a broad response was temporarily incomplete.
+    for (let attempt = 0; attempt < 3 && !byTime.has(cursor); attempt += 1) {
+      if (attempt > 0) await delay(250 * attempt, signal);
+      const retried = await download(instrument.symbol, interval, cursor, cursor + seconds, signal);
+      await cacheCandles(instrument.symbol, interval, retried);
+      retried.forEach(candle => byTime.set(candle.openTime, candle));
+    }
+    if (!byTime.has(cursor)) throw new MissingCandleError(instrument.symbol, interval, cursor);
   }
   return [...byTime.values()].filter(candle => candle.openTime >= start && candle.openTime < end).sort((a, b) => a.openTime - b.openTime);
 }

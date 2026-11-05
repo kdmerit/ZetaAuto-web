@@ -2,7 +2,7 @@
 import { intervalSeconds } from './api';
 import { deletePrefix, deleteValue, lease, maintainCache, readValue, writeValue } from './database';
 import { prepareSymbolBlock, type PreparedSymbol, type WaveState } from './engine';
-import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, type EligibleInstrument, type Instrument } from './marketData';
+import { analysisWindow, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateMinuteCandles } from './intrabar';
 import { atrWindowSeconds } from './atr';
@@ -43,6 +43,8 @@ export interface LocalJob {
   universeCheckedAt?: number;
   universeCacheExpiresAt?: number;
   excludedCount: number;
+  /** Symbols skipped from ALL-mode replay because their historical candle gap could not be repaired. */
+  failedSymbols: string[];
   updatedAt: number;
   message: string | null;
   state: PortfolioState;
@@ -68,7 +70,7 @@ async function readJob(strategy: Strategy): Promise<LocalJob | null> {
   const snapshot = await readValue<AccountSnapshot>('results', header.snapshotKey);
   if (!snapshot) throw new Error('저장된 분석 진행 상태가 없습니다. 새 분석을 시작해 주세요.');
   const { snapshotKey: _key, ...job } = header;
-  return { ...job, ...snapshot };
+  return { ...job, ...snapshot, failedSymbols: job.failedSymbols ?? [] };
 }
 
 export function jobView(job: LocalJob): LocalJobView {
@@ -81,6 +83,7 @@ export function jobView(job: LocalJob): LocalJobView {
   const result = state.observedBars || job.status === 'COMPLETED' ? {
     ...portfolioResult(state, job.settings), localRunId: job.id,
     universeCount: universe.length, excludedCount: job.excludedCount,
+    ...(job.failedSymbols.length ? { failedSymbols: [...job.failedSymbols] } : {}),
   } : null;
   return {
     ...view, candidateCount: candidates.length, universeCount: universe.length, result,
@@ -169,7 +172,7 @@ async function executeWithLease(
       job = {
         id: crypto.randomUUID(), version: engineVersionFor(options.strategy), strategy: options.strategy, settings,
         status: 'RUNNING', phase: 'UNIVERSE', start, end, blockStart: start, cursor: 0,
-        candidates: [], universe: [], excludedCount: 0, updatedAt: Date.now(), message: null,
+        candidates: [], universe: [], excludedCount: 0, failedSymbols: [], updatedAt: Date.now(), message: null,
         state: initialPortfolio(Number(settings.initialCapitalUsdt)), waveStates: {},
       };
     }
@@ -226,35 +229,43 @@ async function executeWithLease(
     const seconds = intervalSeconds(job.settings.interval);
     while (job.blockStart < job.end) {
       signal.throwIfAborted();
+      if (!job.universe.length) throw new Error('캔들을 확보할 수 있는 종목이 없습니다. 분석 기간의 데이터를 확인해 주세요.');
       const blockEnd = Math.min(job.end, job.blockStart + blockSize(job) * seconds);
       const prefix = `${job.id}:${job.blockStart}:`;
       while (job.cursor < job.universe.length) {
         signal.throwIfAborted();
         const instrument = job.universe[job.cursor]!;
         const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings) : job.strategy === 'VOLATILITY' ? Math.max(atrWindowSeconds + seconds, 200 * seconds) : 200 * seconds;
-        const candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
-        const executionInterval = job.strategy === 'NEW_HIGH' ? newHighExecutionInterval(job.settings.interval) : null;
-        const newHighIntrabarCandles = executionInterval
-          ? await ensureCandles(instrument, executionInterval, job.blockStart, blockEnd, blockEnd, signal)
-          : undefined;
-        const daily = job.strategy === 'ENVELOPE' && job.settings.envelopeDailyTrend
-          ? await ensureCandles(instrument, '1d', Math.floor(job.blockStart / 86400) * 86400 - 25 * 86400, Math.floor((blockEnd - seconds) / 86400) * 86400, undefined, signal) : undefined;
-        const prepared = prepareSymbolBlock(instrument.symbol, candles, job.settings, job.strategy, job.blockStart, blockEnd, job.waveStates[instrument.symbol], undefined, daily, newHighIntrabarCandles);
-        for (const bar of prepared.bars) if (bar.signal && !instrument[bar.signal.side]) bar.signal = null;
-        for (const bar of prepared.bars) if (bar.envelope) {
-          bar.envelope.long &&= instrument.LONG;
-          bar.envelope.short &&= instrument.SHORT;
+        try {
+          const candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
+          const executionInterval = job.strategy === 'NEW_HIGH' ? newHighExecutionInterval(job.settings.interval) : null;
+          const newHighIntrabarCandles = executionInterval
+            ? await ensureCandles(instrument, executionInterval, job.blockStart, blockEnd, blockEnd, signal)
+            : undefined;
+          const daily = job.strategy === 'ENVELOPE' && job.settings.envelopeDailyTrend
+            ? await ensureCandles(instrument, '1d', Math.floor(job.blockStart / 86400) * 86400 - 25 * 86400, Math.floor((blockEnd - seconds) / 86400) * 86400, undefined, signal) : undefined;
+          const prepared = prepareSymbolBlock(instrument.symbol, candles, job.settings, job.strategy, job.blockStart, blockEnd, job.waveStates[instrument.symbol], undefined, daily, newHighIntrabarCandles);
+          for (const bar of prepared.bars) if (bar.signal && !instrument[bar.signal.side]) bar.signal = null;
+          for (const bar of prepared.bars) if (bar.envelope) {
+            bar.envelope.long &&= instrument.LONG;
+            bar.envelope.short &&= instrument.SHORT;
+          }
+          for (const bar of prepared.bars) if (bar.newHigh) { bar.newHigh.long &&= instrument.LONG; bar.newHigh.short &&= instrument.SHORT; }
+          for (const bar of prepared.bars) {
+            if (bar.signal?.exitMode !== 'VOLATILITY_TP') continue;
+            bar.intrabarCandles = await ensureCandles(instrument, '1m', bar.candle.openTime, bar.candle.closeTime, bar.candle.closeTime, signal);
+            validateMinuteCandles(bar.candle, bar.intrabarCandles);
+          }
+          await writeValue('prepared', prefix + instrument.symbol, prepared);
+          job.cursor += 1;
+          if (job.cursor % 4 === 0 || job.cursor === job.universe.length) await checkpoint();
+        } catch (error) {
+          if (job.settings.mode !== 'ALL' || !isMissingCandleError(error)) throw error;
+          job.failedSymbols = [...new Set([...job.failedSymbols, instrument.symbol])];
+          job.universe.splice(job.cursor, 1);
         }
-        for (const bar of prepared.bars) if (bar.newHigh) { bar.newHigh.long &&= instrument.LONG; bar.newHigh.short &&= instrument.SHORT; }
-        for (const bar of prepared.bars) {
-          if (bar.signal?.exitMode !== 'VOLATILITY_TP') continue;
-          bar.intrabarCandles = await ensureCandles(instrument, '1m', bar.candle.openTime, bar.candle.closeTime, bar.candle.closeTime, signal);
-          validateMinuteCandles(bar.candle, bar.intrabarCandles);
-        }
-        await writeValue('prepared', prefix + instrument.symbol, prepared);
-        job.cursor += 1;
-        if (job.cursor % 4 === 0 || job.cursor === job.universe.length) await checkpoint();
       }
+      if (!job.universe.length) throw new Error('캔들을 확보할 수 있는 종목이 없습니다. 분석 기간의 데이터를 확인해 주세요.');
       signal.throwIfAborted();
       job.phase = 'REPLAY';
       publish(jobView(job));
