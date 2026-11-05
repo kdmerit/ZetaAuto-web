@@ -45,8 +45,8 @@ describe('new high/low causal strategy', () => {
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
     expect(newHighWarmup({ ...settings, interval: '1d' })).toBe(60 * 86400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.62'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
-    expect(canResumeLocalJob({ version: '2.10.62', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.63'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
+    expect(canResumeLocalJob({ version: '2.10.63', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {
     const data = history(); data[585]!.high = 120; data[585]!.low = 50;
@@ -135,7 +135,7 @@ describe('new high/low causal strategy', () => {
   });
   it('does not use MA5/MA20 as a separate exit condition', () => {
     const first = bar(0, 101.5, 102.3, 101.4, 102);
-    const oneAverage = bar(1, 101.5, 101.5, 100.5, 101, { sum9: 918, atr: null });
+    const oneAverage = bar(1, 101.5, 101.5, 101.4, 101.5, { sum9: 918, atr: null });
     const state = simulate([first, oneAverage]); expect(state.positions.BTCUSDT).toBeDefined();
     expect(state.closed).toBe(0);
     expect(state.trades).toHaveLength(0);
@@ -189,6 +189,18 @@ describe('new high/low causal strategy', () => {
     replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [next] }], settings, next.candle.openTime, next.candle.closeTime, 3600);
     expect(state.closed).toBe(1);
     expect(state.trades[0]!.reason).toBe('NEW_HIGH_TRAILING');
+  });
+  it('closes on the first 15m break of the entry parent low in the next parent candle', () => {
+    const entry = bar(0, 101.5, 102.3, 101.4, 102);
+    const next = bar(1, 102, 102.5, 101.3, 102, { sum4: 400 });
+    next.newHighIntrabarCandles = [{
+      openTime: origin + 3600, closeTime: origin + 4500,
+      open: 102, high: 102.5, low: 101.3, close: 102, volume: 100,
+    }];
+    const state = simulate([entry, next]);
+    expect(state.closed).toBe(1);
+    expect(state.trades[0]!.reason).toBe('NEW_HIGH_NEXT_CANDLE_BREAK');
+    expect(state.trades[0]!.exitPrice).toBeLessThan(101.4);
   });
   it('uses a lower-timeframe candle for the breakout entry fill', () => {
     const parent = bar(0, 101, 102.5, 100.5, 102);

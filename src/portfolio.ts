@@ -36,6 +36,9 @@ interface Holding {
   pullbackMa60Exit?: number;
   newHighTrailStep?: number;
   newHighTrailLevels?: { step: number; price: number; reachedPrice?: number }[];
+  newHighEntryParentOpenTime?: number;
+  newHighEntryParentLow?: number;
+  newHighEntryParentHigh?: number;
 }
 
 export interface PortfolioState {
@@ -129,7 +132,7 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_TRAILING', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT'].includes(reason);
+  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT'].includes(reason);
   const fill = market ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
   const qty = Math.min(p.qty, quantity);
   const profit = gross(p, fill, qty);
@@ -588,16 +591,35 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     enter(state, symbol, { strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime),
       entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', newHighAtr: definition.atr!, ...(riskAmount !== undefined ? { riskAmount } : {}) }, executionCandle, settings);
     const p = state.positions[symbol];
-    if (p) { p.newHighTrailStep = 0; enteredThisCandle = true; spent += p.margin + p.margin * leverage * feeRate; }
+    if (p) {
+      p.newHighTrailStep = 0;
+      p.newHighEntryParentOpenTime = candle.openTime;
+      p.newHighEntryParentLow = candle.low;
+      p.newHighEntryParentHigh = candle.high;
+      enteredThisCandle = true;
+      spent += p.margin + p.margin * leverage * feeRate;
+    }
   };
   const eligible = (side: 'LONG' | 'SHORT'): boolean => definition.atr !== null && definition.atr > 0 && (side === 'LONG' ? definition.long : definition.short);
   const longEntry = definition.high + 0.5 * definition.atr!; const shortEntry = definition.low - 0.5 * definition.atr!;
+  const parentSeconds = candle.closeTime - candle.openTime;
+  const isNextEntryParent = (p: Holding): boolean => p.newHighEntryParentOpenTime !== undefined
+    && candle.openTime === p.newHighEntryParentOpenTime + parentSeconds;
+  const nextEntryBreakPrice = (p: Holding): number | null => {
+    if (!isNextEntryParent(p)) return null;
+    return p.signal.side === 'LONG' ? p.newHighEntryParentLow ?? null : p.newHighEntryParentHigh ?? null;
+  };
   const atOpen = state.positions[symbol];
   let trailReachedAtParentOpen = false;
   if (atOpen) {
     trailReachedAtParentOpen = advanceTrail(atOpen, candle.open);
     const long = atOpen.signal.side === 'LONG';
-    if (long ? candle.open <= atOpen.stop : candle.open >= atOpen.stop) close(state, atOpen, candle.open, atOpen.qty, stopReason(atOpen), candle, true);
+    const breakPrice = nextEntryBreakPrice(atOpen);
+    if (breakPrice !== null && (long ? candle.open < breakPrice : candle.open > breakPrice)) {
+      close(state, atOpen, candle.open, atOpen.qty, 'NEW_HIGH_NEXT_CANDLE_BREAK', candle, true);
+    } else if (long ? candle.open <= atOpen.stop : candle.open >= atOpen.stop) {
+      close(state, atOpen, candle.open, atOpen.qty, stopReason(atOpen), candle, true);
+    }
   }
   const processExecutionCandle = (executionCandle: Candle): void => {
     // A 15m candle that first reaches an ATR stage cannot also close through
@@ -612,6 +634,11 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     if (openingPosition && !enteredThisCandle) {
       noteTrailAdvance(openingPosition, executionCandle.open);
       const long = openingPosition.signal.side === 'LONG';
+      const breakPrice = nextEntryBreakPrice(openingPosition);
+      if (breakPrice !== null && (long ? executionCandle.open < breakPrice : executionCandle.open > breakPrice)) {
+        close(state, openingPosition, executionCandle.open, openingPosition.qty, 'NEW_HIGH_NEXT_CANDLE_BREAK', executionCandle, true);
+        return;
+      }
       if (long ? executionCandle.open <= openingPosition.stop : executionCandle.open >= openingPosition.stop) {
         close(state, openingPosition, executionCandle.open, openingPosition.qty, stopReason(openingPosition), executionCandle, true);
         return;
@@ -627,11 +654,15 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
       let before = path[i - 1]!; const after = path[i]!;
       for (let count = 0; count < 3; count += 1) {
         const p = state.positions[symbol];
-        const events: { price: number; kind: 'SL' | 'LONG' | 'SHORT' }[] = [];
+        const events: { price: number; kind: 'SL' | 'NEXT_CANDLE_BREAK' | 'LONG' | 'SHORT' }[] = [];
         if (p && !enteredThisCandle) {
           noteTrailAdvance(p, before);
           noteTrailAdvance(p, after);
           const long = p.signal.side === 'LONG';
+          const breakPrice = nextEntryBreakPrice(p);
+          if (breakPrice !== null && (long ? before >= breakPrice && after < breakPrice : before <= breakPrice && after > breakPrice)) {
+            events.push({ price: breakPrice, kind: 'NEXT_CANDLE_BREAK' });
+          }
           if (!trailReachedThisCandle && (long ? before >= p.stop && after <= p.stop : before <= p.stop && after >= p.stop)) {
             events.push({ price: p.stop, kind: 'SL' });
           }
@@ -641,8 +672,8 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
         }
         events.sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
         const event = events[0]; if (!event) break;
-        if (event.kind === 'SL') {
-          close(state, p!, event.price, p!.qty, stopReason(p!), executionCandle);
+        if (event.kind === 'SL' || event.kind === 'NEXT_CANDLE_BREAK') {
+          close(state, p!, event.price, p!.qty, event.kind === 'NEXT_CANDLE_BREAK' ? 'NEW_HIGH_NEXT_CANDLE_BREAK' : stopReason(p!), executionCandle);
           return;
         }
         const direction = event.kind === 'LONG' ? 1 : -1;

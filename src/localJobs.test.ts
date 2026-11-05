@@ -60,7 +60,7 @@ describe('durable local analysis', () => {
     if (paused.status === 'PAUSED') {
       await executeLocalJob({ strategy: 'NEW_HIGH', settings: { ...input, newHighLookback: '99', betAmountUsdt: '1' }, resumeId: paused.id }, () => {}, new AbortController().signal);
     }
-      const completed = (await loadLocalJob('NEW_HIGH'))!; expect(completed.status).toBe('COMPLETED'); expect(completed.version).toBe('2.10.62');
+      const completed = (await loadLocalJob('NEW_HIGH'))!; expect(completed.status).toBe('COMPLETED'); expect(completed.version).toBe('2.10.63');
     expect(completed.id).toBe(paused.id); expect(completed.settings.newHighLookback).toBe('30'); expect(completed.settings.betAmountUsdt).toBe('100');
     expect(completed.settings.interval).toBe(interval); expect(completed.total).toBe((completed.end - completed.start) / seconds * 2);
     const saved = (await loadLocalResult(completed.id))!; expect(saved.result).toEqual(completed.result);
