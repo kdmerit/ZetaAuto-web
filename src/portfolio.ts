@@ -540,7 +540,7 @@ interface NewHighPath { state: PortfolioState; spent: number }
 function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, holding: Holding | undefined, lowFirst: boolean): NewHighPath {
   const state = initialPortfolio(available); const definition = bar.newHigh!; const candle = bar.candle;
   if (holding) state.positions[symbol] = structuredClone(holding);
-  let spent = 0; let attempted = holding !== undefined;
+  let spent = 0; let attempted = holding !== undefined; let enteredThisCandle = false;
   const leverage = Number(settings.leverage);
   const riskAmount = settings.newHighSizingMode === 'RISK' ? newHighRiskAmount(settings) : undefined;
   const ma10 = (price: number) => (definition.sum9 + price) / 10;
@@ -584,7 +584,7 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     enter(state, symbol, { strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime),
       entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', newHighAtr: definition.atr!, ...(riskAmount !== undefined ? { riskAmount } : {}) }, candle, settings);
     const p = state.positions[symbol];
-    if (p) { p.newHighTrailStep = 0; spent += p.margin + p.margin * leverage * feeRate; }
+    if (p) { p.newHighTrailStep = 0; enteredThisCandle = true; spent += p.margin + p.margin * leverage * feeRate; }
   };
   const eligible = (side: 'LONG' | 'SHORT'): boolean => definition.atr !== null && definition.atr > 0 && (side === 'LONG' ? definition.long : definition.short);
   const longEntry = definition.high + 0.5 * definition.atr!; const shortEntry = definition.low - 0.5 * definition.atr!;
@@ -601,7 +601,7 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     for (let count = 0; count < 3; count += 1) {
       const p = state.positions[symbol];
       const events: { price: number; kind: 'SL' | 'LONG' | 'SHORT' }[] = [];
-      if (p) {
+      if (p && !enteredThisCandle) {
         advanceTrail(p, before); advanceTrail(p, after);
         const long = p.signal.side === 'LONG';
         if (long ? before >= p.stop && after <= p.stop : before <= p.stop && after >= p.stop) events.push({ price: p.stop, kind: 'SL' });

@@ -41,8 +41,8 @@ describe('new high/low causal strategy', () => {
     expect(currentNewHighSettings({ ...settings, interval: '15m', partialTpEnabled: true })).toMatchObject({ interval: '1h', partialTpEnabled: false });
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.59'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
-    expect(canResumeLocalJob({ version: '2.10.59', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.60'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
+    expect(canResumeLocalJob({ version: '2.10.60', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {
     const data = history(); data[585]!.high = 120; data[585]!.low = 50;
@@ -181,6 +181,13 @@ describe('new high/low causal strategy', () => {
     expect(failed.entries).toBe(1); expect(failed.closed).toBe(0); expect(failed.positions.BTCUSDT).toBeDefined();
     const wick = simulate([bar(0, 105, 111, 104, 106, { atr: 10 })]);
     expect(wick.entries).toBe(1); expect(wick.closed).toBe(0); expect(wick.positions.BTCUSDT).toBeDefined();
+  });
+  it.each(['LONG', 'SHORT'] as const)('does not trigger an SL on the %s entry candle', side => {
+    const entryBar = side === 'LONG'
+      ? bar(0, 101, 105, 97, 102)
+      : bar(0, 99, 103, 97, 98, { long: false, short: true });
+    const state = simulate([entryBar], { ...settings, side });
+    expect(state.entries).toBe(1); expect(state.closed).toBe(0); expect(state.positions.BTCUSDT).toBeDefined();
   });
   it('shares one account and refuses unaffordable new entries', () => {
     const parameters = { ...settings, mode: 'ALL' as const, initialCapitalUsdt: '250' };
