@@ -3,7 +3,7 @@ import type { PreparedBar, PreparedSymbol } from './engine';
 import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, ContractRisk, Execution, PriceLine, Signal } from './types';
 import { validateMinuteCandles } from './intrabar';
 import { dailyTrendAllows, envelopeParameters } from './envelope';
-import { newHighEntryAtrLimit, newHighRiskAmount, newHighSlMultiplier } from './newHigh';
+import { newHighRiskAmount, newHighSlMultiplier } from './newHigh';
 import { estimatedLiquidation } from './contractRisk';
 
 const feeRate = 0.00055;
@@ -540,7 +540,7 @@ interface NewHighPath { state: PortfolioState; spent: number }
 function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, holding: Holding | undefined, lowFirst: boolean): NewHighPath {
   const state = initialPortfolio(available); const definition = bar.newHigh!; const candle = bar.candle;
   if (holding) state.positions[symbol] = structuredClone(holding);
-  let spent = 0; let attempted = holding !== undefined; let enteredThisCandle = false;
+  let spent = 0; let attempted = holding !== undefined;
   const leverage = Number(settings.leverage);
   const riskAmount = settings.newHighSizingMode === 'RISK' ? newHighRiskAmount(settings) : undefined;
   const ma10 = (price: number) => (definition.sum9 + price) / 10;
@@ -548,7 +548,6 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
   const ma60 = (price: number): number | null => definition.sum59 !== undefined && Number.isFinite(definition.sum59)
     ? (definition.sum59 + price) / 60 : null;
   const slMultiplier = newHighSlMultiplier(settings);
-  const entryAtrLimit = newHighEntryAtrLimit(settings);
   const tolerance = (...values: number[]) => Math.max(Number.MIN_VALUE, ...values.map(value => Math.abs(value) * Number.EPSILON * 16));
   const advanceTrail = (p: Holding, price: number): void => {
     const atr = p.signal.newHighAtr ?? Math.abs(p.target - p.first) / 2;
@@ -568,7 +567,6 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     p.newHighTrailStep = step;
   };
   const stopReason = (p: Holding): string => (p.newHighTrailStep ?? 0) > 0 ? 'NEW_HIGH_TRAILING' : 'SL';
-  const candleRange = candle.high - candle.low;
   const attempt = (side: 'LONG' | 'SHORT', price: number): void => {
     attempted = true;
     const direction = side === 'LONG' ? 1 : -1;
@@ -579,14 +577,14 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     if (direction * (ma10(price) - ma20(price)) <= 0
       || settings.newHighMa60Enabled === true && (currentMa60 === null || direction * (price - currentMa60) <= 0)
       || direction * (fill - boundary) < 0.5 * definition.atr! - tolerance(fill, boundary, definition.atr!)
-      || direction * (fill - boundary) > entryAtrLimit * definition.atr! + tolerance(fill, boundary, definition.atr!)) return;
+      || direction * (fill - boundary) > definition.atr! + tolerance(fill, boundary, definition.atr!)) return;
     const stop = fill - direction * slMultiplier * definition.atr!;
     if (!(stop > 0) || (side === 'LONG' ? stop >= price : stop <= price)) return;
     const target = fill + direction * 2 * definition.atr!;
     enter(state, symbol, { strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime),
       entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', newHighAtr: definition.atr!, ...(riskAmount !== undefined ? { riskAmount } : {}) }, candle, settings);
     const p = state.positions[symbol];
-    if (p) { p.newHighTrailStep = 0; enteredThisCandle = true; spent += p.margin + p.margin * leverage * feeRate; }
+    if (p) { p.newHighTrailStep = 0; spent += p.margin + p.margin * leverage * feeRate; }
   };
   const eligible = (side: 'LONG' | 'SHORT'): boolean => definition.atr !== null && definition.atr > 0 && (side === 'LONG' ? definition.long : definition.short);
   const longEntry = definition.high + 0.5 * definition.atr!; const shortEntry = definition.low - 0.5 * definition.atr!;
@@ -618,18 +616,6 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
       attempt(event.kind, event.price + direction * tolerance(event.price));
       before = event.price;
     }
-  }
-  const newEntry = enteredThisCandle ? state.positions[symbol] : undefined;
-  if (newEntry) {
-    const long = newEntry.signal.side === 'LONG';
-    const directionConfirmed = long ? candle.close > candle.open && candle.close > definition.high : candle.close < candle.open && candle.close < definition.low;
-    const rejection = candleRange > 0
-      ? long
-        ? (Math.max(0, candle.high - Math.max(candle.open, candle.close)) + Math.max(0, candle.open - candle.close)) / candleRange
-        : (Math.max(0, Math.min(candle.open, candle.close) - candle.low) + Math.max(0, candle.close - candle.open)) / candleRange
-      : 0;
-    if (!directionConfirmed) close(state, newEntry, candle.close, newEntry.qty, 'NEW_HIGH_BREAKOUT_FAIL', candle);
-    else if (rejection >= 0.7) close(state, newEntry, candle.close, newEntry.qty, 'NEW_HIGH_CANDLE_REJECTION', candle);
   }
   const remaining = state.positions[symbol];
   if (remaining) remaining.mark = candle.close;

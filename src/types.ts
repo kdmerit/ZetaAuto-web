@@ -60,7 +60,6 @@ export interface BacktestSettings {
   newHighLookback?: string;
   newHighSlMultiplier?: string;
   newHighMa60Enabled?: boolean;
-  newHighEntryAtrLimit?: string;
   newHighSizingMode?: 'BET' | 'RISK';
   newHighRiskAmount?: string;
 }

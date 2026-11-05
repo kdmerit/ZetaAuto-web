@@ -40,7 +40,7 @@ import { EnvelopeTrendControl } from './EnvelopeTrendControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
-import { currentNewHighSettings, newHighEntryAtrLimit, newHighPeriod, newHighRiskAmount, newHighRules, newHighSlMultiplier } from '../newHigh';
+import { currentNewHighSettings, newHighPeriod, newHighRiskAmount, newHighRules, newHighSlMultiplier } from '../newHigh';
 
 const strategySettings = (strategy: Strategy, value: BacktestSettings): BacktestSettings => strategy === 'NEW_HIGH'
   ? currentNewHighSettings(value) : strategy === 'ENVELOPE' ? currentEnvelopeSettings(value) : strategy === 'PULLBACK' ? currentPullbackSettings(value) : value;
@@ -89,7 +89,6 @@ export function defaultSettings(): BacktestSettings {
     newHighLookback: '20',
     newHighSlMultiplier: '2',
     newHighMa60Enabled: false,
-    newHighEntryAtrLimit: '1',
     newHighSizingMode: 'BET',
     newHighRiskAmount: '100',
   };
@@ -416,7 +415,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     if (strategy === 'ENVELOPE') envelopeParameters(settings);
     if (strategy === 'PULLBACK') pullbackEnvelopeParameters(settings);
     if (strategy === 'NEW_HIGH') {
-      newHighPeriod(settings); newHighSlMultiplier(settings); newHighEntryAtrLimit(settings);
+      newHighPeriod(settings); newHighSlMultiplier(settings);
       if (newHighRiskSizing) newHighRiskAmount(settings);
     }
     const start = Date.parse(`${settings.startDate}T${settings.startTime}:00+09:00`);
@@ -793,7 +792,6 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           {strategy === 'NEW_HIGH' ? <>
             <label className="field-label">신고가 기준 봉수<input type="number" inputMode="numeric" min="6" max="1000" step="1" value={settings.newHighLookback ?? '20'} onChange={event => update('newHighLookback', event.target.value)} /><small>6~1000 · 기본 20 · 현재 봉 제외 · 최근 5봉에 고가/저가가 있으면 제외</small></label>
             <label className="field-label">SL 배수 (ATR)<input type="number" inputMode="decimal" min="0.1" max="10" step="0.1" value={settings.newHighSlMultiplier ?? '2'} onChange={event => update('newHighSlMultiplier', event.target.value)} /><small>0.1~10.0 · 기본 2.0 · 롱 매수가−ATR×배수 / 숏 매수가+ATR×배수</small></label>
-            <label className="field-label">돌파 허용 상한 (ATR)<input type="number" inputMode="decimal" min="0.5" max="1" step="0.1" value={settings.newHighEntryAtrLimit ?? '1'} onChange={event => update('newHighEntryAtrLimit', event.target.value)} /><small>0.5~1.0 · 기본 1.0 · 돌파선 +0.5ATR 이상, 입력값 이하에서만 진입</small></label>
             <div className="sizing-choice" role="radiogroup" aria-label="신고가 포지션 금액 기준">
               <span className="sizing-choice-label">포지션 금액 기준</span>
               <label className={`radio-option${settings.newHighSizingMode !== 'RISK' ? ' selected' : ''}`}><input type="radio" name="newHighSizingMode" checked={settings.newHighSizingMode !== 'RISK'} onChange={() => update('newHighSizingMode', 'BET')} /><span>고정 베팅액</span></label>
@@ -804,8 +802,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <label className="field-label">고정 손실액<input type="number" inputMode="decimal" min="0.01" step="0.01" disabled={settings.newHighSizingMode !== 'RISK'} value={settings.newHighRiskAmount ?? '100'} onChange={event => update('newHighRiskAmount', event.target.value)} /><small>고정 손실액 선택 시 활성화 · 초기 SL·수수료·슬리피지 기준 1회 허용 손실</small></label>
             </div>
             <label className="checkbox-row"><input type="checkbox" checked={settings.newHighMa60Enabled === true} onChange={event => update('newHighMa60Enabled', event.target.checked)} /><span>현재가 &gt; MA60 (롱) / 현재가 &lt; MA60 (숏)일 때만 매수</span></label>
-            <p className="notice small">조건 충족 시 봉 중간 1회 진입 · 돌파선 +0.5~1.0ATR 범위에서만 매수 · 종가/꼬리 확인 · 단계형 트레일링 SL 적용</p>
-            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 한 번만 진입합니다. 롱은 현재가가 시가보다 높고 숏은 현재가가 시가보다 낮을 때 진입하며, 진입 후 캔들 마감 시 반대쪽 꼬리·몸통 비율이 70% 이상이거나 돌파 방향으로 마감하지 않으면 같은 봉 종가에 청산합니다. +1ATR부터 단계형 트레일링을 청산 시까지 계속 적용합니다. 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
+            <p className="notice small">조건 충족 시 봉 중간 1회 진입 · 돌파선 +0.5~1.0ATR 범위에서만 매수 · 단계형 트레일링 SL 적용</p>
+            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h는 확정 480봉, 4h는 확정 120봉을 사용하며 종목당 한 번만 진입합니다. 롱은 현재가가 시가보다 높고 숏은 현재가가 시가보다 낮을 때 진입합니다. +1ATR부터 단계형 트레일링을 청산 시까지 계속 적용합니다. 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
           </> : strategy === 'PULLBACK' ? (
             <>
               <label className="field-label">엔벨로프 SMA<input type="number" inputMode="numeric" min="1" max="120" step="1" value={settings.envelopeMaPeriod ?? '20'} onChange={event => update('envelopeMaPeriod', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>1~120 · 기본 20</small></label>

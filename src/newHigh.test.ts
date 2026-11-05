@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import { prepareSymbolBlock, runBacktest } from './engine';
-import { currentNewHighSettings, newHighEntryAtrLimit, newHighPeriod, newHighRiskAmount, newHighSlMultiplier, newHighWarmup, prepareNewHigh, type PreparedNewHigh } from './newHigh';
+import { currentNewHighSettings, newHighPeriod, newHighRiskAmount, newHighSlMultiplier, newHighWarmup, prepareNewHigh, type PreparedNewHigh } from './newHigh';
 import { engineVersionFor, canResumeLocalJob } from './localJobs';
 import type { PreparedBar, PreparedSymbol } from './engine';
 import type { BacktestSettings, Candle } from './types';
@@ -9,7 +9,7 @@ import type { BacktestSettings, Candle } from './types';
 const settings: BacktestSettings = { mode: 'SINGLE', symbol: 'BTC', interval: '1h', startDate: '2026-01-01', startTime: '09:00', endDate: '', endTime: '00:00',
   initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '1', side: 'LONG', partialTpEnabled: false,
   fullTpWavePercent: '100', minDisparityPercent: '1', ma20HalfCloseEnabled: false, roiClosePercent: '100',
-  minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1', volatilityTpEnabled: true, volatilityNextCloseEnabled: false, newHighLookback: '20', newHighEntryAtrLimit: '1', newHighSizingMode: 'BET', newHighRiskAmount: '100' };
+  minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1', volatilityTpEnabled: true, volatilityNextCloseEnabled: false, newHighLookback: '20', newHighSizingMode: 'BET', newHighRiskAmount: '100' };
 const origin = Date.UTC(2026, 0, 1) / 1000;
 const definition: PreparedNewHigh = { atr: 2, sum4: 300, sum9: 900, sum19: 1900, sum59: 5900, high: 101, low: 99, long: true, short: false };
 function bar(i: number, open: number, high: number, low: number, close: number, overrides: Partial<PreparedNewHigh> = {}): PreparedBar {
@@ -33,18 +33,16 @@ describe('new high/low causal strategy', () => {
   it('validates configurable N and only accepts 1h/4h without changing other engines', () => {
     expect(newHighPeriod(settings)).toBe(20); expect(newHighPeriod({ ...settings, newHighLookback: '1000' })).toBe(1000);
     expect(newHighSlMultiplier(settings)).toBe(2); expect(newHighSlMultiplier({ ...settings, newHighSlMultiplier: '1.5' })).toBe(1.5);
-    expect(newHighEntryAtrLimit(settings)).toBe(1); expect(newHighEntryAtrLimit({ ...settings, newHighEntryAtrLimit: '0.5' })).toBe(0.5);
     expect(newHighRiskAmount(settings)).toBe(100); expect(newHighRiskAmount({ ...settings, newHighRiskAmount: '25' })).toBe(25);
     for (const value of ['', '0', '0.05', '10.1', '1.234', 'NaN']) expect(() => newHighSlMultiplier({ ...settings, newHighSlMultiplier: value })).toThrow('SL 배수');
-    for (const value of ['', '0.2', '0.49', '1.01', '2', '1.234', 'NaN']) expect(() => newHighEntryAtrLimit({ ...settings, newHighEntryAtrLimit: value })).toThrow('0.5~1.0');
     for (const value of ['', '0', '-1', 'NaN']) expect(() => newHighRiskAmount({ ...settings, newHighRiskAmount: value })).toThrow('고정 손실액');
     for (const value of ['', '1', '5', '1001', '-5', '20.5', 'NaN']) expect(() => newHighPeriod({ ...settings, newHighLookback: value })).toThrow('봉수');
     expect(() => newHighPeriod({ ...settings, interval: '15m' })).toThrow('1h');
     expect(currentNewHighSettings({ ...settings, interval: '15m', partialTpEnabled: true })).toMatchObject({ interval: '1h', partialTpEnabled: false });
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.58'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
-    expect(canResumeLocalJob({ version: '2.10.58', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.59'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
+    expect(canResumeLocalJob({ version: '2.10.59', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {
     const data = history(); data[585]!.high = 120; data[585]!.low = 50;
@@ -90,7 +88,7 @@ describe('new high/low causal strategy', () => {
     const custom = simulate([bar(0, 101.5, 102.3, 101.4, 102)], { ...settings, newHighSlMultiplier: '1.5' });
     expect(custom.positions.BTCUSDT!.stop).toBeCloseTo(custom.positions.BTCUSDT!.first - 3);
   });
-  it.each(['LONG', 'SHORT'] as const)('limits the first %s buy to the configured 0.5~1 ATR close range', side => {
+  it.each(['LONG', 'SHORT'] as const)('limits the first %s buy to the fixed 0.5~1 ATR range', side => {
     const overrides = side === 'SHORT' ? { long: false, short: true } : {};
     const parameters = { ...settings, side };
     const rawLimit = side === 'LONG' ? 102.5 / 1.0002 : 97.5 / .9998;
@@ -178,11 +176,11 @@ describe('new high/low causal strategy', () => {
     replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars: [stop] }], parameters, stop.candle.openTime, stop.candle.closeTime, 3600);
     expect(state.closed).toBe(1); expect(Math.abs(state.trades[0]!.netProfitUsdt)).toBeLessThanOrEqual(10.01);
   });
-  it('enters intrabar but closes when the final candle confirmation or rejection-wick filter fails', () => {
+  it('keeps an intrabar entry open when the breakout candle later falls back or forms a rejection wick', () => {
     const failed = simulate([bar(0, 100.5, 102, 99.5, 100.8)]);
-    expect(failed.entries).toBe(1); expect(failed.closed).toBe(1); expect(failed.trades[0]!.reason).toBe('NEW_HIGH_BREAKOUT_FAIL');
+    expect(failed.entries).toBe(1); expect(failed.closed).toBe(0); expect(failed.positions.BTCUSDT).toBeDefined();
     const wick = simulate([bar(0, 105, 111, 104, 106, { atr: 10 })]);
-    expect(wick.entries).toBe(1); expect(wick.closed).toBe(1); expect(wick.trades[0]!.reason).toBe('NEW_HIGH_CANDLE_REJECTION');
+    expect(wick.entries).toBe(1); expect(wick.closed).toBe(0); expect(wick.positions.BTCUSDT).toBeDefined();
   });
   it('shares one account and refuses unaffordable new entries', () => {
     const parameters = { ...settings, mode: 'ALL' as const, initialCapitalUsdt: '250' };
