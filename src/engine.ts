@@ -485,14 +485,14 @@ function referenceSignals(
       exitMode: 'REFERENCE_TOUCH' as const,
       referenceOpenTime: reference.openTime,
     };
-    // The OHLC range always contains its midpoint. To keep the distinction
-    // between an actual same-candle touch and the documented next-candle
-    // fallback, accept the reference candle when its body crosses the center
-    // or when the directional wick returns to it (upper wick for long,
-    // lower wick for short).
+    // A long setup must retest the center while coming down from above; a
+    // bullish body merely crossing the center from below is not a fill. The
+    // lower-timeframe replay makes the actual directional touch decision.
+    // The wick check only arms the reference-candle window; it does not itself
+    // create a fill when the 15m candles never return to the center.
     const sameCandleEntry = side === 'LONG'
-      ? reference.open <= center || reference.high > reference.close
-      : reference.open >= center || reference.low < reference.close;
+      ? reference.high > reference.close
+      : reference.low < reference.close;
     if (sameCandleEntry) signals.push({ ...base, index, referenceRole: 'REFERENCE' });
 
     const next = candles[index + 1];

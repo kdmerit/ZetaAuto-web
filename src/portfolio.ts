@@ -409,93 +409,51 @@ function replayVolatilityMa5Entry(symbol: string, bar: PreparedBar, settings: Ba
   return state;
 }
 
-/**
- * Replay a reference/next-bar center-line touch without assuming that the
- * candle closed before the order was filled. Both admissible OHLC paths are
- * evaluated by the caller, and the first center-line crossing on each path is
- * the only entry attempt.
- */
+/** Replay a reference/next-bar center-line retest using lower-timeframe closes. */
 function replayReferenceEntry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
   if (bar.referenceIntrabarCandles?.length) return replayReferenceIntrabarEntry(symbol, bar, settings, available);
-  const candidates = [true, false].map(lowFirst => referenceEntryPath(symbol, bar, settings, available, lowFirst));
-  return worstPath(candidates);
+  return referenceEntryPath(symbol, bar, settings, available);
 }
 
-interface ReferenceEntryPath { state: PortfolioState; attempted: boolean }
-
-/** Replay one 15m candle for a reference setup, retaining the setup's one-attempt rule. */
-function referenceEntryCandlePath(
-  state: PortfolioState,
-  symbol: string,
-  signal: Signal,
-  candle: Candle,
-  settings: BacktestSettings,
-  attempted: boolean,
-  lowFirst: boolean,
-): ReferenceEntryPath {
-  const nextState = structuredClone(state);
-  const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
-  const touch = (before: number, after: number): boolean => before === signal.entry
-    || before < signal.entry && after >= signal.entry
-    || before > signal.entry && after <= signal.entry;
-  const attempt = (): void => {
-    attempted = true;
-    enter(nextState, symbol, signal, candle, settings);
-  };
-  if (!attempted && path[0] === signal.entry) attempt();
-  for (let index = 1; index < path.length; index += 1) {
-    let before = path[index - 1]!;
-    const after = path[index]!;
-    if (!attempted && touch(before, after)) {
-      attempt();
-      before = signal.entry;
-    }
-    const position = nextState.positions[symbol];
-    if (position) replaySegment(nextState, position, before, after, candle, settings);
-  }
-  return { state: nextState, attempted };
+function referenceRetestConfirmed(signal: Signal, candle: Candle): boolean {
+  return signal.side === 'LONG'
+    ? candle.high > signal.entry && candle.close <= signal.entry
+    : candle.low < signal.entry && candle.close >= signal.entry;
 }
 
-function worstReferenceEntryPath(candidates: ReferenceEntryPath[]): ReferenceEntryPath {
-  const stopped = candidates.filter(candidate => candidate.state.exitReasons.SL);
-  return (stopped.length ? stopped : candidates).sort((a, b) => portfolioEquity(a.state) - portfolioEquity(b.state))[0]!;
-}
-
-/** Use each 15m candle in chronological order instead of the parent candle's synthetic OHLC path. */
+/**
+ * A reference entry is confirmed by the lower-timeframe close: a long must
+ * break above the center and finish back at/below it, with the inverse for a
+ * short. The confirming candle is never replayed for exits after the fill.
+ */
 function replayReferenceIntrabarEntry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
-  let selected: ReferenceEntryPath = { state: initialPortfolio(available), attempted: false };
+  const state = initialPortfolio(available);
+  let attempted = false;
   for (const candle of [...bar.referenceIntrabarCandles!].sort((a, b) => a.openTime - b.openTime)) {
-    selected = worstReferenceEntryPath([true, false].map(lowFirst => referenceEntryCandlePath(
-      selected.state, symbol, bar.signal!, candle, settings, selected.attempted, lowFirst)));
-    if (selected.attempted && !selected.state.positions[symbol]) break;
+    if (!attempted && referenceRetestConfirmed(bar.signal!, candle)) {
+      attempted = true;
+      enter(state, symbol, bar.signal!, candle, settings);
+      continue;
+    }
+    if (state.positions[symbol]) {
+      const current = state.positions[symbol]!;
+      const childBar: PreparedBar = { ...bar, candle, signal: null };
+      const selected = worstPath([
+        replayPath(current, childBar, settings, true),
+        replayPath(current, childBar, settings, false),
+      ]);
+      mergePath(state, selected, symbol);
+    }
+    if (attempted && !state.positions[symbol]) break;
   }
-  return selected.state;
+  return state;
 }
 
-function referenceEntryPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, lowFirst: boolean): PortfolioState {
+function referenceEntryPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
   const state = initialPortfolio(available);
   const signal = bar.signal!;
   const candle = { ...bar.candle, parentOpenTime: bar.candle.openTime };
-  const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
-  let attempted = false;
-  const touch = (before: number, after: number): boolean => before === signal.entry
-    || before < signal.entry && after >= signal.entry
-    || before > signal.entry && after <= signal.entry;
-  const attempt = (): void => {
-    attempted = true;
-    enter(state, symbol, signal, candle, settings);
-  };
-  if (path[0] === signal.entry) attempt();
-  for (let index = 1; index < path.length; index += 1) {
-    let before = path[index - 1]!;
-    const after = path[index]!;
-    if (!attempted && touch(before, after)) {
-      attempt();
-      before = signal.entry;
-    }
-    const position = state.positions[symbol];
-    if (position) replaySegment(state, position, before, after, candle, settings);
-  }
+  if (referenceRetestConfirmed(signal, candle)) enter(state, symbol, signal, candle, settings);
   return state;
 }
 
@@ -898,7 +856,7 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
           .map(priority => envelopeEntryPath(symbol, entryBar, parameters, available, lowFirst, options.settingsForSymbolSide?.[symbol], priority, reclaimAllowed))))
         : replayIntrabarEntry(symbol, bar, parameters, available);
       mergePath(state, selected, symbol, available);
-      if (referenceKey) {
+      if (referenceKey && selected.entries) {
         state.referenceAttempts ??= {};
         state.referenceAttempts[referenceKey] = true;
       }
