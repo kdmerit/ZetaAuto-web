@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildLocalChart, prepareSymbolBlock } from './engine';
+import { buildLocalChart, prepareSymbolBlock, runBacktest } from './engine';
 import { envelopeParameters, envelopePeriods, priorMovingAverages, projectEnvelopeBands } from './envelope';
 import { maximumTouchedStep } from './envelopeStatistics';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
@@ -11,7 +11,7 @@ const settings: BacktestSettings = {
   initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '1', side: 'LONG', partialTpEnabled: false,
   fullTpWavePercent: '100', minDisparityPercent: '1', ma20HalfCloseEnabled: false, roiClosePercent: '100',
   minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1', volatilityTpEnabled: true, volatilityNextCloseEnabled: false,
-  envelopeDeviationPercent: '1.0', envelopeExitMode: 'CENTER', envelopeMaPeriod: '20',
+  envelopeDeviationPercent: '1.0', envelopeExitMode: 'MA20', envelopeMaPeriod: '20',
 };
 const candle = (i: number, prices = [100, 100, 100, 100]): Candle => ({ openTime: origin + i * 3600, closeTime: origin + (i + 1) * 3600,
   open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: 10 });
@@ -62,50 +62,50 @@ describe('envelope parameters and causal bands', () => {
   });
 });
 
-describe('current envelope centre entry and fixed opposite-band exits', () => {
-  it.each([false, true])('requires the previous opposite-band touch and exits at the later band touch, short=%s', short => {
-    const { result, document, all, start } = replay(short);
-    expect(result.entryCount).toBe(1); expect(result.closedTradeCount).toBe(1); expect(result.recentTrades[0]!.reason).toBe('ENVELOPE_OPPOSITE');
+describe('current envelope breakout and MA20 close exits', () => {
+  function breakoutRows(short = false): Candle[] {
+    const warmup = Array.from({ length: 60 }, (_, index) => candle(index));
+    const tail = short
+      ? [candle(60, [99.5, 99.6, 98, 98]), candle(61, [98, 102, 97, 101]), candle(62, [101, 102, 98, 101])]
+      : [candle(60, [100.5, 102, 100.4, 102]), candle(61, [102, 103, 98, 101]), candle(62, [101, 102, 98, 99])];
+    return [...warmup, ...tail];
+  }
+
+  it.each([false, true])('enters only after a confirmed %s breakout and exits on a later MA20 close', short => {
+    const all = breakoutRows(short);
+    const parameters = { ...settings, side: short ? 'SHORT' as const : 'LONG' as const };
+    const result = runBacktest(all, parameters, 'ENVELOPE');
+    expect(result.entryCount).toBe(1); expect(result.closedTradeCount).toBe(1);
     const trade = result.recentTrades[0]!;
-    expect(trade.entryPrice).toBeCloseTo(100 * (short ? .9998 : 1.0002), 10);
-    expect(trade.signal.stop).toBeCloseTo(short ? 102.02 : 97.98, 10);
-    expect(trade.signal.initialStop).toBeCloseTo(short ? 101 : 99, 10);
-    expect(trade.signal.target).toBeCloseTo(short ? 99 : 101, 10);
-    expect(trade.exitPrice).toBeCloseTo(short ? 99 : 101, 10);
-    expect(trade.exitAt).toBe(start + 2 * 3600);
-    expect(trade.signal.envelopeExitMode).toBe('OPPOSITE');
-    expect(trade.priceLines).toContainEqual({ kind: 'SECOND_ENTRY', price: short ? 101 : 99 });
-    expect(trade.priceLines).toContainEqual({ kind: 'SL', price: short ? 102.02 : 97.98 });
-    expect(trade.priceLines).toContainEqual({ kind: 'TP', price: short ? 99 : 101 });
-    expect(document.bars[1]!.envelope).toMatchObject({ priorUpperTouch: !short, priorLowerTouch: short });
-    expect(all).toHaveLength(23);
+    expect(trade.reason).toBe('ENVELOPE_MA20_CLOSE');
+    expect(trade.signal.exitMode).toBe('ENVELOPE_MA20_CLOSE');
+    expect(trade.signal.envelopeExitMode).toBe('MA20');
+    expect(trade.entryAt).toBe(all[60]!.closeTime);
+    expect(trade.exitAt).toBe(short ? all[61]!.closeTime : all[62]!.closeTime);
+    expect(trade.executions.map(fill => fill.kind)).toEqual(['ENTRY', 'CLOSE']);
+    expect(trade.executions[0]!.timing).toBe('BAR_CLOSE');
+    expect(trade.executions[1]!.timing).toBe('BAR_CLOSE');
   });
-  it('does not treat a current-candle-only touch as an armed setup', () => {
-    const { result } = replay(false, [[100, 100.4, 99.5, 99.8], [100, 101.2, 99.8, 101]]);
-    expect(result.entryCount).toBe(0);
+
+  it('does not use an intrabar low/high as a MA20 close exit', () => {
+    const all = breakoutRows(false);
+    const parameters = { ...settings, side: 'LONG' as const };
+    const result = runBacktest(all, parameters, 'ENVELOPE');
+    expect(result.recentTrades[0]!.exitAt).toBe(all[62]!.closeTime);
   });
-  it('limits the arming touch to the previous 15 candles', () => {
-    const neutral = Array.from({ length: 15 }, () => [100.5, 100.6, 100.4, 100.5]);
-    const tooLate = replay(false, [[100, 101.5, 99.5, 100], ...neutral, [99.5, 100.4, 99.5, 99.8]]);
-    expect(tooLate.result.entryCount).toBe(0);
-    const stillValid = replay(false, [[100, 101.5, 99.5, 100], ...neutral.slice(0, 14), [99.5, 100.4, 99.5, 99.8]]);
-    expect(stillValid.result.entryCount).toBe(1);
+
+  it('requires the current close to finish beyond the upper band', () => {
+    const all = breakoutRows(false);
+    all[60] = { ...all[60]!, open: 100.5, close: 100.9, high: 101.2, low: 100.4 };
+    const parameters = { ...settings, side: 'LONG' as const };
+    expect(runBacktest(all, parameters, 'ENVELOPE').entryCount).toBe(0);
   });
-  it.each([false, true])('uses the old SL band for the second entry before the outer stop, short=%s', short => {
-    const { result } = replay(short, [[100, 101.5, 99.5, 100], [100.5, 101.5, 98.5, 99.8], [99, 99.5, 97.5, 98]]);
-    const trade = result.recentTrades[0]!;
-    expect(result.entryCount).toBe(1); expect(result.closedTradeCount).toBe(1); expect(result.exitReasons.SL).toBe(1);
-    expect(trade.side).toBe(short ? 'SHORT' : 'LONG');
-    expect(trade.signal.second).toBeCloseTo(short ? 101 : 99, 10);
-    expect(trade.signal.stop).toBeCloseTo(short ? 102.02 : 97.98, 10);
-    expect(trade.executions.map(fill => fill.kind)).toEqual(['ENTRY', 'SPLIT_ENTRY', 'CLOSE']);
-  });
-  it('keeps the entry candle band as the SL and target and shows both lines in the local chart', () => {
-    const fixture = replay(); const trade = fixture.result.recentTrades[0]!;
-    const chart = buildLocalChart(fixture.result, trade, fixture.parameters);
-    expect(maximumTouchedStep(fixture.document)).toBe(15);
-    expect(chart.priceLines).toContainEqual({ kind: 'SECOND_ENTRY', price: 99 });
-    expect(chart.priceLines).toContainEqual({ kind: 'SL', price: 97.98 });
-    expect(chart.priceLines).toContainEqual({ kind: 'TP', price: 101 });
+
+  it('shows only entry and exit levels for the new MA20-close trade', () => {
+    const all = breakoutRows(false); const parameters = { ...settings, side: 'LONG' as const };
+    const result = runBacktest(all, parameters, 'ENVELOPE'); const trade = result.recentTrades[0]!;
+    const chart = buildLocalChart(result, trade, parameters);
+    expect(maximumTouchedStep(prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', all[0]!.openTime, all.at(-1)!.closeTime))).toBe(20);
+    expect(chart.priceLines.map(line => line.kind)).toEqual(['ENTRY', 'EXIT']);
   });
 });

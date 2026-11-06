@@ -12,10 +12,10 @@ const settings: BacktestSettings = currentEnvelopeSettings({ mode: 'SINGLE', sym
   roiClosePercent: '100', minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1', volatilityTpEnabled: true, volatilityNextCloseEnabled: false,
   envelopeMaPeriod: '20', envelopeDeviationPercent: '1.0' });
 function candles(short = false): Candle[] {
-  const tail = [[100, 101.5, 99.5, 100], [99.5, 100.4, 99.5, 99.8], [100, 101.2, 99.8, 101]];
-  return [...Array.from({ length: 20 }, (_, index) => ({ openTime: origin + index * 3600, closeTime: origin + (index + 1) * 3600, open: 100, high: 100, low: 100, close: 100, volume: 10 })), ...tail.map((p, index) => {
+  const tail = [[100.5, 102, 100, 102], [102, 103, 98, 101], [101, 102, 98, 99]];
+  return [...Array.from({ length: 60 }, (_, index) => ({ openTime: origin + index * 3600, closeTime: origin + (index + 1) * 3600, open: 100, high: 100, low: 100, close: 100, volume: 10 })), ...tail.map((p, index) => {
     const v = short ? [200 - p[0]!, 200 - p[2]!, 200 - p[1]!, 200 - p[3]!] : p;
-    return { openTime: origin + (index + 20) * 3600, closeTime: origin + (index + 21) * 3600, open: v[0]!, high: v[1]!, low: v[2]!, close: v[3]!, volume: 10 };
+    return { openTime: origin + (index + 60) * 3600, closeTime: origin + (index + 61) * 3600, open: v[0]!, high: v[1]!, low: v[2]!, close: v[3]!, volume: 10 };
   })];
 }
 afterEach(() => vi.unstubAllGlobals());
@@ -23,7 +23,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe('fixed-leverage envelope account replay', () => {
   it('matches ordinary replay without any risk-data request', async () => {
     vi.stubGlobal('fetch', vi.fn(() => { throw new Error('fixed replay must not fetch risk'); }));
-    const rows = candles(); const start = rows[20]!.openTime; const end = rows.at(-1)!.closeTime;
+    const rows = candles(); const start = rows[60]!.openTime; const end = rows.at(-1)!.closeTime;
     const prepared = prepareSymbolBlock('BTCUSDT', rows, settings, 'ENVELOPE', start, end);
     const state = initialPortfolio(1000); replayPortfolioBlock(state, [prepared], settings, start, end, 3600);
     const result = await replayFixedEnvelope(prepared, { ...settings, envelopeRisk: { symbol: 'BTCUSDT', checkedAt: Date.now(), maxLeverage: 1, model: 'ISOLATED_ESTIMATE_V1', tiers: [{ limit: 1000000, maintenanceRate: .005, deduction: 0, maxLeverage: 1 }] } as ContractRisk }, 3600, new AbortController().signal, async () => {});

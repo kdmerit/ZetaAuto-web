@@ -78,16 +78,16 @@ describe('durable local analysis', () => {
     await expect(executeLocalJob({ strategy: 'ENVELOPE', resumeId: paused.id }, () => {}, new AbortController().signal)).rejects.toThrow('새 분석');
     expect((await loadLocalJob('ENVELOPE'))!.id).toBe(paused.id);
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, () => {}, new AbortController().signal);
-    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.47');
+    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.73');
   });
-  it('normalizes single/all analysis to 1h, requests daily history only when checked, and saves the checkbox value', async () => {
+  it('preserves the selected envelope timeframe and keeps the legacy checkbox without fetching daily history', async () => {
     for (const mode of ['SINGLE', 'ALL'] as const) for (const envelopeDailyTrend of [true, false]) {
       vi.mocked(ensureCandles).mockClear();
       await executeLocalJob({ strategy: 'ENVELOPE', settings: { ...settings, mode, interval: '4h', envelopeDailyTrend } }, () => {}, new AbortController().signal);
       const done = (await loadLocalJob('ENVELOPE'))!;
-      expect(done.status).toBe('COMPLETED'); expect(done.settings.interval).toBe('1h'); expect(done.settings.envelopeDailyTrend).toBe(envelopeDailyTrend);
+      expect(done.status).toBe('COMPLETED'); expect(done.settings.interval).toBe('4h'); expect(done.settings.envelopeDailyTrend).toBe(envelopeDailyTrend);
       const intervals = new Set(vi.mocked(ensureCandles).mock.calls.map(call => call[1]));
-      expect(intervals).toEqual(new Set(envelopeDailyTrend ? ['1h', '1d'] : ['1h']));
+      expect(intervals).toEqual(new Set(['4h']));
     }
   });
   it('reuses one direction-neutral weekly universe across all four strategies and refreshes after seven days', async () => {

@@ -1,5 +1,6 @@
 /** All-symbol optimization and a separate, cash-constrained hourly portfolio revalidation. */
 import { deletePrefix, deleteValue, lease, maintainCache, readValue, retentionMs, writeValue } from './database';
+import { intervalSeconds } from './api';
 import { envelopeOptimizerVersion, isCurrentEnvelopeStatisticsVersion, isFilteredEnvelopeStatisticsVersion, searchEnvelopeInstrument, statisticsAnalysisWindow, statisticsProgress, statisticsTotalFor, type DirectionalBests, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from './envelopeStatistics';
 import { currentEnvelopeSettings } from './envelope';
 import { defaultEnvelopeResultOptions, envelopeBests, matchesEnvelopeFilters, retainEnvelopeCandidates, validateEnvelopeResultOptions } from './envelopeResults';
@@ -7,7 +8,7 @@ import { analysisWindow, ensureCandles, listInstruments, type Instrument } from 
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { fixedEnvelopeSettings, yieldAnalysis } from './envelopeReplay';
 import { prepareSymbolBlock, type PreparedSymbol } from './engine';
-import type { BacktestResult, BacktestSettings, ContractRisk, EnvelopeResultOptions } from './types';
+import type { BacktestInterval, BacktestResult, BacktestSettings, ContractRisk, EnvelopeResultOptions } from './types';
 
 export type EnvelopeBatchKind = 'ALL_STATS' | 'VIRTUAL';
 export interface OptimizedSymbol {
@@ -63,7 +64,7 @@ export async function saveEnvelopeBatchSelection(id: string, options: EnvelopeRe
 export function envelopeBatchView(job: EnvelopeBatchJob): EnvelopeBatchView {
   const { state: _state, universe, activeSearch, rows, ...view } = job;
   const perSymbolTotal = statisticsTotalFor(job.settings, job.version);
-  const seconds = isFilteredEnvelopeStatisticsVersion(job.version) ? 3600 : 900;
+  const seconds = intervalSeconds(job.settings.interval);
   const total = job.kind === 'ALL_STATS' ? Math.max(1, universe.length) * perSymbolTotal : Math.max(1, ((job.end ?? 0) - (job.start ?? 0)) / seconds);
   const completed = job.status === 'COMPLETED' ? total : job.kind === 'ALL_STATS'
     ? job.cursor * perSymbolTotal + (activeSearch ? statisticsProgress(activeSearch) : 0) : Math.max(0, ((job.blockStart ?? 0) - (job.start ?? 0)) / seconds);
@@ -124,11 +125,11 @@ export function validateVirtualSettings(settings: BacktestSettings): void {
   fixedEnvelopeSettings(settings);
   if (!/^\d+(\.\d{1,2})?$/.test(settings.initialCapitalUsdt) || !Number.isFinite(Number(settings.initialCapitalUsdt)) || Number(settings.initialCapitalUsdt) < 10) throw new Error('가상 초기자금을 확인해 주세요.');
   if (!/^\d+(\.\d{1,2})?$/.test(settings.betAmountUsdt) || !Number.isFinite(Number(settings.betAmountUsdt)) || Number(settings.betAmountUsdt) < 1 || Number(settings.betAmountUsdt) > Number(settings.initialCapitalUsdt)) throw new Error('고정 베팅액을 확인해 주세요.');
-  analysisWindow({ ...settings, interval: '1h' });
+  analysisWindow(settings);
 }
 export function virtualPeriodRelation(evaluation: BacktestSettings, training: BacktestSettings): 'AFTER' | 'OVERLAP' | 'BEFORE' | null {
   try {
-    const test = analysisWindow({ ...evaluation, interval: '1h' }); const fit = statisticsAnalysisWindow(training);
+    const test = analysisWindow(evaluation); const fit = statisticsAnalysisWindow(training);
     return test.start >= fit.end ? 'AFTER' : test.end <= fit.start ? 'BEFORE' : 'OVERLAP';
   } catch { return null; }
 }
@@ -180,9 +181,12 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
         return best ? [{ ...row, bestBySide, best, status: 'OK' as const }] : [];
       });
       if (!rows.length) throw new Error('선택한 전체통계에 가상매매 가능한 최적 세팅이 없습니다.');
-      const settings = { ...frozenSettings(options.settings), side: source.settings.side };
+      const sourceIntervals = new Set(rows.flatMap(row => [row.best?.interval, ...Object.values(row.bestBySide ?? {}).map(best => best?.interval)]).filter((value): value is BacktestInterval => !!value));
+      if (sourceIntervals.size !== 1) throw new Error('전체통계 결과의 캔들 주기가 섞여 있습니다. 한 주기로 다시 통계를 실행해 주세요.');
+      const sourceInterval = [...sourceIntervals][0]!;
+      const settings = { ...frozenSettings(options.settings), side: source.settings.side, interval: sourceInterval };
       validateVirtualSettings(settings); const window = analysisWindow(settings);
-      job = { id: crypto.randomUUID(), version: envelopeOptimizerVersion, kind: options.kind, status: 'RUNNING', settings, updatedAt: Date.now(), message: '1시간봉 공유 계좌 재검증 준비',
+      job = { id: crypto.randomUUID(), version: envelopeOptimizerVersion, kind: options.kind, status: 'RUNNING', settings, updatedAt: Date.now(), message: `${sourceInterval} 공유 계좌 재검증 준비`,
         sourceId: source.id, trainingSettings: structuredClone(source.settings), rows, universe: rows.map(row => ({ symbol: row.symbol, launchAt: row.launchAt })), cursor: 0, state: initialPortfolio(Number(settings.initialCapitalUsdt)), start: window.start, end: window.end, blockStart: window.start };
     }
     await checkpoint(true); signal.throwIfAborted();
@@ -213,31 +217,31 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
           parametersBySide[row.symbol] = directional;
         }
       }
+      const seconds = intervalSeconds(job.settings.interval);
       const size = Math.max(1, Math.min(128, Math.floor(64000 / (job.rows.length * 2))));
       while (job.blockStart! < job.end!) {
-        signal.throwIfAborted(); const start = job.blockStart!; const end = Math.min(job.end!, start + size * 3600); const documents: PreparedSymbol[] = [];
+        signal.throwIfAborted(); const start = job.blockStart!; const end = Math.min(job.end!, start + size * seconds); const documents: PreparedSymbol[] = [];
         for (const row of job.rows) {
           signal.throwIfAborted();
-          const candles = await ensureCandles(row, '1h', start - 200 * 3600, end, job.end, signal);
-          const daily = job.settings.envelopeDailyTrend ? await ensureCandles(row, '1d', Math.floor(start / 86400) * 86400 - 25 * 86400, Math.floor((end - 3600) / 86400) * 86400, undefined, signal) : undefined;
+          const candles = await ensureCandles(row, job.settings.interval, start - 200 * seconds, end, job.end, signal);
           const directional = (['LONG', 'SHORT'] as const).flatMap(side => {
             const p = parametersBySide[row.symbol]?.[side];
             if (!p) return [];
-            return [{ side, document: prepareSymbolBlock(row.symbol, candles, p, 'ENVELOPE', start, end, undefined, undefined, daily) }];
+            return [{ side, document: prepareSymbolBlock(row.symbol, candles, p, 'ENVELOPE', start, end) }];
           });
           const base = directional[0]?.document;
           if (!base) throw new Error(`${row.symbol}의 방향별 최적 세팅이 없습니다.`);
           documents.push({ symbol: row.symbol, bars: base.bars.map((bar, index) => ({ ...bar, envelope: undefined,
             envelopeBySide: Object.fromEntries(directional.flatMap(({ side, document }) => {
               const band = document.bars[index]?.envelope;
-              return band ? [[side, { ...band, sourceInterval: '1h', parentOpenTime: bar.candle.openTime }]] : [];
+              return band ? [[side, { ...band, sourceInterval: job!.settings.interval, parentOpenTime: bar.candle.openTime }]] : [];
             })) })) });
           job.message = `가상매매 캔들 확인 ${row.symbol} · ${new Date(start * 1000).toLocaleDateString('ko-KR')}`; await checkpoint();
         }
         const next = structuredClone(job.state!);
-        replayPortfolioBlock(next, documents, job.settings, start, end, 3600, { settingsForSymbol: parameters, settingsForSymbolSide: parametersBySide });
+        replayPortfolioBlock(next, documents, job.settings, start, end, seconds, { settingsForSymbol: parameters, settingsForSymbolSide: parametersBySide });
         job.state = next; job.blockStart = end; job.result = { ...portfolioResult(next, job.settings), universeCount: job.rows.length };
-        job.message = `공유 계좌 가상매매 · ${new Date(end * 1000).toLocaleString('ko-KR')}`; await checkpoint(true); await yieldAnalysis();
+        job.message = `${job.settings.interval} 공유 계좌 가상매매 · ${new Date(end * 1000).toLocaleString('ko-KR')}`; await checkpoint(true); await yieldAnalysis();
       }
     }
     job.status = 'COMPLETED'; job.message = job.kind === 'ALL_STATS' ? `전체통계 완료 · ${job.rows.length}종목 중 ${job.rows.filter(row => row.status === 'OK').length}개 기준 충족 종목` : '가상매매 완료 · 저장 세팅 고정 · 별도 입력 기간 검증';

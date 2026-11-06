@@ -3,9 +3,9 @@ import type { BacktestSettings, Candle, ChartData, EnvelopeBand, EnvelopeExitMod
 
 export const envelopePeriod = 20;
 export const envelopePeriods = [5, 10, 20, 40, 60, 80, 100, 120];
-export const envelopeExitModes: EnvelopeExitMode[] = ['CENTER', 'OPPOSITE', 'HALF'];
+export const envelopeExitModes: EnvelopeExitMode[] = ['MA20', 'CENTER', 'OPPOSITE', 'HALF'];
 export const envelopeExitLabels: Record<EnvelopeExitMode, string> = {
-  CENTER: '중심선 전량 청산', OPPOSITE: '반대 밴드 전량 청산', HALF: '중심선 50% · 반대 밴드 나머지',
+  CENTER: '중심선 전량 청산', OPPOSITE: '반대 밴드 전량 청산', HALF: '중심선 50% · 반대 밴드 나머지', MA20: 'MA20 이탈 종가 청산',
 };
 
 /** The current pullback strategy uses a user-entered SMA period and band width. */
@@ -29,8 +29,10 @@ export function pullbackEnvelopeParameters(settings: BacktestSettings): { percen
 
 /** Current strategy only; archived settings without this marker retain their original replay. */
 export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSettings {
-  return { ...settings, interval: '1h', envelopeStatisticsInterval: '1h', envelopeDailyTrend: settings.envelopeDailyTrend ?? true,
-    envelopeEntryMode: 'RECLAIM', envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: false, envelopeRisk: undefined };
+  const interval = settings.interval === '4h' || settings.interval === '1d' ? settings.interval : '1h';
+  const statisticsInterval = settings.envelopeStatisticsInterval === '4h' || settings.envelopeStatisticsInterval === '1d' ? settings.envelopeStatisticsInterval : '1h';
+  return { ...settings, interval, envelopeStatisticsInterval: statisticsInterval, envelopeDailyTrend: settings.envelopeDailyTrend ?? true,
+    envelopeEntryMode: 'RECLAIM', envelopeExitMode: 'MA20', envelopeMoveSlOnCenter: false, envelopeRisk: undefined };
 }
 
 /** MA20 of the last closed daily candle versus five daily candles earlier, never the live daily bar. */
