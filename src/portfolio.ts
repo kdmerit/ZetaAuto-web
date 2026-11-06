@@ -98,8 +98,16 @@ function priceLines(p: Holding): PriceLine[] {
     ...(p.newHighTrailLevels ?? []).map(level => ({ kind: 'TRAILING_SL' as const, price: level.price, stage: level.step })),
     { kind: 'SL', price: p.stop },
     ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
-  if (p.signal.strategy === 'ENVELOPE') return [{ kind: 'ENTRY', price: p.first }, { kind: 'SL', price: p.stop }, { kind: 'TP', price: p.target },
-    ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
+  if (p.signal.strategy === 'ENVELOPE') {
+    const lines: PriceLine[] = [
+      { kind: 'ENTRY', price: p.first },
+      ...(p.signal.second !== undefined ? [{ kind: 'SECOND_ENTRY' as const, price: p.second }] : []),
+      ...(p.secondFill !== undefined ? [{ kind: 'AVERAGE_ENTRY' as const, price: p.entry }] : []),
+      { kind: 'SL', price: p.stop },
+      { kind: 'TP', price: p.target },
+    ];
+    return lines.filter(line => Number.isFinite(line.price) && line.price > 0);
+  }
   if (p.signal.strategy === 'VOLATILITY') return [
     { kind: 'ENTRY', price: p.first },
     ...(p.signal.volatilityStopEnabled === true ? [{ kind: 'SL' as const, price: p.stop }] : []),
@@ -162,8 +170,9 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
     entryPrice: p.entry, exitPrice: fill, quantity: qty, reason, netProfitUsdt: p.signal.strategy === 'NEW_HIGH' ? p.net : profit - fee, betAmountUsdt: p.betAmountUsdt,
     ...(p.signal.strategy === 'NEW_HIGH' ? { newHighTrailStep: p.newHighTrailStep ?? 0, newHighTrailLevels: structuredClone(p.newHighTrailLevels ?? []) } : {}),
     signalIndex: p.signal.index, entryIndex: p.signal.index, exitIndex: -1,
-    signal: { ...p.signal, target: p.target, partial: p.partial ?? undefined, second: p.secondFill ?? p.second,
-      initialStop: p.signal.stop, activeStop: p.stop, averageEntry: p.entry },
+    signal: { ...p.signal, target: p.target, partial: p.partial ?? undefined,
+      second: p.signal.strategy === 'ENVELOPE' ? p.second : p.secondFill ?? p.second,
+      initialStop: p.signal.initialStop ?? p.signal.stop, activeStop: p.stop, averageEntry: p.entry },
     executions: structuredClone(p.executions), priceLines: [...priceLines(p), { kind: 'EXIT', price: fill }],
   });
   state.trades = state.trades.slice(-100);
@@ -182,7 +191,8 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   if (state.positions[symbol] || settings.side !== 'BOTH' && settings.side !== signal.side) return;
   state.signals += 1;
   const leverage = Number(settings.leverage);
-  const split = signal.strategy === 'PULLBACK' && signal.exitMode !== 'PULLBACK_ENVELOPE';
+  const split = signal.strategy === 'ENVELOPE' && signal.second !== undefined
+    || signal.strategy === 'PULLBACK' && signal.exitMode !== 'PULLBACK_ENVELOPE';
   const entry = signal.entry * (signal.side === 'LONG' ? 1 + slippage : 1 - slippage);
   const direction = signal.side === 'LONG' ? 1 : -1;
   let bet = Number(settings.betAmountUsdt);
@@ -204,19 +214,24 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   const activeStop = signal.strategy === 'VOLATILITY' && signal.volatilityAtr !== undefined
     ? entry - direction * signal.volatilityAtr * 2
     : signal.stop;
-  const effectiveSignal = activeStop === signal.stop ? signal : { ...signal, stop: activeStop };
+  const envelopeStop = signal.strategy === 'ENVELOPE' && signal.second !== undefined
+    ? signal.second - direction * Math.abs(entry - signal.second)
+    : activeStop;
+  if (signal.strategy === 'ENVELOPE' && (!Number.isFinite(envelopeStop) || envelopeStop <= 0)) return;
+  const effectiveSignal = envelopeStop === signal.stop ? signal : { ...signal, stop: envelopeStop };
   const intrabarEntry = signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH' || signal.exitMode === 'REFERENCE_TOUCH';
   const p: Holding = {
     symbol, signal: effectiveSignal, opened: intrabarEntry && !confirmedClose ? candle.openTime : candle.closeTime, first: entry, entry, betAmountUsdt: bet, qty: riskSizedQuantity ?? margin * leverage / entry,
     margin, reserved: bet - margin, reservedFee: (bet - margin) * leverage * feeRate,
-    pending: split, second: split ? (entry + signal.stop) / 2 : entry,
+    pending: split,
+    second: split ? signal.strategy === 'ENVELOPE' && signal.second !== undefined ? signal.second : (entry + signal.stop) / 2 : entry,
     ...(signal.strategy === 'ENVELOPE' && settings.envelopeRisk?.symbol === symbol ? { risk: settings.envelopeRisk } : {}),
     target,
     partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' && signal.strategy !== 'NEW_HIGH' && signal.strategy !== 'REFERENCE' && signal.exitMode !== 'PULLBACK_ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
-    partialDone: false, stop: activeStop, mark: candle.close, net: -fee, executions: [],
+    partialDone: false, stop: envelopeStop, mark: candle.close, net: -fee, executions: [],
   };
   if (signal.strategy === 'ENVELOPE') {
-    p.signal = { ...effectiveSignal, stop: p.stop, initialStop: p.stop };
+    p.signal = { ...effectiveSignal, stop: p.stop, initialStop: signal.second ?? signal.stop };
     p.envelopeCenter = signal.envelopeCenter;
   }
   state.positions[symbol] = p;
@@ -241,8 +256,10 @@ function fillSecond(state: PortfolioState, p: Holding, price: number, candle: Ca
   p.reserved = p.reservedFee = 0;
   p.pending = false;
   p.secondFill = price;
-  p.target = (p.entry + p.first) / 2;
-  p.partial = null;
+  if (p.signal.strategy === 'PULLBACK') {
+    p.target = (p.entry + p.first) / 2;
+    p.partial = null;
+  }
   state.secondFills += 1;
   recordFill(p, 'SPLIT_ENTRY', price, qty, candle, opening);
 }
@@ -495,8 +512,9 @@ function worstPath(candidates: PortfolioState[]): PortfolioState {
 
 /**
  * Enter at the current centre-line touch only after a previous 15-candle
- * opposite-band touch has armed the setup.  The entry candle's band is frozen
- * into the signal, so later candles cannot move the SL or target.
+ * opposite-band touch has armed the setup.  The entry candle's bands are
+ * frozen into the signal: the original stop band becomes the second-entry
+ * line and the final stop is one equal entry-to-second-entry distance beyond it.
  */
 function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, lowFirst: boolean,
   settingsBySide?: Partial<Record<'LONG' | 'SHORT', BacktestSettings>>, openingPriority: 'LONG' | 'SHORT' = 'LONG'): PortfolioState {
@@ -518,10 +536,12 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
     if (!band) return;
     enteredSettings = parameters;
     const { percent, period } = envelopeParameters(parameters);
-    const stop = side === 'LONG' ? band.lower : band.upper;
+    const second = side === 'LONG' ? band.lower : band.upper;
+    const distance = Math.abs(price - second);
+    const stop = second - (side === 'LONG' ? distance : -distance);
     const target = side === 'LONG' ? band.upper : band.lower;
     enter(state, symbol, { strategy: 'ENVELOPE', side, index: candle.openTime,
-      entry: price, stop, target, initialTarget: target,
+      entry: price, second, stop, initialStop: second, target, initialTarget: target,
       exitMode: 'ENVELOPE_TOUCH', envelopeDeviationPercent: percent, envelopeExitMode: 'OPPOSITE', envelopeMaPeriod: period,
       envelopeCenter: band.center, envelopeMoveSlOnCenter: false, envelopeEntryMode: 'RECLAIM',
       ...(band.sourceInterval ? { envelopeSourceInterval: band.sourceInterval } : {}),

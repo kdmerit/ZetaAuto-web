@@ -68,12 +68,14 @@ describe('current envelope centre entry and fixed opposite-band exits', () => {
     expect(result.entryCount).toBe(1); expect(result.closedTradeCount).toBe(1); expect(result.recentTrades[0]!.reason).toBe('ENVELOPE_OPPOSITE');
     const trade = result.recentTrades[0]!;
     expect(trade.entryPrice).toBeCloseTo(100 * (short ? .9998 : 1.0002), 10);
-    expect(trade.signal.stop).toBeCloseTo(short ? 101 : 99, 10);
+    expect(trade.signal.stop).toBeCloseTo(short ? 102.02 : 97.98, 10);
+    expect(trade.signal.initialStop).toBeCloseTo(short ? 101 : 99, 10);
     expect(trade.signal.target).toBeCloseTo(short ? 99 : 101, 10);
     expect(trade.exitPrice).toBeCloseTo(short ? 99 : 101, 10);
     expect(trade.exitAt).toBe(start + 2 * 3600);
     expect(trade.signal.envelopeExitMode).toBe('OPPOSITE');
-    expect(trade.priceLines).toContainEqual({ kind: 'SL', price: short ? 101 : 99 });
+    expect(trade.priceLines).toContainEqual({ kind: 'SECOND_ENTRY', price: short ? 101 : 99 });
+    expect(trade.priceLines).toContainEqual({ kind: 'SL', price: short ? 102.02 : 97.98 });
     expect(trade.priceLines).toContainEqual({ kind: 'TP', price: short ? 99 : 101 });
     expect(document.bars[1]!.envelope).toMatchObject({ priorUpperTouch: !short, priorLowerTouch: short });
     expect(all).toHaveLength(23);
@@ -89,16 +91,21 @@ describe('current envelope centre entry and fixed opposite-band exits', () => {
     const stillValid = replay(false, [[100, 101.5, 99.5, 100], ...neutral.slice(0, 14), [99.5, 100.4, 99.5, 99.8]]);
     expect(stillValid.result.entryCount).toBe(1);
   });
-  it('does not use an extreme reached before the centre-line entry to close the position', () => {
-    const { result } = replay(false, [[100, 101.5, 99.5, 100], [100.5, 101.5, 98.5, 99.8]]);
+  it.each([false, true])('uses the old SL band for the second entry before the outer stop, short=%s', short => {
+    const { result } = replay(short, [[100, 101.5, 99.5, 100], [100.5, 101.5, 98.5, 99.8], [99, 99.5, 97.5, 98]]);
+    const trade = result.recentTrades[0]!;
     expect(result.entryCount).toBe(1); expect(result.closedTradeCount).toBe(1); expect(result.exitReasons.SL).toBe(1);
-    expect(result.recentTrades[0]!.executions.map(fill => fill.kind)).toEqual(['ENTRY', 'CLOSE']);
+    expect(trade.side).toBe(short ? 'SHORT' : 'LONG');
+    expect(trade.signal.second).toBeCloseTo(short ? 101 : 99, 10);
+    expect(trade.signal.stop).toBeCloseTo(short ? 102.02 : 97.98, 10);
+    expect(trade.executions.map(fill => fill.kind)).toEqual(['ENTRY', 'SPLIT_ENTRY', 'CLOSE']);
   });
   it('keeps the entry candle band as the SL and target and shows both lines in the local chart', () => {
     const fixture = replay(); const trade = fixture.result.recentTrades[0]!;
     const chart = buildLocalChart(fixture.result, trade, fixture.parameters);
     expect(maximumTouchedStep(fixture.document)).toBe(15);
-    expect(chart.priceLines).toContainEqual({ kind: 'SL', price: 99 });
+    expect(chart.priceLines).toContainEqual({ kind: 'SECOND_ENTRY', price: 99 });
+    expect(chart.priceLines).toContainEqual({ kind: 'SL', price: 97.98 });
     expect(chart.priceLines).toContainEqual({ kind: 'TP', price: 101 });
   });
 });

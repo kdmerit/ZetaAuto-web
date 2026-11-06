@@ -35,6 +35,7 @@ describe('envelope centre-line entries', () => {
     const result = portfolioResult(state, parameters);
     expect(result.closedTradeCount).toBe(0); expect(result.openPositionCount).toBe(1);
     expect(state.positions.BTCUSDT!.target).toBe(side === 'LONG' ? 101 : 99);
-    expect(state.positions.BTCUSDT!.stop).toBe(side === 'LONG' ? 99 : 101);
+    expect(state.positions.BTCUSDT!.stop).toBe(side === 'LONG' ? 97.98 : 102.02);
+    expect(state.positions.BTCUSDT!.signal.initialStop).toBe(side === 'LONG' ? 99 : 101);
   });
 });

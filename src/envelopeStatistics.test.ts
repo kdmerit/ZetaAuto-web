@@ -203,7 +203,7 @@ describe('persisted envelope parameter search', () => {
     await writeValue('publicData', 'orderbook:BTCUSDT', { expiresAt: Date.now() + 300000, data: { b: [['99.99', '10000']], a: [['100.01', '0.1']] } });
     await executeEnvelopeStatistics({ settings: { ...settings, envelopeStatisticsInterval: '1h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
-    expect(done.status).toBe('COMPLETED'); expect(done.bestBySide!.LONG).toBeNull(); expect(done.bestBySide!.SHORT).toBeNull();
+    expect(done.status).toBe('COMPLETED'); expect(done.bestBySide!.LONG).toBeNull(); expect(done.bestBySide!.SHORT).not.toBeNull();
     expect(done.rows.every(row => row.side === 'SHORT')).toBe(true); expect(fetch).not.toHaveBeenCalled();
   }, 30000);
   it('disables the daily trend with a saved checkbox value, requiring only hourly data and retaining the value on resume', async () => {

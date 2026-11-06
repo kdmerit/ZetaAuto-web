@@ -1137,6 +1137,10 @@ export function buildLocalChart(
     if (signal.partial) lines.push(line('PARTIAL_TP', signal.partial));
   } else if (signal.strategy === 'ENVELOPE' || signal.strategy === 'NEW_HIGH') {
     lines.push(line('ENTRY', trade.executions.find(fill => fill.kind === 'ENTRY')?.price ?? trade.entryPrice));
+    if (signal.strategy === 'ENVELOPE') {
+      lines.push(line('SECOND_ENTRY', signal.second));
+      if (trade.executions.some(fill => fill.kind === 'SPLIT_ENTRY')) lines.push(line('AVERAGE_ENTRY', signal.averageEntry));
+    }
     if (signal.strategy === 'NEW_HIGH') {
       const storedLines = trade.priceLines ?? [];
       lines.push(...storedLines.filter(priceLine => priceLine.kind === 'TRAILING_SL' || priceLine.kind === 'TRAILING_REACHED').map(priceLine => ({ ...priceLine })));
@@ -1193,7 +1197,7 @@ export function buildLocalChart(
 export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 조건 충족 시 봉 중간 진입하고, 초기 SL과 단계형 트레일링 SL로 청산합니다.';
-  if (strategy === 'ENVELOPE') return '이전 15봉의 반대 밴드 터치 이력 후 중심선 터치에서 진입하고, 진입 시 밴드의 반대쪽을 목표·바깥쪽을 SL로 고정해 청산합니다. SMA·이격은 통계로 비교합니다.';
+  if (strategy === 'ENVELOPE') return '이전 15봉의 반대 밴드 터치 이력 후 중심선 터치에서 1차 진입하고, 기존 SL 밴드에서 2차 진입합니다. 1·2차 진입 간격만큼 바깥쪽에 최종 SL을 두고 반대 밴드에서 청산합니다. SMA·이격은 통계로 비교합니다.';
   if (strategy === 'PULLBACK') {
     return 'MA20·MA60·MA120 5봉 정배열과 MA60·MA120·이격 증가, 직전 10봉 엔벨로프 접촉 이력을 확인한 뒤 MA20 눌림에서 진입하고, MA60·엔벨로프와 정배열 해제로 청산합니다.';
   }

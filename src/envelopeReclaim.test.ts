@@ -30,7 +30,7 @@ describe('fixed envelope centre-touch model', () => {
     replayPortfolioBlock(state, [document], parameters, all[5]!.openTime, all.at(-1)!.closeTime, 3600);
     const result = portfolioResult(state, parameters); const trade = result.recentTrades[0]!;
     expect(result.entryCount).toBe(1); expect(trade.reason).toBe('ENVELOPE_OPPOSITE');
-    expect(trade.signal.stop).toBe(short ? 101 : 99); expect(trade.signal.target).toBe(short ? 99 : 101);
+    expect(trade.signal.stop).toBe(short ? 102.02 : 97.98); expect(trade.signal.initialStop).toBe(short ? 101 : 99); expect(trade.signal.target).toBe(short ? 99 : 101);
   });
   it('forces the new fixed exit metadata while retaining the old input fields', () => {
     expect(currentEnvelopeSettings({ ...base, envelopeExitMode: 'HALF', envelopeMoveSlOnCenter: true })).toMatchObject({
