@@ -40,7 +40,7 @@ import { EnvelopeTrendControl } from './EnvelopeTrendControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
-import { currentNewHighSettings, newHighPeriod, newHighRiskAmount, newHighRules, newHighSlMultiplier } from '../newHigh';
+import { currentNewHighSettings, newHighPeriod, newHighRiskAmount, newHighRules } from '../newHigh';
 import { currentReferenceSettings, referenceRules, referenceTpPercent } from '../reference';
 
 const strategySettings = (strategy: Strategy, value: BacktestSettings): BacktestSettings => strategy === 'NEW_HIGH'
@@ -421,7 +421,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     if (strategy === 'ENVELOPE') envelopeParameters(settings);
     if (strategy === 'PULLBACK') pullbackEnvelopeParameters(settings);
     if (strategy === 'NEW_HIGH') {
-      newHighPeriod(settings); newHighSlMultiplier(settings);
+      newHighPeriod(settings);
       if (newHighRiskSizing) newHighRiskAmount(settings);
     }
     if (strategy === 'REFERENCE') referenceTpPercent(settings);
@@ -807,7 +807,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
 
           {strategy === 'NEW_HIGH' ? <>
             <label className="field-label">신고가 기준 봉수<input type="number" inputMode="numeric" min="6" max="1000" step="1" value={settings.newHighLookback ?? '20'} onChange={event => update('newHighLookback', event.target.value)} /><small>6~1000 · 기본 20 · 현재 봉 제외 · 최근 5봉에 고가/저가가 있으면 제외</small></label>
-            <label className="field-label">SL 배수 (ATR)<input type="number" inputMode="decimal" min="0.1" max="10" step="0.1" value={settings.newHighSlMultiplier ?? '2'} onChange={event => update('newHighSlMultiplier', event.target.value)} /><small>0.1~10.0 · 기본 2.0 · 롱 매수가−ATR×배수 / 숏 매수가+ATR×배수</small></label>
+            <p className="notice small">초기 SL: 매수캔들·직전캔들·전전캔들의 저가 중 최저값(롱) / 고가 중 최고값(숏)</p>
             <div className="sizing-choice" role="radiogroup" aria-label="신고가 포지션 금액 기준">
               <span className="sizing-choice-label">포지션 금액 기준</span>
               <label className={`radio-option${settings.newHighSizingMode !== 'RISK' ? ' selected' : ''}`}><input type="radio" name="newHighSizingMode" checked={settings.newHighSizingMode !== 'RISK'} onChange={() => update('newHighSizingMode', 'BET')} /><span>고정 베팅액</span></label>
@@ -819,7 +819,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             </div>
             <label className="checkbox-row"><input type="checkbox" checked={settings.newHighMa60Enabled === true} onChange={event => update('newHighMa60Enabled', event.target.checked)} /><span>현재가 &gt; MA60 (롱) / 현재가 &lt; MA60 (숏)일 때만 매수</span></label>
             <label className="checkbox-row"><input type="checkbox" checked={settings.newHighMa10Enabled === true} onChange={event => update('newHighMa10Enabled', event.target.checked)} /><span>MA10 아래에서 매수 (롱) / MA10 위에서 매수 (숏)</span></label>
-            <p className="notice small">조건 충족 시 봉 중간 1회 진입 · 돌파선 +0.5~1.0ATR 범위에서만 매수 · 단계형 트레일링 SL 적용</p>
+            <p className="notice small">조건 충족 시 봉 중간 1회 진입 · 돌파선 +0.5~1.0ATR 범위에서만 매수 · 3개 캔들 극값 초기 SL · 단계형 트레일링 SL 적용</p>
             <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h·4h·1d 모두 15분봉을 함께 확인해 봉 안의 진입·SL·트레일링 순서를 계산합니다. 종목당 한 번만 진입합니다. 롱은 현재가가 시가보다 높고 숏은 현재가가 시가보다 낮을 때 진입합니다. 진입한 선택 주기 캔들에서는 SL·트레일링 청산을 발동하지 않고 다음 선택 주기 캔들부터 적용합니다. 바로 다음 선택 주기 캔들에서 진입봉 저가(롱)·고가(숏)를 이탈하면 즉시 청산합니다. ATR 단계에 처음 도달한 15분봉에서는 새 트레일링 SL로 청산하지 않고 다음 15분봉부터 적용합니다. +1ATR부터 단계형 트레일링을 청산 시까지 계속 적용합니다. 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
           </> : strategy === 'REFERENCE' ? (
             <>

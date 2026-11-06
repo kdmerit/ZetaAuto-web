@@ -45,8 +45,8 @@ describe('new high/low causal strategy', () => {
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
     expect(newHighWarmup({ ...settings, interval: '1d' })).toBe(60 * 86400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.68'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.47'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
-    expect(canResumeLocalJob({ version: '2.10.68', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.69'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.47'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
+    expect(canResumeLocalJob({ version: '2.10.69', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {
     const data = history(); data[585]!.high = 120; data[585]!.low = 50;
@@ -59,7 +59,9 @@ describe('new high/low causal strategy', () => {
     const data = history(); const expected = prepareNewHigh(data, settings).at(-1);
     data[600] = { ...data[600]!, high: 1000, low: 1, close: 5 };
     data.push({ ...data[600]!, openTime: data[600]!.closeTime, closeTime: data[600]!.closeTime + 3600 });
-    expect(prepareNewHigh(data, settings)[600]).toEqual(expected);
+    const current = prepareNewHigh(data, settings)[600]!;
+    expect({ ...current, longStop: expected!.longStop, shortStop: expected!.shortStop }).toEqual(expected);
+    expect(current.longStop).toBe(1); expect(current.shortStop).toBe(1000);
     expect(prepareNewHigh(data.slice(480), settings).at(-2)!.atr).toBeNull();
   });
   it('requires a previous reverse MA zone and sufficient twenty-day ATR history', () => {
@@ -86,11 +88,16 @@ describe('new high/low causal strategy', () => {
     expect(confirmed.positions.BTCUSDT!.opened).toBe(origin);
     expect(confirmed.positions.BTCUSDT!.target).toBeCloseTo(confirmed.positions.BTCUSDT!.first + 4);
   });
-  it('fills at the intrabar threshold and places the initial SL at the configured ATR multiple', () => {
-    const state = simulate([bar(0, 101.5, 102.3, 101.4, 102)]); const holding = state.positions.BTCUSDT!;
-    expect(holding.first).toBeCloseTo(102 * 1.0002); expect(holding.stop).toBeCloseTo(holding.first - 4); expect(holding.qty).toBeCloseTo(100 / holding.first);
-    const custom = simulate([bar(0, 101.5, 102.3, 101.4, 102)], { ...settings, newHighSlMultiplier: '1.5' });
-    expect(custom.positions.BTCUSDT!.stop).toBeCloseTo(custom.positions.BTCUSDT!.first - 3);
+  it('fills at the intrabar threshold and places the structural initial SL', () => {
+    const state = simulate([bar(0, 101.5, 102.3, 101.4, 102, { longStop: 99 })]); const holding = state.positions.BTCUSDT!;
+    expect(holding.first).toBeCloseTo(102 * 1.0002); expect(holding.stop).toBe(99); expect(holding.qty).toBeCloseTo(100 / holding.first);
+    const short = simulate([bar(0, 98.5, 98.6, 97.7, 97.8, { long: false, short: true, shortStop: 105 })], { ...settings, side: 'SHORT' as const });
+    expect(short.positions.BTCUSDT!.stop).toBe(105);
+  });
+  it('prepares the three-candle structural stops from the selected timeframe', () => {
+    const data = history(); const prepared = prepareNewHigh(data, settings).at(-1)!;
+    expect(prepared.longStop).toBe(Math.min(data.at(-1)!.low, data.at(-2)!.low, data.at(-3)!.low));
+    expect(prepared.shortStop).toBe(Math.max(data.at(-1)!.high, data.at(-2)!.high, data.at(-3)!.high));
   });
   it.each(['LONG', 'SHORT'] as const)('limits the first %s buy to the fixed 0.5~1 ATR range', side => {
     const overrides = side === 'SHORT' ? { long: false, short: true } : {};
