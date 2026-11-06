@@ -11,9 +11,6 @@ export interface PreparedNewHigh {
   sum59?: number;
   high: number;
   low: number;
-  /** Structural initial stops from the entry candle and its two predecessors. */
-  longStop?: number;
-  shortStop?: number;
   long: boolean;
   short: boolean;
 }
@@ -72,8 +69,6 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): (
       sum4: sums[index]! - sums[index - 4]!, sum9: sums[index]! - sums[index - 9]!, sum19: sums[index]! - sums[index - 19]!,
       ...(index >= 59 ? { sum59: sums[index]! - sums[index - 59]! } : {}),
       high: highs[index]!, low: lows[index]!,
-      longStop: Math.min(candles[index]!.low, candles[index - 1]!.low, candles[index - 2]!.low),
-      shortStop: Math.max(candles[index]!.high, candles[index - 1]!.high, candles[index - 2]!.high),
       long: settings.side !== 'SHORT' && recent.every(row => row.high < highs[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 < row.ma20),
       short: settings.side !== 'LONG' && recent.every(row => row.low > lows[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 > row.ma20),
     };
@@ -84,13 +79,13 @@ export const newHighRules = {
   long: [
     '현재 봉을 제외한 이전 N봉 최고가를 돌파하는 중 MA10 > MA20 등 진입 조건이 충족되면 봉 중간에 매수합니다. N은 입력값(기본 20)이며 실제 체결가는 돌파선 +0.5~1.0ATR 사이로 고정됩니다.',
     '진입 시점의 현재가를 반영한 MA10 > MA20이고, 이전 20봉 안에 MA10 < MA20인 봉이 하나 이상 있어야 합니다.',
-    '진입 시 현재 가격이 시가보다 높은 양봉 방향이어야 합니다. 초기 SL은 매수캔들·직전캔들·전전캔들의 저가 중 최저값입니다.',
+    '진입 시 현재 가격이 시가보다 높은 양봉 방향이어야 합니다. SL은 실제 매수가 − (입력 SL 배수×ATR)입니다.',
     '수익이 +1ATR에 도달하면 SL을 매수가+0.5ATR, +2ATR에 도달하면 매수가+1.5ATR로 옮깁니다. +3ATR부터는 도달 배수−0.5만큼의 수익 구간에 SL을 계속 올립니다. 청산은 초기 SL 또는 단계형 트레일링 SL로만 합니다.',
   ],
   short: [
     '현재 봉을 제외한 이전 N봉 최저가를 돌파하는 중 MA10 < MA20 등 진입 조건이 충족되면 봉 중간에 매수합니다. 실제 체결가는 돌파선 −0.5~1.0ATR 사이로 고정됩니다.',
     '진입 시점의 현재가를 반영한 MA10 < MA20이고, 이전 20봉 안에 MA10 > MA20인 봉이 하나 이상 있어야 합니다.',
-    '진입 시 현재 가격이 시가보다 낮은 음봉 방향이어야 합니다. 초기 SL은 매수캔들·직전캔들·전전캔들의 고가 중 최고값입니다.',
+    '진입 시 현재 가격이 시가보다 낮은 음봉 방향이어야 합니다. SL은 실제 매수가 + (입력 SL 배수×ATR)입니다.',
     '수익이 +1ATR에 도달하면 SL을 매수가−0.5ATR, +2ATR에 도달하면 매수가−1.5ATR로 옮깁니다. +3ATR부터는 도달 배수−0.5만큼의 수익 구간에 SL을 계속 내립니다. 청산은 초기 SL 또는 단계형 트레일링 SL로만 합니다.',
   ],
   common: 'ATR은 선택 주기 TR의 직전 20일 단순평균(1h 480봉·4h 120봉·1d 20봉)이며 매 봉 시작 전에 확정합니다. 1h·4h·1d 모두 15분봉을 보조 데이터로 사용해 봉 안의 진입·SL·단계형 트레일링 순서를 확인합니다. 자료가 부족하면 신규 진입하지 않습니다. 고정 베팅액 또는 고정 손실액 중 선택한 기준으로 종목당 한 번만 진입합니다. 고정 손실액을 선택하면 초기 SL 거리와 수수료·슬리피지를 기준으로 수량을 계산합니다. 자금이 부족하거나 SL 가격이 유효하지 않으면 진입하지 않습니다. 현재가 MA60 조건을 켜면 롱은 체결 순간 현재가가 MA60보다 높고 숏은 MA60보다 낮아야 합니다. MA10 필터를 켜면 롱은 체결 시점 현재가가 MA10 아래, 숏은 MA10 위일 때만 매수합니다. 진입 캔들에서는 초기 SL·단계형 트레일링 SL을 발동하지 않고, 다음 선택 주기 캔들부터 단계형 트레일링 SL을 적용합니다. 바로 다음 선택 주기 캔들에서 진입봉 저가(롱)·고가(숏)를 15분봉 기준으로 이탈하면 즉시 청산합니다. ATR 단계에 처음 도달한 15분봉에서는 새로 이동한 트레일링 SL을 발동하지 않고, 다음 15분봉부터 그 SL 접촉을 청산으로 처리합니다. 별도 MA5·MA20 청산은 사용하지 않습니다. MA10·MA20·양봉/음봉 조건은 캔들 진행 중 체결 시점에 판단합니다. 매수는 돌파선 +0.5ATR에 도달한 순간부터 +1.0ATR 이내에서만 시도합니다. 진입/청산 0.02% 슬리피지·편도 0.055% 수수료를 반영합니다. 보조 봉 안의 OHLC 경로 중 낮은 계좌 평가액을 선택하고 동시 경계는 SL 우선입니다. 정확한 틱 재현은 아닙니다. 한 선택 주기에서 청산 후 재진입하지 않으며 전체종목은 한 계좌·종목명 순서·봉 시작 가용자금만 사용합니다.',

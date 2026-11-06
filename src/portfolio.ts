@@ -685,8 +685,7 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
       || settings.newHighMa10Enabled === true && direction * (price - ma10(price)) >= 0
       || direction * (fill - boundary) < 0.5 * definition.atr! - tolerance(fill, boundary, definition.atr!)
       || direction * (fill - boundary) > definition.atr! + tolerance(fill, boundary, definition.atr!)) return;
-    const structuralStop = side === 'LONG' ? definition.longStop : definition.shortStop;
-    const stop = structuralStop ?? (fill - direction * slMultiplier * definition.atr!);
+    const stop = fill - direction * slMultiplier * definition.atr!;
     if (!(stop > 0) || (side === 'LONG' ? stop >= price : stop <= price)) return;
     const target = fill + direction * 2 * definition.atr!;
     enter(state, symbol, { strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime),
