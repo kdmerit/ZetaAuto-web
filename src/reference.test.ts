@@ -50,9 +50,9 @@ describe('reference candle strategy', () => {
     const rows = setupRows();
     const referenceOpen = rows[1]!.openTime;
     const lowerTimeframe = [
-      { openTime: referenceOpen, closeTime: referenceOpen + 900, open: 90, high: 105, low: 89, close: 104, volume: 1 },
-      { openTime: referenceOpen + 900, closeTime: referenceOpen + 1800, open: 104, high: 115, low: 101, close: 110, volume: 1 },
-      { openTime: referenceOpen + 1800, closeTime: referenceOpen + 2700, open: 110, high: 115, low: 95, close: 99, volume: 1 },
+      { openTime: referenceOpen, closeTime: referenceOpen + 900, open: 90, high: 120, low: 89, close: 115, volume: 1 },
+      { openTime: referenceOpen + 900, closeTime: referenceOpen + 1800, open: 115, high: 118, low: 80, close: 105, volume: 1 },
+      { openTime: referenceOpen + 1800, closeTime: referenceOpen + 2700, open: 105, high: 115, low: 95, close: 99, volume: 1 },
     ];
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', referenceOpen, rows.at(-1)!.closeTime,
       undefined, undefined, undefined, undefined, lowerTimeframe);
@@ -109,11 +109,11 @@ describe('reference candle strategy', () => {
       open: values[0], high: values[1], low: values[2], close: values[3], volume: 1,
     });
     const lowerTimeframe = [
-      child(0, [90, 105, 89, 104]),
-      child(1, [104, 111, 101, 109]),
+      child(0, [90, 120, 89, 104]),
+      child(1, [104, 111, 80, 109]),
       child(2, [109, 110, 99, 105]),
-      child(3, [108, 109, 79, 85]),
-      child(4, [85, 90, 79, 82]),
+      child(3, [108, 109, 95, 99]),
+      child(4, [99, 100, 79, 85]),
     ];
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', referenceOpen, rows.at(-1)!.closeTime,
       undefined, undefined, undefined, undefined, lowerTimeframe);
@@ -130,8 +130,8 @@ describe('reference candle strategy', () => {
     const rows = setupRows();
     const referenceOpen = rows[1]!.openTime;
     const lowerTimeframe = [
-      { openTime: referenceOpen, closeTime: referenceOpen + 900, open: 90, high: 105, low: 89, close: 104, volume: 1 },
-      { openTime: referenceOpen + 900, closeTime: referenceOpen + 1800, open: 104, high: 111, low: 101, close: 109, volume: 1 },
+      { openTime: referenceOpen, closeTime: referenceOpen + 900, open: 90, high: 120, low: 89, close: 104, volume: 1 },
+      { openTime: referenceOpen + 900, closeTime: referenceOpen + 1800, open: 104, high: 111, low: 80, close: 109, volume: 1 },
       { openTime: referenceOpen + 1800, closeTime: referenceOpen + 2700, open: 109, high: 110, low: 99, close: 100, volume: 1 },
     ];
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', referenceOpen, rows.at(-1)!.closeTime,
@@ -140,5 +140,32 @@ describe('reference candle strategy', () => {
     replayPortfolioBlock(state, [document], settings, referenceOpen, rows.at(-1)!.closeTime, 3600);
     expect(state.entries).toBe(1);
     expect(state.trades[0]!.executions.find(fill => fill.kind === 'ENTRY')!.candleOpenAt).toBe(referenceOpen + 1800);
+  });
+
+  it.each([
+    ['4h', 4 * 3600],
+    ['1d', 24 * 3600],
+  ] as const)('gates the reference retest for the %s parent interval', (interval, seconds) => {
+    const row = (index: number, values: [number, number, number, number], volume: number): Candle => ({
+      openTime: origin + index * seconds, closeTime: origin + (index + 1) * seconds,
+      open: values[0], high: values[1], low: values[2], close: values[3], volume,
+    });
+    const rows = [
+      row(0, [100, 106, 99, 105], 10),
+      row(1, [110, 120, 80, 90], 30),
+      row(2, [90, 95, 89, 92], 20),
+    ];
+    const referenceOpen = rows[1]!.openTime;
+    const lowerTimeframe = [
+      { openTime: referenceOpen, closeTime: referenceOpen + 900, open: 110, high: 120, low: 101, close: 110, volume: 1 },
+      { openTime: referenceOpen + 900, closeTime: referenceOpen + 1800, open: 110, high: 112, low: 80, close: 105, volume: 1 },
+      { openTime: referenceOpen + 1800, closeTime: referenceOpen + 2700, open: 105, high: 110, low: 95, close: 90, volume: 1 },
+    ];
+    const document = prepareSymbolBlock('BTCUSDT', rows, { ...settings, interval, side: 'SHORT' }, 'REFERENCE', referenceOpen, rows.at(-1)!.closeTime,
+      undefined, undefined, undefined, undefined, lowerTimeframe);
+    const state = initialPortfolio(1_000);
+    replayPortfolioBlock(state, [document], { ...settings, interval, side: 'SHORT' }, referenceOpen, rows.at(-1)!.closeTime, seconds);
+    expect(state.entries).toBe(1);
+    expect(state.positions.BTCUSDT?.executions.find(fill => fill.kind === 'ENTRY')?.candleOpenAt).toBe(referenceOpen + 900);
   });
 });

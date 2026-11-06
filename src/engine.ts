@@ -524,6 +524,8 @@ export interface PreparedBar {
   newHighIntrabarCandles?: Candle[];
   /** Lower-timeframe candles used to replay reference entries and exits in order. */
   referenceIntrabarCandles?: Candle[];
+  /** First lower-timeframe candle where the reference candle's final high and low are both known. */
+  referenceExtremesConfirmedAt?: number;
 }
 
 export interface PreparedSymbol {
@@ -601,6 +603,18 @@ export function prepareSymbolBlock(
     rows.push(intrabar);
     referenceGroups.set(parentOpenTime, rows);
   }
+  const referenceExtremesConfirmedAt = (parent: Candle, rows: Candle[]): number | undefined => {
+    let highKnown = false;
+    let lowKnown = false;
+    const highTolerance = Math.max(Math.abs(parent.high), 1) * 1e-8;
+    const lowTolerance = Math.max(Math.abs(parent.low), 1) * 1e-8;
+    for (const row of [...rows].sort((a, b) => a.openTime - b.openTime)) {
+      highKnown ||= row.high + highTolerance >= parent.high;
+      lowKnown ||= row.low - lowTolerance <= parent.low;
+      if (highKnown && lowKnown) return row.openTime;
+    }
+    return undefined;
+  };
   const byTime = new Map(signals.flatMap(signal => {
     const time = candles[signal.index]?.openTime;
     return time === undefined ? [] : [[time, {
@@ -610,9 +624,12 @@ export function prepareSymbolBlock(
   }));
   return {
     symbol,
-    bars: enrichCandles(candles).map((candle, index) => ({
+    bars: enrichCandles(candles).map((candle, index) => {
+      const signal = byTime.get(candle.openTime) ?? null;
+      const referenceRows = referenceGroups.get(candle.openTime);
+      return {
       candle,
-      signal: byTime.get(candle.openTime) ?? null,
+      signal,
       ma20: candle.ma20,
       ...(currentPullback ? { ma60: candle.ma60, ma120: candle.ma120 } : {}),
       ma5Exit: candle.ma5,
@@ -621,11 +638,12 @@ export function prepareSymbolBlock(
       ...(pullbackBands && pullbackBands.centers[index] !== null && pullbackBands.centers[index] !== undefined
         ? { pullbackEnvelope: { ...bandFor(pullbackBands.centers[index] as number, pullbackBands.percent), long: true, short: true } }
         : {}),
-      ...(byTime.get(candle.openTime)?.exitMode === 'VOLATILITY_TP' && minuteGroups.has(candle.openTime)
+      ...(signal?.exitMode === 'VOLATILITY_TP' && minuteGroups.has(candle.openTime)
         ? { intrabarCandles: minuteGroups.get(candle.openTime) } : {}),
-      ...(strategy === 'REFERENCE' && referenceGroups.has(candle.openTime)
-        ? { referenceIntrabarCandles: referenceGroups.get(candle.openTime)!.sort((a, b) => a.openTime - b.openTime) } : {}),
-    })).filter(bar => bar.candle.openTime >= start && bar.candle.openTime < end),
+      ...(strategy === 'REFERENCE' && referenceRows
+        ? { referenceIntrabarCandles: referenceRows.sort((a, b) => a.openTime - b.openTime),
+          ...(signal?.referenceRole === 'REFERENCE' ? { referenceExtremesConfirmedAt: referenceExtremesConfirmedAt(candle, referenceRows) } : {}) } : {}),
+    }; }).filter(bar => bar.candle.openTime >= start && bar.candle.openTime < end),
     waveState,
   };
 }

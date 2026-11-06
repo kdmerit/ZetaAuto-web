@@ -429,7 +429,10 @@ function referenceRetestConfirmed(signal: Signal, candle: Candle): boolean {
 function replayReferenceIntrabarEntry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
   const state = initialPortfolio(available);
   let attempted = false;
+  const confirmedAt = bar.signal?.referenceRole === 'REFERENCE' ? bar.referenceExtremesConfirmedAt : undefined;
+  if (bar.signal?.referenceRole === 'REFERENCE' && confirmedAt === undefined) return state;
   for (const candle of [...bar.referenceIntrabarCandles!].sort((a, b) => a.openTime - b.openTime)) {
+    if (confirmedAt !== undefined && candle.openTime < confirmedAt) continue;
     if (!attempted && referenceRetestConfirmed(bar.signal!, candle)) {
       attempted = true;
       enter(state, symbol, bar.signal!, candle, settings);
