@@ -81,6 +81,8 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .segmented.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .segmented.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .segmented.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.segmented.interval-selector { display: flex; flex-wrap: nowrap; }
+.segmented.interval-selector button { flex: 1 1 0; min-width: 0; padding-inline: 6px; white-space: nowrap; }
 .segmented button { min-height: 44px; border: 1px solid #34435b; border-radius: 12px; background: transparent; color: #aab6c8; font-weight: 700; }
 .segmented button.selected { border-color: #7ea2ff; background: #7ea2ff; color: #0a1b45; }
 

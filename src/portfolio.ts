@@ -666,6 +666,7 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     const currentMa60 = ma60(price);
     if (direction * (ma10(price) - ma20(price)) <= 0
       || settings.newHighMa60Enabled === true && (currentMa60 === null || direction * (price - currentMa60) <= 0)
+      || settings.newHighMa10Enabled === true && direction * (price - ma10(price)) >= 0
       || direction * (fill - boundary) < 0.5 * definition.atr! - tolerance(fill, boundary, definition.atr!)
       || direction * (fill - boundary) > definition.atr! + tolerance(fill, boundary, definition.atr!)) return;
     const stop = fill - direction * slMultiplier * definition.atr!;

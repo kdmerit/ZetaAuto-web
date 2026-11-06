@@ -45,8 +45,8 @@ describe('new high/low causal strategy', () => {
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
     expect(newHighWarmup({ ...settings, interval: '1d' })).toBe(60 * 86400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.63'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
-    expect(canResumeLocalJob({ version: '2.10.63', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.68'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.45'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.49');
+    expect(canResumeLocalJob({ version: '2.10.68', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {
     const data = history(); data[585]!.high = 120; data[585]!.low = 50;
@@ -112,6 +112,13 @@ describe('new high/low causal strategy', () => {
     const short = { ...settings, side: 'SHORT' as const, newHighMa60Enabled: true };
     expect(simulate([bar(0, 98.5, 98.6, 97.7, 97.8, { long: false, short: true, sum59: 5900 })], short).entries).toBe(1);
     expect(simulate([bar(0, 98.5, 98.6, 97.7, 97.8, { long: false, short: true, sum59: 5400 })], short).entries).toBe(0);
+  });
+  it('optionally requires the entry price to be below or above MA10 by direction', () => {
+    expect(simulate([bar(0, 101.5, 102.3, 101.4, 102, { sum9: 1050 })], { ...settings, newHighMa10Enabled: true }).entries).toBe(1);
+    expect(simulate([bar(0, 101.5, 102.3, 101.4, 102)], { ...settings, newHighMa10Enabled: true }).entries).toBe(0);
+    const short = { ...settings, side: 'SHORT' as const, newHighMa10Enabled: true };
+    expect(simulate([bar(0, 98.5, 98.6, 97.7, 97.8, { long: false, short: true, sum9: 850 })], short).entries).toBe(1);
+    expect(simulate([bar(0, 98.5, 98.6, 97.7, 97.8, { long: false, short: true })], short).entries).toBe(0);
   });
   it.each(['LONG', 'SHORT'] as const)('opens only one %s unit and never creates additional fills', side => {
     const prices = [[101.5, 102.3, 101.4, 102], [102, 108.1, 106.5, 107.5], [107.5, 107.5, 104, 104.5]];
