@@ -54,7 +54,10 @@ function SearchFields({ settings, onChange, disabled, single }: { settings: Back
 
 export function VirtualEvaluationFields({ settings, onChange, disabled }: { settings: BacktestSettings; onChange: (settings: BacktestSettings) => void; disabled: boolean }) {
   const update = <K extends keyof BacktestSettings>(key: K, value: BacktestSettings[K]): void => onChange({ ...settings, [key]: value });
+  const sideLabel = settings.side === 'LONG' ? '롱' : settings.side === 'SHORT' ? '숏' : '롱 + 숏';
   return <section className="surface-card form-card" aria-label="가상매매 검증 설정"><fieldset className="analysis-fields" disabled={disabled}>
+    <h2>가상매매 방향</h2><div className="segmented three" role="group" aria-label="가상매매 방향">{(['BOTH', 'LONG', 'SHORT'] as const).map(side => <button key={side} type="button" aria-pressed={settings.side === side} className={settings.side === side ? 'selected' : ''} onClick={() => update('side', side)}>{side === 'BOTH' ? '롱 + 숏' : side === 'LONG' ? '롱' : '숏'}</button>)}</div>
+    <p className="muted small">{sideLabel} 방향의 전체통계 최적 세팅만 선택한 검증 기간에 적용합니다.</p>
     <h2>가상매매 분석 기간 (한국시간)</h2><div className="field-grid two">
       <label className="field-label">시작일<input inputMode="numeric" value={settings.startDate} onChange={event => update('startDate', formatDateInput(event.target.value))} /></label>
       <label className="field-label">시작시간<input inputMode="numeric" value={settings.startTime} onChange={event => update('startTime', formatTimeInput(event.target.value))} /></label>
@@ -145,7 +148,7 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
       {!sources.length ? <p className="notice">새 고정 매매 조건으로 전체통계를 먼저 완료해 주세요. 이전 조건의 이력은 그대로 보존됩니다.</p> : null}
       {source ? <><p className="muted small">세팅 선정 기간: {source.settings.startDate} {source.settings.startTime} ~ {source.settings.endDate} {source.settings.endTime} · 통계 주기 {statisticsIntervalLabel(source.settings)}</p><VirtualPeriodNotice evaluation={settings} training={source.settings} /></> : null}
       {source && !source.optimized ? <p className="notice">선택한 전체통계에는 최적 기준을 충족한 세팅이 없습니다. 다른 이력을 선택하거나 전체통계를 다시 실행해 주세요.</p> : null}
-      <p className="notice small">종목·방향별로 현재 필터·정렬에서 선정한 중심선·이격만 고정해 적용합니다. 검증 기간에는 다시 최적화하지 않습니다. 1시간봉 시간축·종목당 한 포지션·공유 계좌로 수익 누적을 계산합니다.</p></> : null}
+      <p className="notice small">종목·방향별로 현재 필터·정렬에서 선정한 중심선·이격만 고정해 적용합니다. 검증 기간에는 다시 최적화하지 않습니다. {source ? statisticsIntervalLabel(source.settings) : '선정된 주기'} 시간축·종목당 한 포지션·공유 계좌로 수익 누적을 계산합니다.</p></> : null}
     <button className="primary-button" type="button" disabled={busy || loading || kind === 'VIRTUAL' && (!source || !source.optimized)} onClick={() => start()}>{running ? `${label} 진행 중` : `${label} 분석 시작`}</button>
     {running ? <button className="danger-button" type="button" onClick={pauseEnvelopeBatch}>{label} 일시정지</button> : null}
     {!running && latest?.status === 'PAUSED' ? <button className="outline-button" type="button" disabled={busy || loading || !canResumeEnvelopeBatch(latest)} onClick={() => start(true)}>{label} 이어하기</button> : null}

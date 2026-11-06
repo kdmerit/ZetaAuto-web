@@ -1,7 +1,7 @@
 /** All-symbol optimization and a separate, cash-constrained hourly portfolio revalidation. */
 import { deletePrefix, deleteValue, lease, maintainCache, readValue, retentionMs, writeValue } from './database';
 import { intervalSeconds } from './api';
-import { envelopeOptimizerVersion, isCurrentEnvelopeStatisticsVersion, isFilteredEnvelopeStatisticsVersion, searchEnvelopeInstrument, statisticsAnalysisWindow, statisticsProgress, statisticsTotalFor, type DirectionalBests, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from './envelopeStatistics';
+import { envelopeOptimizerVersion, isCurrentEnvelopeStatisticsVersion, isFilteredEnvelopeStatisticsVersion, searchEnvelopeInstrument, selectedStatisticsSides, statisticsAnalysisWindow, statisticsProgress, statisticsTotalFor, type DirectionalBests, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from './envelopeStatistics';
 import { currentEnvelopeSettings } from './envelope';
 import { defaultEnvelopeResultOptions, envelopeBests, matchesEnvelopeFilters, retainEnvelopeCandidates, validateEnvelopeResultOptions } from './envelopeResults';
 import { analysisWindow, ensureCandles, listInstruments, type Instrument } from './marketData';
@@ -171,10 +171,11 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
       const source = options.sourceId ? await loadEnvelopeBatchReport(options.sourceId) : null;
       if (!source || source.kind !== 'ALL_STATS' || !isCurrentEnvelopeStatisticsVersion(source.version)) throw new Error('새 매매 조건으로 완료한 전체통계 결과를 먼저 선택해 주세요.');
       if (!options.settings) throw new Error('가상매매 기간·초기자금·베팅액·레버리지를 입력해 주세요.');
+      const requestedSides = selectedStatisticsSides(options.settings);
       const rows = source.rows.flatMap(row => {
         const bestBySide: DirectionalBests = {};
-        for (const side of ['LONG', 'SHORT'] as const) {
-          const best = row.bestBySide?.[side];
+        for (const side of requestedSides) {
+          const best = row.bestBySide?.[side] ?? (row.best?.side === side ? row.best : undefined);
           if (best && best.side === side && matchesEnvelopeFilters(best, source.settings.envelopeResultOptions)) bestBySide[side] = structuredClone(best);
         }
         const best = Object.values(bestBySide).filter((value): value is EnvelopeStatisticsRow => !!value).sort((a, b) => b.returnPercent - a.returnPercent)[0];
@@ -184,7 +185,7 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
       const sourceIntervals = new Set(rows.flatMap(row => [row.best?.interval, ...Object.values(row.bestBySide ?? {}).map(best => best?.interval)]).filter((value): value is BacktestInterval => !!value));
       if (sourceIntervals.size !== 1) throw new Error('전체통계 결과의 캔들 주기가 섞여 있습니다. 한 주기로 다시 통계를 실행해 주세요.');
       const sourceInterval = [...sourceIntervals][0]!;
-      const settings = { ...frozenSettings(options.settings), side: source.settings.side, interval: sourceInterval };
+      const settings = { ...frozenSettings(options.settings), side: options.settings.side, interval: sourceInterval };
       validateVirtualSettings(settings); const window = analysisWindow(settings);
       job = { id: crypto.randomUUID(), version: envelopeOptimizerVersion, kind: options.kind, status: 'RUNNING', settings, updatedAt: Date.now(), message: `${sourceInterval} 공유 계좌 재검증 준비`,
         sourceId: source.id, trainingSettings: structuredClone(source.settings), rows, universe: rows.map(row => ({ symbol: row.symbol, launchAt: row.launchAt })), cursor: 0, state: initialPortfolio(Number(settings.initialCapitalUsdt)), start: window.start, end: window.end, blockStart: window.start };
@@ -213,7 +214,7 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
         parameters[row.symbol] = settingFor(row, row.best!);
         if (row.bestBySide) {
           const directional: Partial<Record<StatisticsSide, BacktestSettings>> = {};
-          for (const side of ['LONG', 'SHORT'] as const) if (row.bestBySide[side]) directional[side] = settingFor(row, row.bestBySide[side]!, side);
+          for (const side of selectedStatisticsSides(job!.settings)) if (row.bestBySide[side]) directional[side] = settingFor(row, row.bestBySide[side]!, side);
           parametersBySide[row.symbol] = directional;
         }
       }

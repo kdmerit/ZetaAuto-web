@@ -103,6 +103,13 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     expect((await readValue('results', 'envelope-batch:source'))!).toEqual(source); expect(done.trainingSettings).toMatchObject(source.settings);
     const history = (await loadEnvelopeBatchHistory('VIRTUAL'))[0]!; expect(history.settings.startDate).toBe('2026-03-01'); expect(history.trainingSettings!.startDate).toBe('2026-02-01'); expect(fetch).not.toHaveBeenCalled();
   }, 30000);
+  it.each(['LONG', 'SHORT'] as const)('runs virtual evaluation for the selected %s direction only', async side => {
+    const source = await sourceReport();
+    await executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: source.id, settings: { ...evaluation, side } }, () => {}, new AbortController().signal);
+    const done = (await loadEnvelopeBatch('VIRTUAL'))!;
+    expect(done.status).toBe('COMPLETED'); expect(done.settings.side).toBe(side);
+    expect(done.rows.every(row => Object.keys(row.bestBySide ?? {}).every(value => value === side))).toBe(true);
+  }, 30000);
   it('resumes the same evaluation inputs, reclaim state and shared account to identical final results', async () => {
     await sourceReport(); const pause = new AbortController();
     await executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: 'source', settings: evaluation }, view => { if (view.result?.entryCount) pause.abort(); }, pause.signal);
