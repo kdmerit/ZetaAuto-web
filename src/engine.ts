@@ -476,19 +476,20 @@ function referenceSignals(
       const ma10 = enriched?.[index]?.ma10;
       if (ma10 === null || ma10 === undefined || (side === 'LONG' ? reference.close >= ma10 : reference.close <= ma10)) continue;
     }
-    const entryRange = side === 'LONG' ? reference.high - previous.low : previous.high - reference.low;
+    const stop = side === 'LONG' ? Math.min(previous.low, reference.low) : Math.max(previous.high, reference.high);
+    const entryRange = side === 'LONG' ? reference.high - stop : stop - reference.low;
     if (!Number.isFinite(entryRange) || entryRange <= 0) continue;
     const entryLine = side === 'LONG'
-      ? (previous.low + reference.high) / 2
-      : (previous.high + reference.low) / 2;
+      ? (stop + reference.high) / 2
+      : (stop + reference.low) / 2;
     const target = side === 'LONG'
-      ? previous.low + entryRange * tpPercent / 100
-      : previous.high - entryRange * tpPercent / 100;
+      ? stop + entryRange * tpPercent / 100
+      : stop - entryRange * tpPercent / 100;
     const base = {
       strategy: 'REFERENCE' as const,
       side,
       entry: entryLine,
-      stop: side === 'LONG' ? previous.low : previous.high,
+      stop,
       target,
       initialTarget: target,
       exitMode: 'REFERENCE_TOUCH' as const,
@@ -1174,7 +1175,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
-  if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전봉 저가·고가 SL과 입력 TP 비율로 청산합니다.';
+  if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 조건 충족 시 봉 중간 진입하고, 초기 SL과 단계형 트레일링 SL로 청산합니다.';
   if (strategy === 'ENVELOPE') return '1h 재돌파 진입·중심선 전량 청산에 일봉 MA20 추세 필터를 선택 적용하고, SMA·이격을 사용자 필터와 수익률·승률 정렬로 비교합니다.';
   if (strategy === 'PULLBACK') {

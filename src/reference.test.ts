@@ -66,7 +66,7 @@ describe('reference candle strategy', () => {
     const rows = setupRows();
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', rows[1]!.openTime, rows.at(-1)!.closeTime);
     expect(document.bars[0]!.signal).toMatchObject({
-      strategy: 'REFERENCE', side: 'LONG', referenceRole: 'REFERENCE', entry: 115, stop: 80, target: 136,
+      strategy: 'REFERENCE', side: 'LONG', referenceRole: 'REFERENCE', entry: 110, stop: 70, target: 134,
       exitMode: 'REFERENCE_TOUCH',
     });
     expect(document.bars[1]!.signal).toMatchObject({ strategy: 'REFERENCE', referenceRole: 'NEXT', referenceOpenTime: rows[1]!.openTime });
@@ -86,16 +86,17 @@ describe('reference candle strategy', () => {
     const state = initialPortfolio(1_000);
     replayPortfolioBlock(state, [document], settings, rows[1]!.openTime, rows.at(-1)!.closeTime, 3600);
     const result = portfolioResult(state, settings);
+    const expectedEntry = 110 * (1 + 0.0002);
     expect(result.entryCount).toBe(1);
     expect(result.closedTradeCount).toBe(1);
     expect(result.exitReasons).toEqual({ REFERENCE_TP: 1 });
-    expect(result.recentTrades[0]!.entryPrice).toBeCloseTo(115.023, 10);
-    expect(result.recentTrades[0]!.exitPrice).toBe(136);
+    expect(result.recentTrades[0]!.entryPrice).toBeCloseTo(expectedEntry, 10);
+    expect(result.recentTrades[0]!.exitPrice).toBe(134);
     expect(result.recentTrades[0]!.priceLines).toEqual([
-      { kind: 'ENTRY', price: 115.023 },
-      { kind: 'SL', price: 80 },
-      { kind: 'TP', price: 136 },
-      { kind: 'EXIT', price: 136 },
+      { kind: 'ENTRY', price: expectedEntry },
+      { kind: 'SL', price: 70 },
+      { kind: 'TP', price: 134 },
+      { kind: 'EXIT', price: 134 },
     ]);
   });
 
@@ -113,7 +114,7 @@ describe('reference candle strategy', () => {
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', rows[1]!.openTime, rows.at(-1)!.closeTime,
       undefined, undefined, undefined, undefined, lowerTimeframe);
     expect(document.bars[0]!.signal).toBeNull();
-    expect(document.bars[1]!.signal).toMatchObject({ strategy: 'REFERENCE', referenceRole: 'NEXT', entry: 124.5, stop: 99 });
+    expect(document.bars[1]!.signal).toMatchObject({ strategy: 'REFERENCE', referenceRole: 'NEXT', entry: 115, stop: 80 });
     const state = initialPortfolio(1_000);
     replayPortfolioBlock(state, [document], settings, rows[1]!.openTime, rows.at(-1)!.closeTime, 3600);
     expect(state.entries).toBe(1);
@@ -125,7 +126,7 @@ describe('reference candle strategy', () => {
       candle(1, [150, 160, 80, 100], 50),
     ];
     const document = prepareSymbolBlock('BTCUSDT', rows, { ...settings, side: 'SHORT' }, 'REFERENCE', rows[1]!.openTime, rows.at(-1)!.closeTime);
-    expect(document.bars[0]!.signal).toMatchObject({ strategy: 'REFERENCE', side: 'SHORT', entry: 100, stop: 120, target: 88 });
+    expect(document.bars[0]!.signal).toMatchObject({ strategy: 'REFERENCE', side: 'SHORT', entry: 120, stop: 160, target: 96 });
   });
 
   it('uses chronological 15m candles so a parent-bar high cannot create a false TP', () => {
@@ -140,7 +141,7 @@ describe('reference candle strategy', () => {
       child(1, [130, 140, 100, 120]),
       child(2, [120, 140, 99, 110]),
       child(3, [110, 130, 95, 99]),
-      child(4, [99, 100, 79, 85]),
+      child(4, [99, 100, 69, 65]),
     ];
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', referenceOpen, rows.at(-1)!.closeTime,
       undefined, undefined, undefined, undefined, lowerTimeframe);
@@ -149,7 +150,7 @@ describe('reference candle strategy', () => {
     replayPortfolioBlock(state, [document], settings, referenceOpen, rows.at(-1)!.closeTime, 3600);
     expect(state.entries).toBe(1);
     expect(state.exitReasons).toEqual({ SL: 1 });
-    expect(state.trades[0]!.exitPrice).toBeCloseTo(79.984, 10);
+    expect(state.trades[0]!.exitPrice).toBeCloseTo(69.986, 10);
     expect(state.trades[0]!.executions.at(-1)!.candleOpenAt).toBe(referenceOpen + 4 * 900);
   });
 
@@ -203,7 +204,7 @@ describe('reference candle strategy', () => {
     const referenceOpen = rows[1]!.openTime;
     const lowerTimeframe = [
       { openTime: referenceOpen, closeTime: referenceOpen + 900, open: 150, high: 160, low: 101, close: 150, volume: 1 },
-      { openTime: referenceOpen + 900, closeTime: referenceOpen + 1800, open: 150, high: 155, low: 80, close: 105, volume: 1 },
+      { openTime: referenceOpen + 900, closeTime: referenceOpen + 1800, open: 150, high: 155, low: 80, close: 130, volume: 1 },
       { openTime: referenceOpen + 1800, closeTime: referenceOpen + 2700, open: 105, high: 110, low: 95, close: 90, volume: 1 },
     ];
     const document = prepareSymbolBlock('BTCUSDT', rows, { ...settings, interval, side: 'SHORT' }, 'REFERENCE', referenceOpen, rows.at(-1)!.closeTime,
