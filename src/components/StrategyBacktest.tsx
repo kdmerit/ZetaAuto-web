@@ -825,7 +825,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           </> : strategy === 'REFERENCE' ? (
             <>
               <label className="field-label">TP 비율 (%)<input type="number" inputMode="decimal" min="51" max="200" step="1" value={settings.referenceTpPercent ?? '80'} onChange={event => update('referenceTpPercent', event.target.value)} /><small>51~200 · 기본 80 · SL라인과 기준봉 고가/저가 사이 간격 기준</small></label>
-              <label className="checkbox-row"><input type="checkbox" checked={settings.referenceMa10Enabled === true} onChange={event => update('referenceMa10Enabled', event.target.checked)} /><span>기준봉 종가가 MA10 아래에서 매수 (롱) / MA10 위에서 매수 (숏)</span></label>
+              <label className="checkbox-row"><input type="checkbox" checked={settings.referenceMa10Enabled === true} onChange={event => update('referenceMa10Enabled', event.target.checked)} /><span>기준봉 MA10 위치 조건 (롱: 저가&lt;MA10·중간값≥MA10·종가&gt;MA10 / 숏 반대)</span></label>
               <p className="notice small">거래량·몸통이 직전 봉의 5배 이상인 양봉/음봉을 기준봉으로 삼습니다. 롱 SL은 직전봉·기준봉 저가 중 더 낮은 가격, 숏 SL은 직전봉·기준봉 고가 중 더 높은 가격입니다. 매수라인은 SL과 기준봉 고가/저가의 중간값이며, 기준봉 극값이 15분봉에서 확정된 뒤 매수라인을 재터치해야 진입합니다. TP는 SL라인과 기준봉 극값 사이 간격 기준 입력 비율입니다.</p>
             </>
           ) : strategy === 'PULLBACK' ? (
@@ -854,7 +854,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             <></>
           )}
           {strategy === 'REFERENCE' ? (
-            <p className="muted small">롱은 거래량·몸통이 직전봉의 5배 이상인 양봉 기준봉에서 직전봉·기준봉 저가 중 더 낮은 SL라인과 기준봉 고가의 중간 매수라인을 사용합니다. 기준봉 고가가 15분봉에서 확정되기 전의 라인 터치는 무시하며, 확정 후 매수라인을 하락 재터치할 때만 매수합니다. 숏은 고가 기준으로 반대로 적용합니다. TP는 SL라인과 기준봉 극값 사이 간격의 입력 비율이며 이후 캔들에서는 매수하지 않습니다.</p>
+            <p className="muted small">롱은 거래량·몸통이 직전봉의 5배 이상인 양봉 기준봉에서 직전봉·기준봉 저가 중 더 낮은 SL라인과 기준봉 고가의 중간 매수라인을 사용합니다. MA10 조건을 켜면 기준봉 저가&lt;MA10·중간값≥MA10·종가&gt;MA10을 모두 확인하고, 숏은 반대로 적용합니다. 기준봉 고가가 15분봉에서 확정되기 전의 라인 터치는 무시하며, 확정 후 매수라인을 하락 재터치할 때만 매수합니다. TP는 SL라인과 기준봉 극값 사이 간격의 입력 비율이며 이후 캔들에서는 매수하지 않습니다.</p>
           ) : strategy === 'VOLATILITY' ? (
             <p className="muted small">매수 캔들의 고가·저가 경계 안에서 MA5 절반 돌파와 몸통 2배가 충족되는 가격을 추정해 진입하며, SL은 실제 매수가 ±2ATR로 고정합니다. ATR은 선택 주기의 직전 20일 TR 단순평균이며, 실제 매수가보다 유리한 구간에서만 완성 캔들의 고가·저가 중간값이 MA5를 이탈하면 종가에 청산합니다.</p>
           ) : strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' && strategy !== 'PULLBACK' ? (

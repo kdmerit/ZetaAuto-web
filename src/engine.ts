@@ -474,7 +474,12 @@ function referenceSignals(
     if (!side || settings.side !== 'BOTH' && settings.side !== side) continue;
     if (settings.referenceMa10Enabled === true) {
       const ma10 = enriched?.[index]?.ma10;
-      if (ma10 === null || ma10 === undefined || (side === 'LONG' ? reference.close >= ma10 : reference.close <= ma10)) continue;
+      if (ma10 === null || ma10 === undefined) continue;
+      const half = (reference.high + reference.low) / 2;
+      const ma10Condition = side === 'LONG'
+        ? reference.low < ma10 && half >= ma10 && reference.close > ma10
+        : reference.high > ma10 && half <= ma10 && reference.close < ma10;
+      if (!ma10Condition) continue;
     }
     const stop = side === 'LONG' ? Math.min(previous.low, reference.low) : Math.max(previous.high, reference.high);
     const entryRange = side === 'LONG' ? reference.high - stop : stop - reference.low;
