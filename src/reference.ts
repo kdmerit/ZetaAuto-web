@@ -15,6 +15,7 @@ export function currentReferenceSettings(settings: BacktestSettings): BacktestSe
     ...settings,
     interval: settings.interval === '1d' ? '1d' : settings.interval === '4h' ? '4h' : '1h',
     referenceTpPercent: settings.referenceTpPercent ?? '80',
+    referenceMa10Enabled: settings.referenceMa10Enabled === true,
     partialTpEnabled: false,
   };
 }
@@ -32,5 +33,5 @@ export const referenceRules = {
     '기준봉 다음 캔들은 기준봉 저가를 깨지 않고 중심선을 터치하며 거래량이 더 작을 때만 같은 진입을 허용합니다. 그 이후에는 진입하지 않습니다.',
     'TP는 기준봉 고가에서 기준봉 전체 범위의 입력 비율만큼 아래에 둡니다. 기본값은 80%(중심선보다 30% 아래)입니다.',
   ],
-  common: '분석 주기는 1h·4h·1d만 사용하며 개별 종목 또는 전체 종목을 선택할 수 있습니다. 기준봉과 바로 다음 봉만 진입 대상으로 계산합니다.',
+  common: '분석 주기는 1h·4h·1d만 사용하며 개별 종목 또는 전체 종목을 선택할 수 있습니다. 기준봉과 바로 다음 봉만 진입 대상으로 계산합니다. MA10 필터를 켜면 기준봉 종가가 MA10 아래인 롱, MA10 위인 숏만 매수합니다.',
 };

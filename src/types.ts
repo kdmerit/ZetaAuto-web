@@ -64,6 +64,7 @@ export interface BacktestSettings {
   newHighSizingMode?: 'BET' | 'RISK';
   newHighRiskAmount?: string;
   referenceTpPercent?: string;
+  referenceMa10Enabled?: boolean;
 }
 
 export interface Candle {

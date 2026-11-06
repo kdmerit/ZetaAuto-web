@@ -94,6 +94,7 @@ export function defaultSettings(): BacktestSettings {
     newHighSizingMode: 'BET',
     newHighRiskAmount: '100',
     referenceTpPercent: '80',
+    referenceMa10Enabled: false,
   };
 }
 
@@ -824,6 +825,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           </> : strategy === 'REFERENCE' ? (
             <>
               <label className="field-label">TP 비율 (%)<input type="number" inputMode="decimal" min="51" max="200" step="1" value={settings.referenceTpPercent ?? '80'} onChange={event => update('referenceTpPercent', event.target.value)} /><small>51~200 · 기본 80 · 기준봉 저가/고가에서 전체 범위 기준</small></label>
+              <label className="checkbox-row"><input type="checkbox" checked={settings.referenceMa10Enabled === true} onChange={event => update('referenceMa10Enabled', event.target.checked)} /><span>기준봉 종가가 MA10 아래에서 매수 (롱) / MA10 위에서 매수 (숏)</span></label>
               <p className="notice small">거래량·몸통이 직전 봉의 2배 이상인 양봉/음봉을 기준봉으로 삼습니다. 롱은 중심선을 위에서 아래로, 숏은 아래에서 위로 재터치할 때만 1회 진입합니다. 바로 다음 봉은 기준봉 경계를 넘지 않고 중심선을 재터치하며 거래량이 낮을 때만 진입합니다. SL은 기준봉 저가/고가, TP는 입력 비율입니다.</p>
             </>
           ) : strategy === 'PULLBACK' ? (

@@ -458,6 +458,7 @@ function referenceSignals(
   settings: BacktestSettings,
 ): Signal[] {
   const tpPercent = referenceTpPercent(settings);
+  const enriched = settings.referenceMa10Enabled === true ? enrichCandles(candles) : null;
   const signals: Signal[] = [];
   for (let index = 1; index < candles.length; index += 1) {
     const reference = candles[index]!;
@@ -471,6 +472,10 @@ function referenceSignals(
 
     const side: 'LONG' | 'SHORT' | null = reference.close > reference.open ? 'LONG' : reference.close < reference.open ? 'SHORT' : null;
     if (!side || settings.side !== 'BOTH' && settings.side !== side) continue;
+    if (settings.referenceMa10Enabled === true) {
+      const ma10 = enriched?.[index]?.ma10;
+      if (ma10 === null || ma10 === undefined || (side === 'LONG' ? reference.close >= ma10 : reference.close <= ma10)) continue;
+    }
     const center = (reference.high + reference.low) / 2;
     const target = side === 'LONG'
       ? reference.low + range * tpPercent / 100

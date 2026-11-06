@@ -35,6 +35,20 @@ describe('reference candle strategy', () => {
     expect(() => referenceTpPercent({ ...settings, referenceTpPercent: '201' })).toThrow();
   });
 
+  it('optionally requires the reference close to be below or above MA10 by direction', () => {
+    const history = Array.from({ length: 9 }, (_, index) => candle(index, [100, 101, 99, 100.1], 10));
+    const longAllowed = [...history, candle(9, [90, 120, 80, 90.3], 30)];
+    const longBlocked = [...history, candle(9, [90, 120, 80, 110], 30)];
+    expect(prepareSymbolBlock('BTCUSDT', longAllowed, { ...settings, referenceMa10Enabled: true }, 'REFERENCE', longAllowed[9]!.openTime, longAllowed.at(-1)!.closeTime).bars[0]!.signal).toMatchObject({ side: 'LONG' });
+    expect(prepareSymbolBlock('BTCUSDT', longBlocked, { ...settings, referenceMa10Enabled: true }, 'REFERENCE', longBlocked[9]!.openTime, longBlocked.at(-1)!.closeTime).bars[0]!.signal).toBeNull();
+
+    const shortAllowed = [...history, candle(9, [110, 120, 80, 109.7], 30)];
+    const shortBlocked = [...history, candle(9, [110, 120, 80, 90], 30)];
+    const shortSettings = { ...settings, side: 'SHORT' as const, referenceMa10Enabled: true };
+    expect(prepareSymbolBlock('BTCUSDT', shortAllowed, shortSettings, 'REFERENCE', shortAllowed[9]!.openTime, shortAllowed.at(-1)!.closeTime).bars[0]!.signal).toMatchObject({ side: 'SHORT' });
+    expect(prepareSymbolBlock('BTCUSDT', shortBlocked, shortSettings, 'REFERENCE', shortBlocked[9]!.openTime, shortBlocked.at(-1)!.closeTime).bars[0]!.signal).toBeNull();
+  });
+
   it('creates only the reference candle and its immediate next-bar signal', () => {
     const rows = setupRows();
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', rows[1]!.openTime, rows.at(-1)!.closeTime);
