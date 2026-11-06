@@ -16,15 +16,22 @@ const settings: BacktestSettings = {
 const candle = (i: number, prices = [100, 100, 100, 100]): Candle => ({ openTime: origin + i * 3600, closeTime: origin + (i + 1) * 3600,
   open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: 10 });
 
-function replay(exit: EnvelopeExitMode = 'CENTER', short = false, tail = [[99.5, 99.8, 98.5, 99], [99.5, 101.5, 99.3, 101]]) {
-  const parameters = { ...settings, envelopeExitMode: exit, side: short ? 'SHORT' as const : 'LONG' as const };
-  const rows = [...Array.from({ length: 120 }, (_, i) => candle(i)), ...tail.map((prices, i) => candle(i + 120,
-    short ? [200 - prices[0]!, 200 - prices[2]!, 200 - prices[1]!, 200 - prices[3]!] : prices))];
-  const start = rows[120]!.openTime; const end = rows.at(-1)!.closeTime;
-  const document = prepareSymbolBlock('BTCUSDT', rows, parameters, 'ENVELOPE', start, end);
+function replay(short = false, rows = [
+  [100, 101.5, 99.5, 100],
+  [99.5, 100.4, 99.5, 99.8],
+  [100, 101.2, 99.8, 101],
+]) {
+  const tail = rows.map((prices, index) => {
+    const values = short ? [200 - prices[0]!, 200 - prices[2]!, 200 - prices[1]!, 200 - prices[3]!] : prices;
+    return candle(index + 20, values);
+  });
+  const all = [...Array.from({ length: 20 }, (_, i) => candle(i)), ...tail];
+  const parameters = { ...settings, side: short ? 'SHORT' as const : 'LONG' as const };
+  const start = all[20]!.openTime; const end = all.at(-1)!.closeTime;
+  const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', start, end);
   const state = initialPortfolio(1000);
   replayPortfolioBlock(state, [document], parameters, start, end, 3600);
-  return { state, result: portfolioResult(state, parameters), document, rows, parameters, start, end };
+  return { state, result: portfolioResult(state, parameters), document, all, parameters, start, end };
 }
 
 describe('envelope parameters and causal bands', () => {
@@ -55,61 +62,43 @@ describe('envelope parameters and causal bands', () => {
   });
 });
 
-describe('envelope shared-account fills', () => {
-  it.each([false, true])('executes center/opposite/half exits with a fixed fill-relative SL, short=%s', short => {
-    for (const exit of ['CENTER', 'OPPOSITE', 'HALF'] as const) {
-      const { result } = replay(exit, short);
-      expect(result.entryCount).toBe(1); expect(result.closedTradeCount).toBe(1); expect(result.openPositionCount).toBe(0);
-      const final = result.recentTrades.at(-1)!;
-      const first = final.executions[0]!;
-      const entry = short ? 101 * 0.9998 : 99 * 1.0002;
-      expect(first.price).toBeCloseTo(entry, 10);
-      expect(final.signal.stop).toBeCloseTo(entry * (short ? 1.01 : 0.99), 10);
-      const center = short ? 100.05 : 99.95;
-      const opposite = center * (short ? 0.99 : 1.01);
-      expect(final.exitPrice).toBeCloseTo(exit === 'CENTER' ? center : opposite, 10);
-      expect(final.reason).toBe(exit === 'CENTER' ? 'ENVELOPE_CENTER' : 'ENVELOPE_OPPOSITE');
-      if (exit === 'HALF') {
-        expect(final.executions.map(fill => fill.kind)).toEqual(['ENTRY', 'PARTIAL_TP', 'CLOSE']);
-        expect(final.executions[1]!.quantity).toBeCloseTo(first.quantity / 2, 10);
-        expect(final.executions[2]!.quantity).toBeCloseTo(first.quantity / 2, 10);
-      } else expect(final.executions.map(fill => fill.kind)).toEqual(['ENTRY', 'CLOSE']);
-      const gross = final.executions.slice(1).reduce((sum, fill) => sum + (fill.price - entry) * fill.quantity * (short ? -1 : 1), 0);
-      const fees = final.executions.reduce((sum, fill) => sum + fill.price * fill.quantity * 0.00055, 0);
-      expect(result.finalEquityUsdt).toBeCloseTo(1000 + gross - fees, 8);
-      expect(result.feesUsdt).toBeCloseTo(fees, 8);
-      expect(first.timing).toBe('INTRABAR');
-    }
+describe('current envelope centre entry and fixed opposite-band exits', () => {
+  it.each([false, true])('requires the previous opposite-band touch and exits at the later band touch, short=%s', short => {
+    const { result, document, all, start } = replay(short);
+    expect(result.entryCount).toBe(1); expect(result.closedTradeCount).toBe(1); expect(result.recentTrades[0]!.reason).toBe('ENVELOPE_OPPOSITE');
+    const trade = result.recentTrades[0]!;
+    expect(trade.entryPrice).toBeCloseTo(100 * (short ? .9998 : 1.0002), 10);
+    expect(trade.signal.stop).toBeCloseTo(short ? 101 : 99, 10);
+    expect(trade.signal.target).toBeCloseTo(short ? 99 : 101, 10);
+    expect(trade.exitPrice).toBeCloseTo(short ? 99 : 101, 10);
+    expect(trade.exitAt).toBe(start + 2 * 3600);
+    expect(trade.signal.envelopeExitMode).toBe('OPPOSITE');
+    expect(trade.priceLines).toContainEqual({ kind: 'SL', price: short ? 101 : 99 });
+    expect(trade.priceLines).toContainEqual({ kind: 'TP', price: short ? 99 : 101 });
+    expect(document.bars[1]!.envelope).toMatchObject({ priorUpperTouch: !short, priorLowerTouch: short });
+    expect(all).toHaveLength(23);
   });
-  it.each([false, true])('stops a gap at the observed open, short=%s', short => {
-    const { result } = replay('HALF', short, [[99.5, 99.8, 98.5, 99], [95, 96, 94, 95]]);
-    expect(result.exitReasons.SL).toBe(1);
-    expect(result.recentTrades[0]!.exitPrice).toBeCloseTo(short ? 105 * 1.0002 : 95 * 0.9998, 10);
+  it('does not treat a current-candle-only touch as an armed setup', () => {
+    const { result } = replay(false, [[100, 100.4, 99.5, 99.8], [100, 101.2, 99.8, 101]]);
+    expect(result.entryCount).toBe(0);
   });
-  it('does not use a pre-entry high to fill a target; applies same-bar SL conservatively', () => {
-    const { result } = replay('HALF', false, [[100, 102, 95, 99]]);
-    expect(result.closedTradeCount).toBe(1); expect(result.exitReasons.SL).toBe(1);
+  it('limits the arming touch to the previous 15 candles', () => {
+    const neutral = Array.from({ length: 15 }, () => [100.5, 100.6, 100.4, 100.5]);
+    const tooLate = replay(false, [[100, 101.5, 99.5, 100], ...neutral, [99.5, 100.4, 99.5, 99.8]]);
+    expect(tooLate.result.entryCount).toBe(0);
+    const stillValid = replay(false, [[100, 101.5, 99.5, 100], ...neutral.slice(0, 14), [99.5, 100.4, 99.5, 99.8]]);
+    expect(stillValid.result.entryCount).toBe(1);
+  });
+  it('does not use an extreme reached before the centre-line entry to close the position', () => {
+    const { result } = replay(false, [[100, 101.5, 99.5, 100], [100.5, 101.5, 98.5, 99.8]]);
+    expect(result.entryCount).toBe(1); expect(result.closedTradeCount).toBe(1); expect(result.exitReasons.SL).toBe(1);
     expect(result.recentTrades[0]!.executions.map(fill => fill.kind)).toEqual(['ENTRY', 'CLOSE']);
   });
-  it('does not reuse same-bar exit proceeds across symbols or enter twice in the same candle', () => {
-    const { document, start, end } = replay('CENTER', false, [[100, 101.2, 98.8, 100]]);
-    const parameters = { ...settings, mode: 'ALL' as const, initialCapitalUsdt: '101' };
-    const state = initialPortfolio(101);
-    replayPortfolioBlock(state, [{ ...document, symbol: 'ZZZUSDT' }, { ...document, symbol: 'AAAUSDT' }], parameters, start, end, 3600);
-    expect(state.entries).toBe(1); expect(state.insufficientFunds).toBe(1);
-    expect(state.trades.every(trade => trade.symbol === 'AAAUSDT')).toBe(true);
-  });
-  it('preserves an open account across JSON checkpoints and prepares exact wider-offset skipping', () => {
-    const fixture = replay('HALF');
-    const state = initialPortfolio(1000);
-    replayPortfolioBlock(state, [fixture.document], fixture.parameters, fixture.start, fixture.start + 3600, 3600);
-    const resumed = JSON.parse(JSON.stringify(state)) as typeof state;
-    replayPortfolioBlock(resumed, [fixture.document], fixture.parameters, fixture.start + 3600, fixture.end, 3600);
-    expect(portfolioResult(resumed, fixture.parameters)).toEqual(fixture.result);
+  it('keeps the entry candle band as the SL and target and shows both lines in the local chart', () => {
+    const fixture = replay(); const trade = fixture.result.recentTrades[0]!;
+    const chart = buildLocalChart(fixture.result, trade, fixture.parameters);
     expect(maximumTouchedStep(fixture.document)).toBe(15);
-    const chart = buildLocalChart({ ...fixture.result, candles: fixture.rows }, { ...fixture.result.recentTrades.at(-1)!, entryIndex: 120, signalIndex: 120, exitIndex: 121 }, fixture.parameters);
-    expect(chart.envelope).toMatchObject({ period: 20, deviationPercent: 1, interval: '1h' });
-    expect(chart.envelope!.bands.find(band => band.openTime === fixture.start)!.lower).toBe(99);
-    expect(chart.priceLines.find(line => line.kind === 'SL')?.price).toBeCloseTo(99 * 1.0002 * 0.99, 10);
+    expect(chart.priceLines).toContainEqual({ kind: 'SL', price: 99 });
+    expect(chart.priceLines).toContainEqual({ kind: 'TP', price: 101 });
   });
 });

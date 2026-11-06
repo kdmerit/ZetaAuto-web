@@ -3,7 +3,7 @@ import { intervalSeconds } from './api';
 import { lease, maintainCache, readValue, retentionMs, writeValue } from './database';
 import { saveEnvelopeStatisticsHistory } from './envelopeStatisticsHistory';
 import { prepareSymbolBlock } from './engine';
-import { currentEnvelopeSettings, envelopePeriods } from './envelope';
+import { currentEnvelopeSettings, envelopePeriods, priorEnvelopeTouchFlags, priorMovingAverages } from './envelope';
 import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, type EligibleInstrument } from './marketData';
 import type { BacktestInterval, BacktestResult, BacktestSettings, ContractRisk, EnvelopeExitMode } from './types';
 import { fixedEnvelopeSettings, replayFixedEnvelope } from './envelopeReplay';
@@ -11,7 +11,7 @@ import { betterFilteredEnvelopeSetting, defaultEnvelopeResultOptions, profitRati
 
 export const statisticsIntervals: BacktestInterval[] = ['15m', '1h', '4h', '1d'];
 const jobKey = 'ENVELOPE_STATISTICS';
-export const envelopeOptimizerVersion = '2.10.45';
+export const envelopeOptimizerVersion = '2.10.46';
 const version = envelopeOptimizerVersion;
 
 export type StatisticsSide = 'LONG' | 'SHORT';
@@ -94,7 +94,7 @@ export interface EnvelopeStatisticsJob {
   keepRows?: boolean;
 }
 
-export const statisticsTotal = 4 * envelopePeriods.length * 200 * 3;
+export const statisticsTotal = 4 * envelopePeriods.length * 200;
 export const statisticsTotalFor = (settings: Pick<BacktestSettings, 'envelopeStatisticsInterval' | 'side'>, calculationVersion = version): number => (isFilteredEnvelopeStatisticsVersion(calculationVersion) ? 1 : selectedStatisticsIntervals(settings).length) * envelopePeriods.length * 200 * (isReclaimStatisticsVersion(calculationVersion) ? 1 : 3) * (isDirectionalStatisticsVersion(calculationVersion) ? selectedStatisticsSides(settings).length : 1);
 export const statisticsProgress = (job: EnvelopeStatisticsJob): number => {
   const total = statisticsTotalFor(job.settings, job.version);
@@ -131,8 +131,8 @@ export function maximumTouchedStep(document: ReturnType<typeof prepareSymbolBloc
   for (const bar of document.bars) {
     const band = bar.envelope;
     if (!band) continue;
-    if (band.long) maximum = Math.max(maximum, (band.center - bar.candle.low) / band.center * 100);
-    if (band.short) maximum = Math.max(maximum, (bar.candle.high - band.center) / band.center * 100);
+    if (band.long) maximum = Math.max(maximum, (bar.candle.high - band.center) / band.center * 100);
+    if (band.short) maximum = Math.max(maximum, (band.center - bar.candle.low) / band.center * 100);
   }
   return Math.max(0, Math.min(200, Math.floor(maximum * 10 + 1e-8)));
 }
@@ -168,21 +168,30 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
     const daily = job.settings.envelopeDailyTrend ? await ensureCandles(job.instrument, '1d', Math.floor(start / 86400) * 86400 - 25 * 86400, Math.floor((end - seconds) / 86400) * 86400, undefined, signal) : undefined;
     while (job.periodIndex < envelopePeriods.length) {
       const maPeriod = envelopePeriods[job.periodIndex]!;
+      const centers = priorMovingAverages(candles, maPeriod);
       while (job.sideIndex < sides.length) {
         const side: StatisticsSide = sides[job.sideIndex]!;
         const directional = { ...settings, side };
         const document = prepareSymbolBlock(job.instrument.symbol, candles, { ...directional, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: '0.1' }, 'ENVELOPE', start, end, undefined, undefined, daily);
         for (const bar of document.bars) if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }
+        const indexByTime = new Map(candles.map((candle, index) => [candle.openTime, index]));
         const key = `${interval}:${maPeriod}:${side}`;
         const maximum = job.maxSteps[key] ?? maximumTouchedStep(document); job.maxSteps[key] = maximum;
         while (job.step <= maximum) {
-          for (const bar of document.bars) if (bar.envelope) { bar.envelope.upper = bar.envelope.center * (1 + job.step / 1000); bar.envelope.lower = bar.envelope.center * (1 - job.step / 1000); }
-          const exits = ['CENTER'] as const;
+          for (const bar of document.bars) if (bar.envelope) {
+            bar.envelope.upper = bar.envelope.center * (1 + job.step / 1000);
+            bar.envelope.lower = bar.envelope.center * (1 - job.step / 1000);
+            const sourceIndex = indexByTime.get(bar.candle.openTime);
+            const touches = sourceIndex === undefined ? { upper: false, lower: false } : priorEnvelopeTouchFlags(candles, centers, sourceIndex, job.step / 10);
+            bar.envelope.priorUpperTouch = touches.upper;
+            bar.envelope.priorLowerTouch = touches.lower;
+          }
+          const exits = ['OPPOSITE'] as const;
           for (; job.exitIndex < exits.length; job.exitIndex += 1) {
             signal.throwIfAborted();
             const exit = exits[job.exitIndex]!;
             const parameters = { ...directional, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: (job.step / 10).toFixed(1), envelopeExitMode: exit };
-            const label = `${statisticsSideLabel(side)} · ${interval} · SMA${maPeriod} · ${(job.step / 10).toFixed(1)}% · 중심선 전량 청산`;
+            const label = `${statisticsSideLabel(side)} · ${interval} · SMA${maPeriod} · ${(job.step / 10).toFixed(1)}% · 반대 밴드 청산`;
             const result = await replayFixedEnvelope(document, parameters, seconds, signal, async phase => { job.message = `${label} · ${phase}`; await checkpoint(); });
             const row = { ...resultRow(result, interval, maPeriod, job.step, exit), side, leverage: Number(parameters.leverage) };
             if (job.keepRows !== false) job.rows.push(row);

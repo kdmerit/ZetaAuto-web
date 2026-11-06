@@ -21,7 +21,7 @@ export function EnvelopeStatisticsStatus({ job }: { job: EnvelopeStatisticsJob }
       : '이전 버전의 고정 레버리지 통계입니다. 저장된 결과는 당시 기준으로 표시합니다.'
       : `적용 레버리지 ${job.settings.leverage}배 고정 · 최대 한도·위험한도를 조회하지 않습니다.`}</p>
     {!isDirectionalStatisticsVersion(job.version) && job.settings.side === 'BOTH' ? <p className="notice small">이전 롱·숏 합산 결과입니다. 방향별 최고 세팅은 새 통계를 실행해 확인해 주세요.</p> : null}
-    {!isCurrentEnvelopeStatisticsVersion(job.version) ? <p className="notice small">이전 매매 조건·선정 기준의 저장 결과입니다. 새 통계는 중심선 터치 시 전량 청산합니다. 이전 결과에는 새 조건을 소급 적용하지 않습니다.</p> : null}
+    {!isCurrentEnvelopeStatisticsVersion(job.version) ? <p className="notice small">이전 매매 조건·선정 기준의 저장 결과입니다. 새 통계는 이전 15봉 반대 밴드 터치 후 중심선 진입·진입봉 SL 고정·반대 밴드 청산을 적용합니다. 이전 결과에는 새 조건을 소급 적용하지 않습니다.</p> : null}
     {job.status !== 'COMPLETED' ? <ProgressBar completed={statisticsProgress(job)} total={statisticsTotalFor(job.settings, job.version)} label={job.status === 'PAUSED' ? '개별통계 일시정지' : job.message} /> : <p className="notice">{job.message}</p>}
     {job.status === 'PAUSED' ? <p className="notice" role="status">{job.message}</p> : null}
   </>;
@@ -184,8 +184,8 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
       <h3>{job.settings.symbol} 개별통계 {job.status === 'COMPLETED' ? '결과' : job.status === 'PAUSED' ? '일시정지' : '진행 중'}</h3>
       <p className="muted small">{job.settings.startDate} {job.settings.startTime} ~ {job.settings.endDate} {job.settings.endTime} (한국시간)<br />{statisticsIntervalLabel(job.settings)} · {selectedStatisticsIntervals(job.settings).length}개 주기 × 8개 SMA × 0.1~20.0% × {fixedTrade ? '고정 청산 1가지' : '3개 청산 방식'}{directional ? ` × ${selectedStatisticsSides(job.settings).length}개 방향` : ''} · 입력 레버리지 고정</p>
       <EnvelopeStatisticsStatus job={job} />
-      {directional ? <p className="muted small">롱·숏은 각각 같은 초기자금·고정 배율의 독립 계좌로 비교합니다. 두 최고 수익률은 합산 수익률이 아닙니다. {current ? '중심선 터치 시 전량 청산 · 초기 SL 유지' : `중앙선 터치시 SL 변경: ${job.settings.envelopeMoveSlOnCenter ? '사용' : '사용 안 함'}`}</p> : null}
-      {current ? <p className="notice small">1h 고정 · 일봉 MA20 추세 필터 {job.settings.envelopeDailyTrend ? '사용' : '미사용'} · 필터 통과 {rows.length.toLocaleString()}/{job.rows.length.toLocaleString()}건 · {resultSortLabel(resultOptions)} 내림차순</p> : fixedTrade ? <p className="notice small">이전 최적 세팅 필수 기준: {optimalSettingCriteria}</p> : null}
+      {directional ? <p className="muted small">롱·숏은 각각 같은 초기자금·고정 배율의 독립 계좌로 비교합니다. 두 최고 수익률은 합산 수익률이 아닙니다. {current ? '이전 15봉 반대 밴드 터치 후 중심선 진입 · 진입봉 SL 고정 · 이후 반대 밴드 청산' : `중앙선 터치시 SL 변경: ${job.settings.envelopeMoveSlOnCenter ? '사용' : '사용 안 함'}`}</p> : null}
+      {current ? <p className="notice small">1h 고정 · 일봉 추세 필터 미사용 · 필터 통과 {rows.length.toLocaleString()}/{job.rows.length.toLocaleString()}건 · {resultSortLabel(resultOptions)} 내림차순</p> : fixedTrade ? <p className="notice small">이전 최적 세팅 필수 기준: {optimalSettingCriteria}</p> : null}
       <p className="muted small">밴드 접촉이 없는 이격 이후의 조합은 건너뜁니다. 완료한 조건은 기기에 저장되며 화면을 닫아 중단되면 이어갈 수 있습니다.</p>
       {Object.entries(job.skippedIntervals).map(([interval, message]) => <p key={interval} className="notice small">{interval} 제외: {message}</p>)}
       <EnvelopeBestSettings job={job} resultOptions={resultOptions} disabled={running || historyLoading || disabled} onChoose={onChoose} />

@@ -52,7 +52,7 @@ describe('persisted envelope parameter search', () => {
     const job = final as unknown as EnvelopeStatisticsJob;
     expect(job.status).toBe('COMPLETED'); expect(statisticsProgress(job)).toBe(3200);
     expect(job.rows).toHaveLength(8 * 2 * 2);
-    expect(job.rows.every(row => row.exitMode === 'CENTER')).toBe(true);
+    expect(job.rows.every(row => row.exitMode === 'OPPOSITE')).toBe(true);
     expect(job.settings.envelopeStatisticsInterval).toBe('1h');
     expect(job.rows.every(row => row.leverage === 5)).toBe(true); expect(job.risk).toBeUndefined();
     expect(new Set(job.rows.map(row => row.maPeriod))).toEqual(new Set(envelopePeriods));
@@ -162,7 +162,7 @@ describe('persisted envelope parameter search', () => {
     await executeEnvelopeStatistics({ settings: { ...settings, side, envelopeStatisticsInterval: '1h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
     expect(done.rows).toHaveLength(16); expect(done.rows.every(row => row.side === side)).toBe(true);
-    expect(statisticsProgress(done)).toBe(1600); expect(done.bestBySide![side]?.side).toBe(side);
+    expect(statisticsProgress(done)).toBe(1600); expect(done.rows.every(row => row.side === side && row.entryCount > 0)).toBe(true);
     expect(done.bestBySide![side === 'LONG' ? 'SHORT' : 'LONG']).toBeUndefined();
   }, 30000);
   it('does not mix even a previous single-direction search with the new reclaim model', async () => {
@@ -178,13 +178,13 @@ describe('persisted envelope parameter search', () => {
     expect(done.rows.map(row => row.returnPercent)).toEqual(paused.rows.map(row => row.returnPercent)); expect(done.settings.leverage).toBe('5');
     expect(done.settings.envelopeStatisticsInterval).toBe('1h');
   }, 30000);
-  it('overrides an old center-stop setting with center full exit for both directions, matching ordinary replay', async () => {
+  it('overrides old center-stop settings with the fixed opposite-band model for both directions', async () => {
     const input = { ...settings, envelopeStatisticsInterval: '1h' as const, envelopeMoveSlOnCenter: true };
     await executeEnvelopeStatistics({ settings: input }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
-    expect(done.settings.envelopeMoveSlOnCenter).toBe(false); expect(done.settings.envelopeExitMode).toBe('CENTER');
+    expect(done.settings.envelopeMoveSlOnCenter).toBe(false); expect(done.settings.envelopeExitMode).toBe('OPPOSITE');
     for (const side of ['LONG', 'SHORT'] as const) {
-      const row = done.rows.find(row => row.side === side && row.maPeriod === 5 && row.deviationPercent === .1 && row.exitMode === 'CENTER')!;
+      const row = done.rows.find(row => row.side === side && row.maPeriod === 5 && row.deviationPercent === .1 && row.exitMode === 'OPPOSITE')!;
       const p = currentEnvelopeSettings({ ...input, side, interval: '1h' as const, envelopeMaPeriod: '5', envelopeDeviationPercent: '0.1' });
       const { start, end } = analysisWindow(p); const state = initialPortfolio(1000);
       replayPortfolioBlock(state, [prepareSymbolBlock('BTCUSDT', rows('1h'), p, 'ENVELOPE', start, end, undefined, undefined, dailyTrendRows(settings))], p, start, end, 3600);
@@ -196,14 +196,14 @@ describe('persisted envelope parameter search', () => {
     await cacheCandles('BTCUSDT', '1h', rows('1h').map(row => ({ ...row, low: 99.65 })));
     await executeEnvelopeStatistics({ settings: { ...settings, envelopeStatisticsInterval: '1h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
-    expect(done.maxSteps['1h:5:LONG']).toBe(3); expect(done.maxSteps['1h:5:SHORT']).toBe(2);
-    expect(done.rows.filter(row => row.side === 'LONG')).toHaveLength(24); expect(done.rows.filter(row => row.side === 'SHORT')).toHaveLength(16);
+    expect(done.maxSteps['1h:5:LONG']).toBe(2); expect(done.maxSteps['1h:5:SHORT']).toBe(3);
+    expect(done.rows.filter(row => row.side === 'LONG')).toHaveLength(16); expect(done.rows.filter(row => row.side === 'SHORT')).toHaveLength(24);
   }, 30000);
   it('keeps the unavailable direction empty when only one orderbook direction is eligible', async () => {
     await writeValue('publicData', 'orderbook:BTCUSDT', { expiresAt: Date.now() + 300000, data: { b: [['99.99', '10000']], a: [['100.01', '0.1']] } });
     await executeEnvelopeStatistics({ settings: { ...settings, envelopeStatisticsInterval: '1h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
-    expect(done.status).toBe('COMPLETED'); expect(done.bestBySide!.LONG).toBeNull(); expect(done.bestBySide!.SHORT?.side).toBe('SHORT');
+    expect(done.status).toBe('COMPLETED'); expect(done.bestBySide!.LONG).toBeNull(); expect(done.bestBySide!.SHORT).toBeNull();
     expect(done.rows.every(row => row.side === 'SHORT')).toBe(true); expect(fetch).not.toHaveBeenCalled();
   }, 30000);
   it('disables the daily trend with a saved checkbox value, requiring only hourly data and retaining the value on resume', async () => {

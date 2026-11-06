@@ -78,7 +78,7 @@ describe('durable local analysis', () => {
     await expect(executeLocalJob({ strategy: 'ENVELOPE', resumeId: paused.id }, () => {}, new AbortController().signal)).rejects.toThrow('새 분석');
     expect((await loadLocalJob('ENVELOPE'))!.id).toBe(paused.id);
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, () => {}, new AbortController().signal);
-    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.45');
+    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.46');
   });
   it('normalizes single/all analysis to 1h, requests daily history only when checked, and saves the checkbox value', async () => {
     for (const mode of ['SINGLE', 'ALL'] as const) for (const envelopeDailyTrend of [true, false]) {

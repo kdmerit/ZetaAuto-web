@@ -30,7 +30,7 @@ export function pullbackEnvelopeParameters(settings: BacktestSettings): { percen
 /** Current strategy only; archived settings without this marker retain their original replay. */
 export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSettings {
   return { ...settings, interval: '1h', envelopeStatisticsInterval: '1h', envelopeDailyTrend: settings.envelopeDailyTrend ?? true,
-    envelopeEntryMode: 'RECLAIM', envelopeExitMode: 'CENTER', envelopeMoveSlOnCenter: false, envelopeRisk: undefined };
+    envelopeEntryMode: 'RECLAIM', envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: false, envelopeRisk: undefined };
 }
 
 /** MA20 of the last closed daily candle versus five daily candles earlier, never the live daily bar. */
@@ -62,7 +62,7 @@ export function envelopeParameters(settings: BacktestSettings): { percent: numbe
   if (!/^\d+(\.\d)?$/.test(value) || !Number.isFinite(percent) || percent < 0.1 || percent > 20) {
     throw new Error('엔벨로프 이격은 0.1~20.0%로 입력해 주세요. (소수 한 자리)');
   }
-  const exit = settings.envelopeExitMode ?? 'CENTER';
+  const exit = settings.envelopeExitMode ?? 'OPPOSITE';
   if (!envelopeExitModes.includes(exit)) throw new Error('엔벨로프 청산 방식을 선택해 주세요.');
   const period = Number(settings.envelopeMaPeriod ?? '20');
   if (!envelopePeriods.includes(period)) throw new Error('중심선 봉수는 5·10·20·40·60·80·100·120 중에서 선택해 주세요.');
@@ -71,6 +71,31 @@ export function envelopeParameters(settings: BacktestSettings): { percent: numbe
 
 export function bandFor(center: number, percent: number): EnvelopeBand {
   return { center, upper: center * (1 + percent / 100), lower: center * (1 - percent / 100) };
+}
+
+/**
+ * The current envelope setup needs a completed touch from one of the previous
+ * candles.  The current candle is deliberately excluded so its own high/low
+ * cannot arm its entry condition retrospectively.
+ */
+export function priorEnvelopeTouchFlags(
+  candles: Candle[],
+  centers: (number | null)[],
+  index: number,
+  percent: number,
+  lookback = 15,
+): { upper: boolean; lower: boolean } {
+  let upper = false;
+  let lower = false;
+  for (let cursor = Math.max(0, index - lookback); cursor < index; cursor += 1) {
+    const candle = candles[cursor];
+    const center = centers[cursor];
+    if (!candle || center === null || center === undefined) continue;
+    const band = bandFor(center, percent);
+    upper ||= candle.high >= band.upper;
+    lower ||= candle.low <= band.lower;
+  }
+  return { upper, lower };
 }
 
 export function priorMovingAverages(candles: Candle[], period = envelopePeriod): (number | null)[] {

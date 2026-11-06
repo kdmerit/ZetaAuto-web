@@ -1,7 +1,7 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { calendarAtr } from './atr';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
-import { bandFor, envelopeParameters, priorMovingAverages, projectDailyTrend, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
+import { bandFor, envelopeParameters, priorEnvelopeTouchFlags, priorMovingAverages, projectDailyTrend, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
 import { prepareNewHigh, type PreparedNewHigh } from './newHigh';
 import { referenceTpPercent } from './reference';
 import { enrichMarketCandles } from './marketIndicators';
@@ -522,7 +522,15 @@ function referenceSignals(
   return signals;
 }
 
-export interface PreparedEnvelope extends EnvelopeBand { long: boolean; short: boolean; parentOpenTime?: number; sourceInterval?: BacktestInterval; dailyTrendChangePercent?: number | null }
+export interface PreparedEnvelope extends EnvelopeBand {
+  long: boolean;
+  short: boolean;
+  priorUpperTouch?: boolean;
+  priorLowerTouch?: boolean;
+  parentOpenTime?: number;
+  sourceInterval?: BacktestInterval;
+  dailyTrendChangePercent?: number | null;
+}
 export interface PreparedBar {
   candle: Candle;
   signal: Signal | null;
@@ -586,9 +594,11 @@ export function prepareSymbolBlock(
     return { symbol, bars: candles.flatMap((candle, index) => {
       if (candle.openTime < start || candle.openTime >= end) return [];
       const center = centers[index];
+      const priorTouches = center === null || center === undefined ? null : priorEnvelopeTouchFlags(candles, centers, index, percent);
       return [{ candle, signal: null, ma20: center ?? null, ma60Exit: null,
         ...(center === null || center === undefined ? {} : { envelope: {
           ...bandFor(center, percent), long: settings.side !== 'SHORT', short: settings.side !== 'LONG',
+          priorUpperTouch: priorTouches?.upper ?? false, priorLowerTouch: priorTouches?.lower ?? false,
           ...(dailyTrend ? { dailyTrendChangePercent: dailyTrend.get(candle.openTime) ?? null } : {}),
         } }),
       }];
@@ -1140,6 +1150,7 @@ export function buildLocalChart(
       }
     }
     lines.push(line('SL', signal.activeStop ?? signal.stop));
+    if (signal.strategy === 'ENVELOPE') lines.push(line('TP', signal.target));
     if (signal.strategy === 'NEW_HIGH' && signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
   } else if (signal.strategy === 'REFERENCE') {
     lines.push(line('ENTRY', trade.entryPrice));
@@ -1182,7 +1193,7 @@ export function buildLocalChart(
 export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 조건 충족 시 봉 중간 진입하고, 초기 SL과 단계형 트레일링 SL로 청산합니다.';
-  if (strategy === 'ENVELOPE') return '1h 재돌파 진입·중심선 전량 청산에 일봉 MA20 추세 필터를 선택 적용하고, SMA·이격을 사용자 필터와 수익률·승률 정렬로 비교합니다.';
+  if (strategy === 'ENVELOPE') return '이전 15봉의 반대 밴드 터치 이력 후 중심선 터치에서 진입하고, 진입 시 밴드의 반대쪽을 목표·바깥쪽을 SL로 고정해 청산합니다. SMA·이격은 통계로 비교합니다.';
   if (strategy === 'PULLBACK') {
     return 'MA20·MA60·MA120 5봉 정배열과 MA60·MA120·이격 증가, 직전 10봉 엔벨로프 접촉 이력을 확인한 뒤 MA20 눌림에서 진입하고, MA60·엔벨로프와 정배열 해제로 청산합니다.';
   }
