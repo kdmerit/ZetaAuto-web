@@ -31,7 +31,7 @@ describe('standalone market chart presentation', () => {
   it('leaves backtest chart controls, entry/exit links and title intact', () => {
     const html = renderToStaticMarkup(<ChartModal chart={{ ...chart, market: undefined, side: 'LONG', candles: chart.candles.map(candle => ({ ...candle, marketMetrics: undefined })) }} onClose={() => {}} />);
     expect(html).toContain('백테스트 차트'); expect(html).toContain('BACKTEST'); expect(html).toContain('롱'); expect(html).toContain('매수가'); expect(html).toContain('청산가');
-    expect(html).not.toContain('ATR 엔벨로프 설정'); expect(html).not.toContain('market-true-range');
+    expect(html).not.toContain('ATR 엔벨로프 설정'); expect(html).toContain('market-true-range'); expect(html).toContain('ATR 10 (10.00%)');
   });
   it('draws the final exit price and colors a profitable close green', () => {
     const entry = { id: 'entry', orderId: 'entry', kind: 'ENTRY' as const, label: 'B' as const, openTime: rows.at(-1)!.openTime, price: 100, quantity: 1, candleIndex: 129 };

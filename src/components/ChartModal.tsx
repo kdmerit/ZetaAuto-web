@@ -3,7 +3,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { chartTimestamp, entryCandleIndex, firstEntryTime, movingAverageAngle, tradeChartFills, visibleCandleRange } from '../chartData';
 import { chartIntervals } from '../chartIntervals';
 import { chartMaStorageKey, loadChartMas, saveChartMas } from '../storage';
-import { loadMarketIndicators, marketIndicatorStorageKey, saveMarketIndicators, withMarketIndicators } from '../marketIndicators';
+import { enrichMarketCandles, loadMarketIndicators, marketIndicatorStorageKey, saveMarketIndicators, withMarketIndicators } from '../marketIndicators';
 import { MarketIndicatorControls } from './MarketIndicatorControls';
 import type { BacktestInterval, ChartData, ChartMarker, EnrichedCandle, PriceLine } from '../types';
 
@@ -456,7 +456,11 @@ function ChartSvg({
 
 export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCandle, onIntervalChange, loadingOlder, historyError }: ChartModalProps) {
   const [indicatorSettings, setIndicatorSettings] = useState(loadMarketIndicators);
-  const chart = useMemo(() => withMarketIndicators(sourceChart, indicatorSettings), [sourceChart, indicatorSettings]);
+  const chartWithAtr = useMemo(() => {
+    if (sourceChart.candles.every(candle => candle.marketMetrics !== undefined)) return sourceChart;
+    return { ...sourceChart, candles: enrichMarketCandles(sourceChart.candles, sourceChart.interval) };
+  }, [sourceChart]);
+  const chart = useMemo(() => withMarketIndicators(chartWithAtr, indicatorSettings), [chartWithAtr, indicatorSettings]);
   const backdropPointer = useRef<number | null>(null);
   const viewTimeRef = useRef<number | null>(null);
   const rememberViewTime = useCallback((openTime: number) => { viewTimeRef.current = openTime; }, []);
