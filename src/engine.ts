@@ -468,7 +468,7 @@ function referenceSignals(
     const range = reference.high - reference.low;
     if (!Number.isFinite(previousBody) || previousBody <= 0 || !Number.isFinite(referenceBody)
       || !Number.isFinite(reference.volume) || !Number.isFinite(previous.volume)
-      || reference.volume < previous.volume * 2 || referenceBody < previousBody * 2 || range <= 0) continue;
+      || reference.volume < previous.volume * 5 || referenceBody < previousBody * 5 || range <= 0) continue;
 
     const side: 'LONG' | 'SHORT' | null = reference.close > reference.open ? 'LONG' : reference.close < reference.open ? 'SHORT' : null;
     if (!side || settings.side !== 'BOTH' && settings.side !== side) continue;
@@ -476,25 +476,29 @@ function referenceSignals(
       const ma10 = enriched?.[index]?.ma10;
       if (ma10 === null || ma10 === undefined || (side === 'LONG' ? reference.close >= ma10 : reference.close <= ma10)) continue;
     }
-    const center = (reference.high + reference.low) / 2;
+    const entryRange = side === 'LONG' ? reference.high - previous.low : previous.high - reference.low;
+    if (!Number.isFinite(entryRange) || entryRange <= 0) continue;
+    const entryLine = side === 'LONG'
+      ? (previous.low + reference.high) / 2
+      : (previous.high + reference.low) / 2;
     const target = side === 'LONG'
-      ? reference.low + range * tpPercent / 100
-      : reference.high - range * tpPercent / 100;
+      ? previous.low + entryRange * tpPercent / 100
+      : previous.high - entryRange * tpPercent / 100;
     const base = {
       strategy: 'REFERENCE' as const,
       side,
-      entry: center,
-      stop: side === 'LONG' ? reference.low : reference.high,
+      entry: entryLine,
+      stop: side === 'LONG' ? previous.low : previous.high,
       target,
       initialTarget: target,
       exitMode: 'REFERENCE_TOUCH' as const,
       referenceOpenTime: reference.openTime,
     };
-    // A long setup must retest the center while coming down from above; a
-    // bullish body merely crossing the center from below is not a fill. The
+    // A long setup must retest the entry line while coming down from above; a
+    // bullish body merely crossing the line from below is not a fill. The
     // lower-timeframe replay makes the actual directional touch decision.
     // The wick check only arms the reference-candle window; it does not itself
-    // create a fill when the 15m candles never return to the center.
+    // create a fill when the 15m candles never return to the line.
     const sameCandleEntry = side === 'LONG'
       ? reference.high > reference.close
       : reference.low < reference.close;
@@ -502,11 +506,11 @@ function referenceSignals(
 
     const next = candles[index + 1];
     if (!next || !Number.isFinite(next.volume) || next.volume >= reference.volume) continue;
-    const nextTouchesCenter = next.low <= center && next.high >= center;
+    const nextTouchesEntryLine = next.low <= entryLine && next.high >= entryLine;
     const nextRespectsBoundary = side === 'LONG' ? next.high <= reference.high : next.low >= reference.low;
-    if (!nextTouchesCenter || !nextRespectsBoundary) continue;
+    if (!nextTouchesEntryLine || !nextRespectsBoundary) continue;
     // Keep the direction local to the setup. The next candle need not be a
-    // same-colour candle; the center-line retest is the entry condition.
+    // same-colour candle; the entry-line retest is the entry condition.
     signals.push({ ...base, index: index + 1, referenceRole: 'NEXT' });
   }
   return signals;
@@ -529,8 +533,8 @@ export interface PreparedBar {
   newHighIntrabarCandles?: Candle[];
   /** Lower-timeframe candles used to replay reference entries and exits in order. */
   referenceIntrabarCandles?: Candle[];
-  /** First lower-timeframe candle where the reference candle's final high and low are both known. */
-  referenceExtremesConfirmedAt?: number;
+  /** First lower-timeframe candle where the reference candle's line-defining extreme is known. */
+  referenceLineConfirmedAt?: number;
 }
 
 export interface PreparedSymbol {
@@ -608,15 +612,11 @@ export function prepareSymbolBlock(
     rows.push(intrabar);
     referenceGroups.set(parentOpenTime, rows);
   }
-  const referenceExtremesConfirmedAt = (parent: Candle, rows: Candle[]): number | undefined => {
-    let highKnown = false;
-    let lowKnown = false;
-    const highTolerance = Math.max(Math.abs(parent.high), 1) * 1e-8;
-    const lowTolerance = Math.max(Math.abs(parent.low), 1) * 1e-8;
+  const referenceLineConfirmedAt = (parent: Candle, side: 'LONG' | 'SHORT', rows: Candle[]): number | undefined => {
+    const tolerance = Math.max(Math.abs(side === 'LONG' ? parent.high : parent.low), 1) * 1e-8;
     for (const row of [...rows].sort((a, b) => a.openTime - b.openTime)) {
-      highKnown ||= row.high + highTolerance >= parent.high;
-      lowKnown ||= row.low - lowTolerance <= parent.low;
-      if (highKnown && lowKnown) return row.openTime;
+      if (side === 'LONG' && row.high + tolerance >= parent.high) return row.openTime;
+      if (side === 'SHORT' && row.low - tolerance <= parent.low) return row.openTime;
     }
     return undefined;
   };
@@ -647,7 +647,7 @@ export function prepareSymbolBlock(
         ? { intrabarCandles: minuteGroups.get(candle.openTime) } : {}),
       ...(strategy === 'REFERENCE' && referenceRows
         ? { referenceIntrabarCandles: referenceRows.sort((a, b) => a.openTime - b.openTime),
-          ...(signal?.referenceRole === 'REFERENCE' ? { referenceExtremesConfirmedAt: referenceExtremesConfirmedAt(candle, referenceRows) } : {}) } : {}),
+          ...(signal?.referenceRole === 'REFERENCE' ? { referenceLineConfirmedAt: referenceLineConfirmedAt(candle, signal.side, referenceRows) } : {}) } : {}),
     }; }).filter(bar => bar.candle.openTime >= start && bar.candle.openTime < end),
     waveState,
   };
@@ -1174,7 +1174,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
-  if (strategy === 'REFERENCE') return '거래량·몸통 2배 기준봉의 중심선 재진입을 확인하고 기준봉 저가·고가 SL과 입력 TP 비율로 청산합니다.';
+  if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전봉 저가·고가 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 조건 충족 시 봉 중간 진입하고, 초기 SL과 단계형 트레일링 SL로 청산합니다.';
   if (strategy === 'ENVELOPE') return '1h 재돌파 진입·중심선 전량 청산에 일봉 MA20 추세 필터를 선택 적용하고, SMA·이격을 사용자 필터와 수익률·승률 정렬로 비교합니다.';
   if (strategy === 'PULLBACK') {

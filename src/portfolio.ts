@@ -409,7 +409,7 @@ function replayVolatilityMa5Entry(symbol: string, bar: PreparedBar, settings: Ba
   return state;
 }
 
-/** Replay a reference/next-bar center-line retest using lower-timeframe closes. */
+/** Replay a reference/next-bar entry-line retest using lower-timeframe closes. */
 function replayReferenceEntry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
   if (bar.referenceIntrabarCandles?.length) return replayReferenceIntrabarEntry(symbol, bar, settings, available);
   return referenceEntryPath(symbol, bar, settings, available);
@@ -423,13 +423,13 @@ function referenceRetestConfirmed(signal: Signal, candle: Candle): boolean {
 
 /**
  * A reference entry is confirmed by the lower-timeframe close: a long must
- * break above the center and finish back at/below it, with the inverse for a
+ * break above the entry line and finish back at/below it, with the inverse for a
  * short. The confirming candle is never replayed for exits after the fill.
  */
 function replayReferenceIntrabarEntry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
   const state = initialPortfolio(available);
   let attempted = false;
-  const confirmedAt = bar.signal?.referenceRole === 'REFERENCE' ? bar.referenceExtremesConfirmedAt : undefined;
+  const confirmedAt = bar.signal?.referenceRole === 'REFERENCE' ? bar.referenceLineConfirmedAt : undefined;
   if (bar.signal?.referenceRole === 'REFERENCE' && confirmedAt === undefined) return state;
   for (const candle of [...bar.referenceIntrabarCandles!].sort((a, b) => a.openTime - b.openTime)) {
     if (confirmedAt !== undefined && candle.openTime < confirmedAt) continue;
