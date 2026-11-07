@@ -82,6 +82,7 @@ export function defaultSettings(): BacktestSettings {
     volatilityK2: '1.0',
     volatilityTpEnabled: true,
     volatilityNextCloseEnabled: false,
+    volatilityMa10Enabled: false,
     envelopeDeviationPercent: '0.5',
     envelopeMaPeriod: '20',
     envelopeExitMode: 'MA20',
@@ -758,7 +759,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>초기 SL은 매도 캔들의 고가이며, 최초 매도가보다 높은 종가의 캔들은 홀딩합니다.</p>
                 <p>종가가 최초 매도가보다 낮아지면 음봉이면서 몸통이 직전 몸통보다 클 때 해당 캔들 고가로 SL을 내립니다. 몸통이 작거나 양봉이면 청산합니다.</p>
                 <strong>공통 체결 기준</strong>
-                <p>거래량·MA·ATR·2차 매수는 사용하지 않습니다. TP는 최초 매수 캔들의 전체 가격폭(고가−저가)을 적용합니다. 진입 캔들에서는 SL·청산을 검사하지 않고 다음 캔들부터 적용하며, 이후에는 초기 SL·갱신 SL·TP로 처리합니다. 진입·청산에는 기존의 0.02% 슬리피지와 편도 0.055% 수수료를 반영합니다.</p>
+                <p>거래량·ATR·2차 매수는 사용하지 않습니다. MA10 필터를 켜면 롱은 종가가 MA10 아래이면서 MA10 대비 1% 이상 낮을 때, 숏은 종가가 MA10 위이면서 MA10 대비 1% 이상 높을 때만 진입합니다. TP는 최초 매수 캔들의 전체 가격폭(고가−저가)을 적용합니다. 진입 캔들에서는 SL·청산을 검사하지 않고 다음 캔들부터 적용하며, 이후에는 초기 SL·갱신 SL·TP로 처리합니다. 진입·청산에는 기존의 0.02% 슬리피지와 편도 0.055% 수수료를 반영합니다.</p>
                 <p>한 종목은 봉당 최대 한 번 진입하며 봉 시작에 보유했다면 그 봉 재진입은 제외합니다. 전체종목은 종목명 순서·봉 시작의 가용자금만 진입에 사용해 같은 봉의 미래 청산 자금을 재사용하지 않습니다. SL 갭은 시가에 손절합니다.</p>
               </div>
             )}
@@ -849,14 +850,17 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <p className="notice small">선택 주기 상·하단 돌파를 종가로 확인하고 MA5·MA10·MA20·MA60 정배열일 때 종가 진입 · 종가 MA20 이탈 시 청산</p>
             </>
           ) : strategy === 'VOLATILITY' ? (
-            <p className="notice small">아랫꼬리가 몸통보다 큰 양봉·윗꼬리 10% 이하 캔들을 종가 매수하고, 진입봉 저가 SL과 후속 캔들 몸통 규칙을 적용합니다.</p>
+            <>
+              <label className="checkbox-row"><input type="checkbox" checked={settings.volatilityMa10Enabled === true} onChange={event => update('volatilityMa10Enabled', event.target.checked)} /><span>MA10 아래 1% 이상에서 매수 (롱) / MA10 위 1% 이상에서 매수 (숏)</span></label>
+              <p className="notice small">아랫꼬리가 몸통보다 큰 양봉·윗꼬리 10% 이하 캔들을 종가 매수하고, 진입봉 저가 SL과 후속 캔들 몸통 규칙을 적용합니다.</p>
+            </>
           ) : (
             <></>
           )}
           {strategy === 'REFERENCE' ? (
             <p className="muted small">롱은 거래량·몸통이 직전봉의 5배 이상인 양봉 기준봉에서 직전봉·기준봉 저가 중 더 낮은 SL라인과 기준봉 고가의 중간 매수라인을 사용합니다. MA10 조건을 켜면 기준봉 저가&lt;MA10·중간값≥MA10·종가&gt;MA10을 모두 확인하고, 숏은 반대로 적용합니다. 기준봉 고가가 15분봉에서 확정되기 전의 라인 터치는 무시하며, 확정 후 매수라인을 하락 재터치할 때만 매수합니다. TP는 SL라인과 기준봉 극값 사이 간격의 입력 비율이며 이후 캔들에서는 매수하지 않습니다.</p>
           ) : strategy === 'VOLATILITY' ? (
-            <p className="muted small">롱은 아랫꼬리&gt;몸통인 양봉 중 윗꼬리가 전체 길이의 10% 이하인 캔들의 종가에 진입하고, 초기 SL은 해당 캔들 저가입니다. TP는 최초 매수 캔들의 고가−저가만큼 위에 둡니다. 이후 최초 매수가보다 낮은 종가는 홀딩하며, 높은 종가가 나왔을 때 몸통이 직전보다 큰 양봉이면 SL을 해당 봉 저가로 올리고, 그렇지 않으면 종가에 청산합니다. 숏은 모든 조건과 가격 방향을 반대로 적용합니다.</p>
+            <p className="muted small">롱은 아랫꼬리&gt;몸통인 양봉 중 윗꼬리가 전체 길이의 10% 이하인 캔들의 종가에 진입하고, 초기 SL은 해당 캔들 저가입니다. MA10 필터를 켜면 종가가 MA10 아래이면서 1% 이상 이격된 경우만 진입합니다. TP는 최초 매수 캔들의 고가−저가만큼 위에 둡니다. 이후 최초 매수가보다 낮은 종가는 홀딩하며, 높은 종가가 나왔을 때 몸통이 직전보다 큰 양봉이면 SL을 해당 봉 저가로 올리고, 그렇지 않으면 종가에 청산합니다. 숏은 MA10 위 1% 이상 이격을 포함해 모든 조건과 가격 방향을 반대로 적용합니다.</p>
           ) : strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' && strategy !== 'PULLBACK' ? (
             <>
               <label className="checkbox-row"><input type="checkbox" checked={settings.partialTpEnabled} onChange={(event) => update('partialTpEnabled', event.target.checked)} /><span>부분 TP 50%</span></label>

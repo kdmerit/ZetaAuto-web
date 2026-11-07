@@ -398,6 +398,7 @@ function volatilitySignals(
   candles: Candle[],
   settings: BacktestSettings,
 ): Signal[] {
+  const enriched = settings.volatilityMa10Enabled === true ? enrichCandles(candles) : null;
   const signals: Signal[] = [];
   for (let index = 0; index < candles.length; index += 1) {
     const candle = candles[index];
@@ -412,6 +413,14 @@ function volatilitySignals(
     if (!long && !short) continue;
     const side = long ? 'LONG' : 'SHORT';
     if (settings.side !== 'BOTH' && settings.side !== side) continue;
+    if (settings.volatilityMa10Enabled === true) {
+      const ma10 = enriched?.[index]?.ma10;
+      if (ma10 === null || ma10 === undefined || !Number.isFinite(ma10) || ma10 <= 0) continue;
+      const ma10Distance = side === 'LONG'
+        ? (ma10 - candle.close) / ma10
+        : (candle.close - ma10) / ma10;
+      if (!Number.isFinite(ma10Distance) || ma10Distance < 0.01) continue;
+    }
     const entry = candle.close;
     const stop = long ? candle.low : candle.high;
     const target = entry + (long ? range : -range);

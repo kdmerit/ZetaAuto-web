@@ -30,9 +30,9 @@ function qualifyingLong(index = 0): Candle {
   return row(index, [100, 111, 89, 110]);
 }
 
-function prepared(rows: readonly Candle[], side: 'LONG' | 'SHORT' = 'LONG') {
+function prepared(rows: readonly Candle[], side: 'LONG' | 'SHORT' = 'LONG', extra: Partial<BacktestSettings> = {}) {
   const candles = [...rows];
-  return prepareSymbolBlock('BTCUSDT', candles, { ...settings, side }, 'VOLATILITY', candles[0]!.openTime, candles.at(-1)!.closeTime);
+  return prepareSymbolBlock('BTCUSDT', candles, { ...settings, ...extra, side }, 'VOLATILITY', candles[0]!.openTime, candles.at(-1)!.closeTime);
 }
 
 function replay(rows: readonly Candle[], side: 'LONG' | 'SHORT') {
@@ -72,6 +72,18 @@ describe('wick-pattern volatility breakout preparation', () => {
     candle.low = 186;
     expect(prepared([candle], 'SHORT').bars[0]!.signal).toBeNull();
     expect(prepared([mirroredRow(0, [100, 114, 89, 110])], 'SHORT').bars[0]!.signal).toBeNull();
+  });
+
+  it('applies the optional one-percent MA10 distance filter in both directions', () => {
+    const farLong = [...Array.from({ length: 10 }, (_, index) => row(index, [120, 121, 119, 120])), qualifyingLong(10)];
+    const nearLong = [...Array.from({ length: 10 }, (_, index) => row(index, [110.5, 111.5, 109.5, 110.5])), qualifyingLong(10)];
+    expect(prepared(farLong, 'LONG', { volatilityMa10Enabled: true }).bars.at(-1)!.signal).not.toBeNull();
+    expect(prepared(nearLong, 'LONG', { volatilityMa10Enabled: true }).bars.at(-1)!.signal).toBeNull();
+
+    const farShort = mirror(farLong);
+    const nearShort = mirror(nearLong);
+    expect(prepared(farShort, 'SHORT', { volatilityMa10Enabled: true }).bars.at(-1)!.signal).not.toBeNull();
+    expect(prepared(nearShort, 'SHORT', { volatilityMa10Enabled: true }).bars.at(-1)!.signal).toBeNull();
   });
 });
 

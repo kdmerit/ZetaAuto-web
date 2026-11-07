@@ -48,6 +48,7 @@ export interface BacktestSettings {
   volatilityK2: string;
   volatilityTpEnabled: boolean;
   volatilityNextCloseEnabled: boolean;
+  volatilityMa10Enabled?: boolean;
   envelopeDeviationPercent?: string;
   envelopeExitMode?: EnvelopeExitMode;
   envelopeMaPeriod?: string;
