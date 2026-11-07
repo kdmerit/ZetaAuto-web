@@ -30,9 +30,9 @@ function qualifyingLong(index = 0): Candle {
   return row(index, [100, 111, 89, 110]);
 }
 
-function prepared(rows: readonly Candle[], side: 'LONG' | 'SHORT' = 'LONG', extra: Partial<BacktestSettings> = {}) {
+function prepared(rows: readonly Candle[], side: 'LONG' | 'SHORT' = 'LONG', extra: Partial<BacktestSettings> = {}, volatilityIntrabarCandles?: Candle[]) {
   const candles = [...rows];
-  return prepareSymbolBlock('BTCUSDT', candles, { ...settings, ...extra, side }, 'VOLATILITY', candles[0]!.openTime, candles.at(-1)!.closeTime);
+  return prepareSymbolBlock('BTCUSDT', candles, { ...settings, ...extra, side }, 'VOLATILITY', candles[0]!.openTime, candles.at(-1)!.closeTime, undefined, undefined, undefined, undefined, undefined, volatilityIntrabarCandles);
 }
 
 function replay(rows: readonly Candle[], side: 'LONG' | 'SHORT') {
@@ -107,6 +107,17 @@ describe('wick-pattern volatility breakout preparation', () => {
     expect(prepared(mirror(longBelow), 'SHORT', { volatilityMa60BelowEnabled: true }).bars.at(-1)!.signal).not.toBeNull();
     expect(prepared(mirror(longAbove), 'SHORT', { volatilityMa60BelowEnabled: true }).bars.at(-1)!.signal).toBeNull();
     expect(prepared(longAbove, 'LONG', { volatilityMa60Enabled: true, volatilityMa60BelowEnabled: true }).bars.at(-1)!.signal).toBeNull();
+  });
+
+  it('uses chronological 15-minute exits before falling back to a parent-bar path', () => {
+    const parentRows = [qualifyingLong(), row(1, [110, 140, 80, 100])];
+    const childRows = [
+      [110, 133, 109, 132], [132, 140, 80, 100], [100, 100, 100, 100], [100, 100, 100, 100],
+    ].map((prices, index) => ({ ...row(index, prices), openTime: origin + 3600 + index * 900, closeTime: origin + 3600 + (index + 1) * 900 }));
+    const document = prepared(parentRows, 'LONG', {}, childRows);
+    const state = initialPortfolio(1_000);
+    replayPortfolioBlock(state, [document], { ...settings, side: 'LONG' }, origin, origin + 2 * 3600, 3600);
+    expect(state.exitReasons).toEqual({ FULL_TP: 1 });
   });
 });
 

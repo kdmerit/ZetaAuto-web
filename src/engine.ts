@@ -560,6 +560,8 @@ export interface PreparedBar {
   newHighIntrabarCandles?: Candle[];
   /** Lower-timeframe candles used to replay reference entries and exits in order. */
   referenceIntrabarCandles?: Candle[];
+  /** 15-minute candles used to replay volatility exits inside 1h/4h/1d bars. */
+  volatilityIntrabarCandles?: Candle[];
   /** First lower-timeframe candle where the reference candle's line-defining extreme is known. */
   referenceLineConfirmedAt?: number;
 }
@@ -583,6 +585,7 @@ export function prepareSymbolBlock(
   dailyCandles?: Candle[],
   newHighIntrabarCandles?: Candle[],
   referenceIntrabarCandles?: Candle[],
+  volatilityIntrabarCandles?: Candle[],
 ): PreparedSymbol {
   if (strategy === 'NEW_HIGH') {
     const definitions = prepareNewHigh(candles, settings);
@@ -642,6 +645,13 @@ export function prepareSymbolBlock(
     rows.push(intrabar);
     referenceGroups.set(parentOpenTime, rows);
   }
+  const volatilityGroups = new Map<number, Candle[]>();
+  for (const intrabar of volatilityIntrabarCandles ?? []) {
+    const parentOpenTime = Math.floor(intrabar.openTime / seconds) * seconds;
+    const rows = volatilityGroups.get(parentOpenTime) ?? [];
+    rows.push(intrabar);
+    volatilityGroups.set(parentOpenTime, rows);
+  }
   const referenceLineConfirmedAt = (parent: Candle, side: 'LONG' | 'SHORT', rows: Candle[]): number | undefined => {
     const tolerance = Math.max(Math.abs(side === 'LONG' ? parent.high : parent.low), 1) * 1e-8;
     for (const row of [...rows].sort((a, b) => a.openTime - b.openTime)) {
@@ -666,6 +676,7 @@ export function prepareSymbolBlock(
       candle,
       signal,
       ma20: candle.ma20,
+      ...(volatilityGroups.has(candle.openTime) ? { volatilityIntrabarCandles: volatilityGroups.get(candle.openTime)!.sort((a, b) => a.openTime - b.openTime) } : {}),
       ...(currentPullback ? { ma60: candle.ma60, ma120: candle.ma120 } : {}),
       ma5Exit: candle.ma5,
       // The intrabar MA60 touch equals the previous 59 closes' mean, independent of the final close.
@@ -1029,13 +1040,14 @@ export function runBacktest(
   minuteCandles?: Candle[],
   newHighIntrabarCandles?: Candle[],
   referenceIntrabarCandles?: Candle[],
+  volatilityIntrabarCandles?: Candle[],
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
   if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK' || strategy === 'REFERENCE') {
     const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
     const start = candles[0]!.openTime;
     const end = candles.at(-1)!.closeTime;
-    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles, undefined, newHighIntrabarCandles, referenceIntrabarCandles);
+    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles, undefined, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles);
     const state = initialPortfolio(Number(settings.initialCapitalUsdt));
     replayPortfolioBlock(state, [prepared], settings, start, end, intervalSeconds(settings.interval));
     const result = portfolioResult(state, settings);

@@ -33,7 +33,7 @@ beforeEach(async () => {
   vi.mocked(ensureCandles).mockImplementation(async (_instrument, interval, from, end) => {
     if (interval === '1d') return dailyTrendRows(settings).filter(row => row.openTime >= from && row.openTime < end);
     const rows: Candle[] = [];
-    const step = interval === '1m' ? 60 : interval === '4h' ? 14400 : 3600;
+    const step = interval === '1m' ? 60 : interval === '15m' ? 900 : interval === '4h' ? 14400 : 3600;
     for (let at = from; at < end; at += step) {
       const phase = ((Math.floor((at - origin) / 3600) % 20) + 20) % 20;
       const prices = phase === 8 ? [101, 102, 99, 100] : phase === 9 ? [100, 102, 99, 101]
@@ -150,10 +150,11 @@ describe('durable local analysis', () => {
         [108.5, 109.5, 108, 109], [107.5, 108.5, 107, 108], [106.5, 107.5, 85, 107], [105.5, 106.5, 105, 106], [104.5, 105.5, 104, 105],
         [108, 130, 90, 120], [120, 125, 115, 121], [121, 123, 94, 95],
       ];
-      for (let at = from; at < end; at += 3600) {
+      const step = interval === '15m' ? 900 : interval === '4h' ? 14400 : 3600;
+      for (let at = from; at < end; at += step) {
         const phase = ((Math.floor((at - origin) / 3600) % pattern.length) + pattern.length) % pattern.length;
         const prices = pattern[phase]!;
-        rows.push({ openTime: at, closeTime: at + 3600, open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: 10 });
+        rows.push({ openTime: at, closeTime: at + step, open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: 10 });
       }
       return rows;
     });
@@ -280,7 +281,7 @@ describe('durable local analysis', () => {
   it.each(['2.10.26', '2.10.28', '2.10.29', '2.10.30'])('separates old volatility checkpoints (%s) but preserves other strategy versions and old results', async version => {
     expect(engineVersionFor('PULLBACK')).toBe('2.10.26');
     expect(engineVersionFor('DISPARITY')).toBe('2.10.26');
-    expect(engineVersionFor('VOLATILITY')).toBe('2.10.80');
+    expect(engineVersionFor('VOLATILITY')).toBe('2.10.81');
     const controller = new AbortController();
     await executeLocalJob({ strategy: 'VOLATILITY', settings }, view => {
       if (view.blockStart > origin) controller.abort();

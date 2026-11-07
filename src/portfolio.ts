@@ -648,15 +648,33 @@ function updateVolatilityStop(p: Holding, candidate: number): void {
   p.signal = { ...p.signal, activeStop: p.stop };
 }
 
+/** Replay a higher-timeframe holding through chronological 15-minute candles. */
+function replayVolatilityIntrabarHolding(state: PortfolioState, symbol: string, bar: PreparedBar, settings: BacktestSettings): void {
+  for (const candle of [...(bar.volatilityIntrabarCandles ?? [])].sort((a, b) => a.openTime - b.openTime)) {
+    const position = state.positions[symbol];
+    if (!position) return;
+    const childBar: PreparedBar = { ...bar, candle, signal: null, volatilityIntrabarCandles: undefined };
+    const selected = worstPath([
+      replayPath(position, childBar, settings, true),
+      replayPath(position, childBar, settings, false),
+    ]);
+    mergePath(state, selected, symbol);
+  }
+}
+
 /** Replay the replacement wick-pattern volatility rule after the entry bar. */
 function processVolatilityWickRule(state: PortfolioState, symbol: string, bar: PreparedBar, settings: BacktestSettings): void {
   const position = state.positions[symbol];
   if (!position) return;
-  const selected = worstPath([
-    replayPath(position, bar, settings, true),
-    replayPath(position, bar, settings, false),
-  ]);
-  mergePath(state, selected, symbol);
+  if (bar.volatilityIntrabarCandles?.length) {
+    replayVolatilityIntrabarHolding(state, symbol, bar, settings);
+  } else {
+    const selected = worstPath([
+      replayPath(position, bar, settings, true),
+      replayPath(position, bar, settings, false),
+    ]);
+    mergePath(state, selected, symbol);
+  }
   const remaining = state.positions[symbol];
   if (!remaining) return;
 
