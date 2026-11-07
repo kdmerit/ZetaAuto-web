@@ -95,6 +95,17 @@ describe('wick-pattern volatility breakout preparation', () => {
     expect(prepared(mirror(longAbove), 'SHORT', { volatilityMa60Enabled: true }).bars.at(-1)!.signal).not.toBeNull();
     expect(prepared(mirror(longBelow), 'SHORT', { volatilityMa60Enabled: true }).bars.at(-1)!.signal).toBeNull();
   });
+
+  it('applies the inverse MA60 side filter and blocks contradictory filters', () => {
+    const longAbove = [...Array.from({ length: 60 }, (_, index) => row(index, [100, 101, 99, 100])), qualifyingLong(60)];
+    const longBelow = [...Array.from({ length: 60 }, (_, index) => row(index, [120, 121, 119, 120])), qualifyingLong(60)];
+    expect(prepared(longBelow, 'LONG', { volatilityMa60BelowEnabled: true }).bars.at(-1)!.signal).not.toBeNull();
+    expect(prepared(longAbove, 'LONG', { volatilityMa60BelowEnabled: true }).bars.at(-1)!.signal).toBeNull();
+
+    expect(prepared(mirror(longBelow), 'SHORT', { volatilityMa60BelowEnabled: true }).bars.at(-1)!.signal).not.toBeNull();
+    expect(prepared(mirror(longAbove), 'SHORT', { volatilityMa60BelowEnabled: true }).bars.at(-1)!.signal).toBeNull();
+    expect(prepared(longAbove, 'LONG', { volatilityMa60Enabled: true, volatilityMa60BelowEnabled: true }).bars.at(-1)!.signal).toBeNull();
+  });
 });
 
 describe('wick-pattern volatility breakout replay', () => {
