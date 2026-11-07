@@ -428,7 +428,12 @@ function volatilitySignals(
     const entry = long
       ? Math.max(candle.open + previousBody * 2, current.ma5 * 2 - candle.low)
       : Math.min(candle.open - previousBody * 2, current.ma5 * 2 - candle.high);
-    const stop = entry - (long ? 1 : -1) * atrValue * 2;
+    // The volatility entry conditions remain unchanged.  The new exit model
+    // uses the entry candle and its immediately preceding candle as the
+    // initial protective range instead of an ATR-derived stop.
+    const stop = long
+      ? Math.min(candle.low, previous.low)
+      : Math.max(candle.high, previous.high);
     if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0) continue;
     if (long ? entry > candle.high : entry < candle.low) continue;
     signals.push({
@@ -437,11 +442,12 @@ function volatilitySignals(
       index,
       entry,
       stop,
+      initialStop: stop,
       volatilityAtr: atrValue,
       volatilityStopEnabled: true,
-      target: entry,
-      initialTarget: entry,
-      exitMode: 'VOLATILITY_MA5',
+      target: 0,
+      initialTarget: 0,
+      exitMode: 'VOLATILITY_CANDLE_RULE',
     });
   }
   return signals;
@@ -1169,7 +1175,12 @@ export function buildLocalChart(
   } else {
     lines.push(line('ENTRY', trade.entryPrice));
     if (signal.volatilityStopEnabled === true) lines.push(line('SL', signal.activeStop ?? signal.stop));
-    if (signal.exitMode === 'VOLATILITY_CLOSE' || signal.exitMode === 'VOLATILITY_TP' && signal.volatilityTpEnabled !== false) lines.push(line('TP', signal.target));
+    if (signal.exitMode === 'VOLATILITY_CANDLE_RULE') {
+      const second = trade.executions.find(fill => fill.kind === 'SPLIT_ENTRY');
+      if (second) lines.push(line('SECOND_ENTRY', second.price), line('AVERAGE_ENTRY', signal.averageEntry));
+      if (signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
+      lines.push(line('TP', signal.target));
+    } else if (signal.exitMode === 'VOLATILITY_CLOSE' || signal.exitMode === 'VOLATILITY_TP' && signal.volatilityTpEnabled !== false) lines.push(line('TP', signal.target));
   }
   lines.push(line('EXIT', trade.exitPrice));
   const waves = (signal.waves ?? []).flatMap((wave) => {
@@ -1210,7 +1221,7 @@ export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'DISPARITY') {
     return 'MA20·MA60 사이 이격, 현재 캔들 절반, 직전 5봉 몸통 돌파와 직전 10봉 MA20 조건을 분석합니다.';
   }
-  return '직전 5개 몸통의 MA5 위치와 현재 몸통 2배 조건을 선택 주기 봉 안에서 추정해 중간 진입하고, 실제 매수가 ±2ATR SL·완성 캔들의 고가·저가 중간값 MA5 이탈 청산을 적용합니다.';
+  return '직전 5개 몸통의 MA5 위치와 현재 몸통 2배 조건으로 선택 주기 봉 안에서 중간 진입하고, 진입봉·직전봉 극값 SL과 후속 캔들의 몸통 비교·2차 진입·몸통 TP 규칙을 적용합니다.';
 }
 
 export function estimateBars(settings: BacktestSettings): number {

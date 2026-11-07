@@ -33,12 +33,16 @@ function mirror(rows: Candle[]): Candle[] {
   return rows.map((candle, index) => row(index, [300 - candle.open, 300 - candle.low, 300 - candle.high, 300 - candle.close], candle.volume));
 }
 
+function mirroredRow(index: number, prices: number[], volume = 10): Candle {
+  return row(index, [300 - prices[0]!, 300 - prices[2]!, 300 - prices[1]!, 300 - prices[3]!], volume);
+}
+
 function prepared(rows: Candle[], side: 'LONG' | 'SHORT' = 'LONG') {
   const start = rows[9]!.openTime;
   return prepareSymbolBlock('BTCUSDT', rows, { ...settings, side }, 'VOLATILITY', start, rows.at(-1)!.closeTime);
 }
 
-describe('MA5 body volatility breakout preparation', () => {
+describe('volatility breakout preparation', () => {
   it.each([
     ['LONG', longCandles()],
     ['SHORT', mirror(longCandles())],
@@ -46,12 +50,13 @@ describe('MA5 body volatility breakout preparation', () => {
     const document = prepared(rows, side);
     const signal = document.bars[0]!.signal!;
     expect(signal).toMatchObject({
-      strategy: 'VOLATILITY', side, exitMode: 'VOLATILITY_MA5', volatilityStopEnabled: true,
+      strategy: 'VOLATILITY', side, exitMode: 'VOLATILITY_CANDLE_RULE', volatilityStopEnabled: true,
     });
     expect(signal.entry).toBeCloseTo(side === 'LONG' ? 128.4 : 171.6, 10);
     expect(signal.volatilityAtr).toBeTypeOf('number');
-    expect(signal.stop).toBeCloseTo(signal.entry - (side === 'LONG' ? 1 : -1) * signal.volatilityAtr! * 2, 10);
-    expect(signal.target).toBe(signal.entry);
+    expect(signal.stop).toBeCloseTo(side === 'LONG' ? 90 : 210, 10);
+    expect(signal.target).toBe(0);
+    expect(signal.initialTarget).toBe(0);
     expect(signal.entry).not.toBe(rows[9]!.close);
     expect(signal.volatilityK1).toBeUndefined();
     expect(signal.volatilityK2).toBeUndefined();
@@ -73,12 +78,21 @@ describe('MA5 body volatility breakout preparation', () => {
     expect(prepared(rows).bars[0]!.signal).toBeNull();
   });
 
-  it('uses the prior TR average for the two-ATR stop', () => {
-    const rows = longCandles();
-    rows[7]!.low = 88;
-    const signal = prepared(rows).bars[0]!.signal!;
-    expect(signal.volatilityAtr).toBeTypeOf('number');
-    expect(signal.stop).toBeCloseTo(signal.entry - signal.volatilityAtr! * 2, 10);
+  it.each([
+    ['LONG', longCandles()],
+    ['SHORT', mirror(longCandles())],
+  ] as const)('uses the entry and previous candle extremes for the initial SL, %s', (side, rows) => {
+    if (side === 'LONG') {
+      rows[9]!.low = 95;
+      rows[8]!.low = 88;
+      const signal = prepared(rows, side).bars[0]!.signal!;
+      expect(signal.stop).toBe(88);
+    } else {
+      rows[9]!.high = 205;
+      rows[8]!.high = 212;
+      const signal = prepared(rows, side).bars[0]!.signal!;
+      expect(signal.stop).toBe(212);
+    }
   });
 
   it('keeps the signal aligned with a completed candle rather than requiring 1-minute data', () => {
@@ -88,57 +102,74 @@ describe('MA5 body volatility breakout preparation', () => {
   });
 });
 
-describe('MA5 body volatility breakout replay', () => {
+describe('volatility candle-rule replay', () => {
   it.each([
     ['LONG', longCandles()],
     ['SHORT', mirror(longCandles())],
-  ] as const)('enters at the completed signal close and exits when the candle midpoint crosses MA5, %s', (side, rows) => {
+  ] as const)('closes when the first following candle body is smaller, %s', (side, rows) => {
     const document = prepared(rows, side);
     const state = initialPortfolio(1_000);
     replayPortfolioBlock(state, [document], { ...settings, side }, rows[9]!.openTime, rows.at(-1)!.closeTime, 3600);
     const result = portfolioResult(state, { ...settings, side });
     expect(result.entryCount).toBe(1);
     expect(result.closedTradeCount).toBe(1);
-    expect(result.exitReasons).toEqual({ VOLATILITY_MA5_EXIT: 1 });
-    expect(result.recentTrades[0]!.entryPrice).toBeCloseTo(document.bars[0]!.signal!.entry * (side === 'LONG' ? 1.0002 : 0.9998), 10);
-    expect(result.recentTrades[0]!.executions[0]).toMatchObject({ timing: 'INTRABAR', candleOpenAt: rows[9]!.openTime });
-    expect(result.recentTrades[0]!.signal.stop).toBeCloseTo(result.recentTrades[0]!.entryPrice - (side === 'LONG' ? 1 : -1) * document.bars[0]!.signal!.volatilityAtr! * 2, 10);
-    expect(result.recentTrades[0]!.priceLines).toEqual([
-      { kind: 'ENTRY', price: result.recentTrades[0]!.entryPrice },
-      { kind: 'SL', price: result.recentTrades[0]!.signal.stop },
-      { kind: 'EXIT', price: result.recentTrades[0]!.exitPrice },
-    ]);
+    expect(result.exitReasons).toEqual({ VOLATILITY_CANDLE_EXIT: 1 });
   });
 
   it.each([
     ['LONG', longCandles()],
     ['SHORT', mirror(longCandles())],
-  ] as const)('does not use MA5 exit while the completed candle is below the entry profit zone, %s', (side, rows) => {
-    rows[11] = side === 'LONG' ? row(11, [100, 130, 91, 100]) : row(11, [200, 209, 170, 200]);
+  ] as const)('adds an equal-quantity second entry and places TP on the first body, %s', (side, rows) => {
+    if (side === 'LONG') rows[10] = row(10, [120, 125, 110, 115]);
+    if (side === 'SHORT') {
+      rows[10] = mirroredRow(10, [120, 125, 110, 115]);
+    }
+    rows[11] = side === 'LONG' ? row(11, [115, 121, 110, 118]) : mirroredRow(11, [115, 121, 110, 118]);
     const document = prepared(rows, side);
     const state = initialPortfolio(1_000);
     replayPortfolioBlock(state, [document], { ...settings, side }, rows[9]!.openTime, rows.at(-1)!.closeTime, 3600);
     const result = portfolioResult(state, { ...settings, side });
+    const trade = result.recentTrades[0]!;
     expect(result.entryCount).toBe(1);
-    expect(result.closedTradeCount).toBe(0);
-    expect(result.exitReasons).toEqual({});
+    expect(result.secondFillCount).toBe(1);
+    expect(result.exitReasons).toEqual({ FULL_TP: 1 });
+    expect(trade.executions.map(fill => fill.kind)).toEqual(['ENTRY', 'SPLIT_ENTRY', 'CLOSE']);
+    expect(trade.executions[1]!.quantity).toBeCloseTo(trade.executions[0]!.quantity, 10);
+    expect(trade.signal.target).toBe(side === 'LONG' ? 120 : 180);
   });
 
   it.each([
     ['LONG', longCandles()],
     ['SHORT', mirror(longCandles())],
-  ] as const)('applies the ATR-based SL, %s', (side, rows) => {
+  ] as const)('raises the SL when the first following candle has a larger same-direction body, %s', (side, rows) => {
+    rows[10] = side === 'LONG' ? row(10, [120, 140, 115, 135]) : mirroredRow(10, [120, 140, 115, 135]);
+    const document = prepared(rows, side);
+    const state = initialPortfolio(1_000);
+    replayPortfolioBlock(state, [document], { ...settings, side }, rows[9]!.openTime, rows[10]!.closeTime, 3600);
+    expect(state.closed).toBe(0);
+    expect(state.positions.BTCUSDT?.stop).toBe(side === 'LONG' ? 115 : 185);
+  });
+
+  it.each([
+    ['LONG', longCandles()],
+    ['SHORT', mirror(longCandles())],
+  ] as const)('uses the new SL and exits on a later smaller or opposite candle, %s', (side, rows) => {
+    rows[10] = side === 'LONG' ? row(10, [120, 140, 115, 135]) : mirroredRow(10, [120, 140, 115, 135]);
+    rows[11] = side === 'LONG' ? row(11, [135, 140, 120, 130]) : mirroredRow(11, [135, 140, 120, 130]);
+    const document = prepared(rows, side);
+    const state = initialPortfolio(1_000);
+    replayPortfolioBlock(state, [document], { ...settings, side }, rows[9]!.openTime, rows.at(-1)!.closeTime, 3600);
+    expect(portfolioResult(state, { ...settings, side }).exitReasons).toEqual({ VOLATILITY_CANDLE_EXIT: 1 });
+  });
+
+  it.each([
+    ['LONG', longCandles()],
+    ['SHORT', mirror(longCandles())],
+  ] as const)('applies the entry/previous extreme SL on a later candle, %s', (side, rows) => {
     if (side === 'LONG') {
-      rows[7]!.low = 95;
-      rows[8]!.low = 94;
-      rows[10]!.low = 50;
-      rows[10]!.close = 119;
+      rows[10]!.low = 85;
     } else {
-      rows[6]!.high = 205;
-      rows[7]!.high = 205;
-      rows[8]!.high = 206;
-      rows[10]!.high = 260;
-      rows[10]!.close = 181;
+      rows[10]!.high = 215;
     }
     const document = prepared(rows, side);
     const state = initialPortfolio(1_000);
@@ -146,7 +177,7 @@ describe('MA5 body volatility breakout replay', () => {
     expect(portfolioResult(state, { ...settings, side }).exitReasons).toEqual({ SL: 1 });
   });
 
-  it('does not render a TP line for the new fixed-exit strategy', () => {
+  it('does not render a TP line until the second entry creates one', () => {
     const prefix = Array.from({ length: 12 }, (_, index) => row(index, [110, 111, 109, 110]));
     const rows = [...prefix, ...longCandles().map((candle, index) => ({ ...candle, openTime: origin + (index + 12) * 3600, closeTime: origin + (index + 13) * 3600 }))];
     const result = runBacktest(rows, settings, 'VOLATILITY');

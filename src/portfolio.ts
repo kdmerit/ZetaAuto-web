@@ -39,6 +39,14 @@ interface Holding {
   newHighEntryParentOpenTime?: number;
   newHighEntryParentLow?: number;
   newHighEntryParentHigh?: number;
+  /** State for the post-entry volatility candle rule. */
+  volatilityEntryOpen?: number;
+  volatilityEntryClose?: number;
+  volatilityEntryLow?: number;
+  volatilityEntryHigh?: number;
+  volatilityRuleStage?: number;
+  volatilityPreviousBody?: number;
+  volatilitySecondFilled?: boolean;
 }
 
 export interface PortfolioState {
@@ -111,8 +119,12 @@ function priceLines(p: Holding): PriceLine[] {
   }
   if (p.signal.strategy === 'VOLATILITY') return [
     { kind: 'ENTRY', price: p.first },
+    ...(p.secondFill !== undefined ? [{ kind: 'SECOND_ENTRY' as const, price: p.secondFill }, { kind: 'AVERAGE_ENTRY' as const, price: p.entry }] : []),
     ...(p.signal.volatilityStopEnabled === true ? [{ kind: 'SL' as const, price: p.stop }] : []),
-    ...(p.signal.exitMode === 'VOLATILITY_CLOSE' || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false ? [{ kind: 'TP' as const, price: p.target }] : []),
+    ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : []),
+    ...(p.signal.exitMode === 'VOLATILITY_CANDLE_RULE' && p.target > 0
+      || p.signal.exitMode === 'VOLATILITY_CLOSE'
+      || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false ? [{ kind: 'TP' as const, price: p.target }] : []),
   ];
   if (p.signal.strategy === 'REFERENCE') return [
     { kind: 'ENTRY', price: p.first },
@@ -132,7 +144,7 @@ function priceLines(p: Holding): PriceLine[] {
 }
 
 function recordFill(p: Holding, kind: Execution['kind'], price: number, quantity: number, candle: Candle, opening = false, confirmedClose = false): void {
-  const intrabarMode = p.signal.exitMode === 'VOLATILITY_TP' || p.signal.exitMode === 'ENVELOPE_TOUCH' || p.signal.exitMode === 'PULLBACK_ENVELOPE' || p.signal.exitMode === 'NEW_HIGH_TOUCH' || p.signal.exitMode === 'REFERENCE_TOUCH'
+  const intrabarMode = p.signal.exitMode === 'VOLATILITY_TP' || p.signal.exitMode === 'VOLATILITY_CANDLE_RULE' || p.signal.exitMode === 'ENVELOPE_TOUCH' || p.signal.exitMode === 'PULLBACK_ENVELOPE' || p.signal.exitMode === 'NEW_HIGH_TOUCH' || p.signal.exitMode === 'REFERENCE_TOUCH'
     || p.signal.exitMode === 'VOLATILITY_MA5';
   const intrabar = intrabarMode && !confirmedClose && (kind === 'ENTRY' ? opening : !opening);
   const parentOpenTime = (candle as Candle & { parentOpenTime?: number }).parentOpenTime ?? candle.openTime;
@@ -149,7 +161,7 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE'].includes(reason);
+  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE'].includes(reason);
   const fill = market ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
   const qty = Math.min(p.qty, quantity);
   const profit = gross(p, fill, qty);
@@ -163,7 +175,7 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   p.qty -= qty;
   state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + 1;
   recordFill(p, reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE', fill, qty, candle, opening,
-    reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT' || reason === 'ENVELOPE_MA20_CLOSE');
+    reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT' || reason === 'VOLATILITY_CANDLE_EXIT' || reason === 'ENVELOPE_MA20_CLOSE');
   state.trades.push({
     tradeId: `local:${p.symbol}:${p.opened}:${candle.openTime}:${p.executions.length}`,
     symbol: p.symbol, side: p.signal.side, entryAt: p.opened,
@@ -210,10 +222,11 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   const target = signal.exitMode === 'VOLATILITY_TP' ? entry + direction * signal.breakoutRange! * signal.volatilityK1!
     : signal.exitMode === 'VOLATILITY_CLOSE' ? entry + direction * signal.breakoutRange! : signal.target;
   if (signal.exitMode !== 'ENVELOPE_MA20_CLOSE'
+    && signal.exitMode !== 'VOLATILITY_CANDLE_RULE'
     && (!Number.isFinite(target) || target <= 0 && (signal.exitMode !== 'VOLATILITY_TP' || signal.volatilityTpEnabled !== false))) return;
   const margin = split ? bet / 2 : bet;
   const fee = margin * leverage * feeRate;
-  const activeStop = signal.strategy === 'VOLATILITY' && signal.volatilityAtr !== undefined
+  const activeStop = signal.strategy === 'VOLATILITY' && signal.exitMode !== 'VOLATILITY_CANDLE_RULE' && signal.volatilityAtr !== undefined
     ? entry - direction * signal.volatilityAtr * 2
     : signal.stop;
   const envelopeStop = signal.strategy === 'ENVELOPE' && signal.second !== undefined
@@ -221,7 +234,7 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     : activeStop;
   if (signal.strategy === 'ENVELOPE' && signal.exitMode !== 'ENVELOPE_MA20_CLOSE' && (!Number.isFinite(envelopeStop) || envelopeStop <= 0)) return;
   const effectiveSignal = envelopeStop === signal.stop ? signal : { ...signal, stop: envelopeStop };
-  const intrabarEntry = signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH' || signal.exitMode === 'REFERENCE_TOUCH';
+  const intrabarEntry = signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5' || signal.exitMode === 'VOLATILITY_CANDLE_RULE' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH' || signal.exitMode === 'REFERENCE_TOUCH';
   const p: Holding = {
     symbol, signal: effectiveSignal, opened: intrabarEntry && !confirmedClose ? candle.openTime : candle.closeTime, first: entry, entry, betAmountUsdt: bet, qty: riskSizedQuantity ?? margin * leverage / entry,
     margin, reserved: bet - margin, reservedFee: (bet - margin) * leverage * feeRate,
@@ -231,6 +244,15 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     target,
     partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' && signal.strategy !== 'NEW_HIGH' && signal.strategy !== 'REFERENCE' && signal.exitMode !== 'PULLBACK_ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
     partialDone: false, stop: envelopeStop, mark: candle.close, net: -fee, executions: [],
+    ...(signal.exitMode === 'VOLATILITY_CANDLE_RULE' ? {
+      volatilityEntryOpen: candle.open,
+      volatilityEntryClose: candle.close,
+      volatilityEntryLow: candle.low,
+      volatilityEntryHigh: candle.high,
+      volatilityRuleStage: 0,
+      volatilityPreviousBody: Math.abs(candle.close - candle.open),
+      volatilitySecondFilled: false,
+    } : {}),
   };
   if (signal.strategy === 'ENVELOPE') {
     p.signal = { ...effectiveSignal, stop: p.stop, initialStop: signal.second ?? signal.stop };
@@ -264,6 +286,42 @@ function fillSecond(state: PortfolioState, p: Holding, price: number, candle: Ca
   }
   state.secondFills += 1;
   recordFill(p, 'SPLIT_ENTRY', price, qty, candle, opening);
+}
+
+/**
+ * The volatility rule's second entry is confirmed only after the following
+ * candle is complete. It uses exactly the first entry quantity, rather than a
+ * second fixed-bet notional, and therefore keeps the requested quantity
+ * symmetry even when the close price differs from the first fill.
+ */
+function fillVolatilitySecond(state: PortfolioState, p: Holding, candle: Candle, settings: BacktestSettings): boolean {
+  if (p.volatilitySecondFilled) return false;
+  const leverage = Number(settings.leverage);
+  const price = candle.close * (p.signal.side === 'LONG' ? 1 + slippage : 1 - slippage);
+  const quantity = p.qty;
+  const margin = quantity * price / leverage;
+  const fee = price * quantity * feeRate;
+  if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(margin) || margin <= 0 || state.cash + 1e-10 < margin + fee) {
+    state.insufficientFunds += 1;
+    return false;
+  }
+  const oldQuantity = p.qty;
+  p.entry = (p.entry * oldQuantity + price * quantity) / (oldQuantity + quantity);
+  p.qty += quantity;
+  p.margin += margin;
+  p.secondFill = price;
+  p.target = p.signal.side === 'LONG'
+    ? Math.max(p.volatilityEntryOpen ?? p.first, p.volatilityEntryClose ?? p.first)
+    : Math.min(p.volatilityEntryOpen ?? p.first, p.volatilityEntryClose ?? p.first);
+  p.signal = { ...p.signal, target: p.target, secondTarget: p.target, averageEntry: p.entry };
+  p.volatilitySecondFilled = true;
+  state.cash -= margin + fee;
+  state.realized -= fee;
+  state.fees += fee;
+  p.net -= fee;
+  state.secondFills += 1;
+  recordFill(p, 'SPLIT_ENTRY', price, quantity, candle, false, true);
+  return true;
 }
 
 function roiPrice(p: Holding, settings: BacktestSettings): number | null {
@@ -308,6 +366,7 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
     close(state, p, p.partial, p.qty / 2, 'PARTIAL_TP', candle, opening);
   }
   const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
+    && (p.signal.exitMode !== 'VOLATILITY_CANDLE_RULE' || p.target > 0)
     || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
   if (targetEnabled && (long ? price >= p.target : price <= p.target)) {
     const disparity = p.signal.strategy === 'DISPARITY';
@@ -326,6 +385,7 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
     if (liq !== null) levels.add(liq);
   }
   const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
+    && (p.signal.exitMode !== 'VOLATILITY_CANDLE_RULE' || p.target > 0)
     || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
   if (targetEnabled) levels.add(p.target);
   if (p.signal.exitMode !== 'PULLBACK_ENVELOPE' && (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true)) levels.add(p.stop);
@@ -479,7 +539,7 @@ function referenceEntryPath(symbol: string, bar: PreparedBar, settings: Backtest
 }
 
 function replayIntrabarEntry(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number): PortfolioState {
-  if (bar.signal?.exitMode === 'VOLATILITY_MA5') return replayVolatilityMa5Entry(symbol, bar, settings, available);
+  if (bar.signal?.exitMode === 'VOLATILITY_MA5' || bar.signal?.exitMode === 'VOLATILITY_CANDLE_RULE') return replayVolatilityMa5Entry(symbol, bar, settings, available);
   if (bar.signal?.exitMode === 'REFERENCE_TOUCH') return replayReferenceEntry(symbol, bar, settings, available);
   const minutes = bar.intrabarCandles ?? [];
   validateMinuteCandles(bar.candle, minutes);
@@ -567,10 +627,68 @@ function mergePath(state: PortfolioState, selected: PortfolioState, symbol: stri
   else delete state.positions[symbol];
 }
 
+function updateVolatilityStop(p: Holding, candidate: number): void {
+  const long = p.signal.side === 'LONG';
+  p.stop = long ? Math.max(p.stop, candidate) : Math.min(p.stop, candidate);
+  p.signal = { ...p.signal, activeStop: p.stop };
+}
+
+/**
+ * Apply the replacement volatility exits after the entry candle. The existing
+ * stop/TP is replayed through both admissible OHLC paths first; only if the
+ * position survives the candle do we use its confirmed direction/body size to
+ * update the rule. This prevents a newly discovered stop or TP from being
+ * retroactively triggered inside the candle that created it.
+ */
+function processVolatilityCandleRule(state: PortfolioState, symbol: string, bar: PreparedBar, settings: BacktestSettings): void {
+  const position = state.positions[symbol];
+  if (!position) return;
+  const selected = worstPath([
+    replayPath(position, bar, settings, true),
+    replayPath(position, bar, settings, false),
+  ]);
+  mergePath(state, selected, symbol);
+  const remaining = state.positions[symbol];
+  if (!remaining) return;
+
+  const candle = bar.candle;
+  const long = remaining.signal.side === 'LONG';
+  const body = Math.abs(candle.close - candle.open);
+  const previousBody = remaining.volatilityPreviousBody ?? Math.abs((remaining.volatilityEntryClose ?? remaining.first) - (remaining.volatilityEntryOpen ?? remaining.first));
+  const firstFollowing = (remaining.volatilityRuleStage ?? 0) === 0;
+  const bearish = candle.close < candle.open;
+  const bullish = candle.close > candle.open;
+  const secondEntry = firstFollowing && (long
+    ? bearish && candle.low >= (remaining.volatilityEntryLow ?? remaining.stop)
+    : bullish && candle.high <= (remaining.volatilityEntryHigh ?? remaining.stop));
+
+  if (secondEntry) {
+    fillVolatilitySecond(state, remaining, candle, settings);
+  } else {
+    const favorable = long ? bullish : bearish;
+    if (favorable && body > previousBody) {
+      updateVolatilityStop(remaining, long ? candle.low : candle.high);
+    } else if (!favorable || body < previousBody) {
+      close(state, remaining, candle.close, remaining.qty, 'VOLATILITY_CANDLE_EXIT', candle);
+    }
+  }
+
+  const after = state.positions[symbol];
+  if (after) {
+    after.volatilityRuleStage = 1;
+    after.volatilityPreviousBody = body;
+    after.mark = candle.close;
+  }
+}
+
 function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, settings: BacktestSettings): void {
   const position = state.positions[symbol];
   if (!position) return;
   if (position.signal.strategy === 'NEW_HIGH') return; // Replayed with intrabar funding together below.
+  if (position.signal.strategy === 'VOLATILITY' && position.signal.exitMode === 'VOLATILITY_CANDLE_RULE') {
+    processVolatilityCandleRule(state, symbol, bar, settings);
+    return;
+  }
   if (position.signal.strategy === 'REFERENCE' && bar.referenceIntrabarCandles?.length) {
     const selected = replayReferenceIntrabarHolding(position, bar, settings);
     mergePath(state, selected, symbol);
@@ -826,7 +944,7 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
     for (const { symbol, bar } of rows) {
       const parameters = options.settingsForSymbol?.[symbol] ?? settings;
       const hasEnvelope = !!(bar.envelope || bar.envelopeBySide);
-      const intrabarSignal = bar.signal?.exitMode === 'VOLATILITY_TP' || bar.signal?.exitMode === 'VOLATILITY_MA5' || bar.signal?.exitMode === 'REFERENCE_TOUCH';
+      const intrabarSignal = bar.signal?.exitMode === 'VOLATILITY_TP' || bar.signal?.exitMode === 'VOLATILITY_MA5' || bar.signal?.exitMode === 'VOLATILITY_CANDLE_RULE' || bar.signal?.exitMode === 'REFERENCE_TOUCH';
       const hasIntrabarData = intrabarSignal;
       if (occupiedAtOpen.has(symbol) || !hasIntrabarData && !hasEnvelope) continue;
       const referenceKey = bar.signal?.exitMode === 'REFERENCE_TOUCH' && bar.signal.referenceOpenTime !== undefined
@@ -847,7 +965,7 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
     }
     for (const { symbol, bar } of rows) {
       const signal = bar.signal;
-      const completedEntry = signal?.exitMode !== 'VOLATILITY_MA5' && signal?.exitMode !== 'REFERENCE_TOUCH';
+      const completedEntry = signal?.exitMode !== 'VOLATILITY_MA5' && signal?.exitMode !== 'VOLATILITY_CANDLE_RULE' && signal?.exitMode !== 'REFERENCE_TOUCH';
       if (signal && signal.exitMode !== 'VOLATILITY_TP' && completedEntry) enter(state, symbol, signal, bar.candle, options.settingsForSymbol?.[symbol] ?? settings);
     }
     if (!rows.length) continue;
