@@ -122,10 +122,11 @@ function priceLines(p: Holding): PriceLine[] {
     ...(p.signal.exitMode === 'VOLATILITY_WICK_RULE' ? [
       { kind: 'SL' as const, price: p.stop },
       ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : []),
+      ...(p.target > 0 ? [{ kind: 'TP' as const, price: p.target }] : []),
     ] : []),
     ...(p.secondFill !== undefined ? [{ kind: 'SECOND_ENTRY' as const, price: p.secondFill }, { kind: 'AVERAGE_ENTRY' as const, price: p.entry }] : []),
     ...(p.signal.exitMode !== 'VOLATILITY_WICK_RULE' && p.signal.volatilityStopEnabled === true ? [{ kind: 'SL' as const, price: p.stop }] : []),
-    ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : []),
+    ...(p.signal.exitMode !== 'VOLATILITY_WICK_RULE' && p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : []),
     ...(p.signal.exitMode === 'VOLATILITY_CANDLE_RULE' && p.target > 0
       || p.signal.exitMode === 'VOLATILITY_CLOSE'
       || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false ? [{ kind: 'TP' as const, price: p.target }] : []),
@@ -378,8 +379,8 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
     close(state, p, p.partial, p.qty / 2, 'PARTIAL_TP', candle, opening);
   }
   const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
-    && p.signal.exitMode !== 'VOLATILITY_WICK_RULE'
     && (p.signal.exitMode !== 'VOLATILITY_CANDLE_RULE' || p.target > 0)
+    && (p.signal.exitMode !== 'VOLATILITY_WICK_RULE' || p.target > 0)
     || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
   if (targetEnabled && (long ? price >= p.target : price <= p.target)) {
     const disparity = p.signal.strategy === 'DISPARITY';
@@ -398,8 +399,8 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
     if (liq !== null) levels.add(liq);
   }
   const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
-    && p.signal.exitMode !== 'VOLATILITY_WICK_RULE'
     && (p.signal.exitMode !== 'VOLATILITY_CANDLE_RULE' || p.target > 0)
+    && (p.signal.exitMode !== 'VOLATILITY_WICK_RULE' || p.target > 0)
     || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
   if (targetEnabled) levels.add(p.target);
   if (p.signal.exitMode !== 'PULLBACK_ENVELOPE' && (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true)) levels.add(p.stop);
