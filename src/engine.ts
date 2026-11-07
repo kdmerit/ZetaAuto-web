@@ -398,6 +398,10 @@ function volatilitySignals(
   candles: Candle[],
   settings: BacktestSettings,
 ): Signal[] {
+  const ma10DistancePercent = settings.volatilityMa10Enabled === true ? Number(settings.volatilityMa10DistancePercent ?? '1') : null;
+  if (ma10DistancePercent !== null && (!Number.isFinite(ma10DistancePercent) || ma10DistancePercent < 0.1 || ma10DistancePercent > 20)) {
+    throw new Error('MA10 이격률은 0.1~20.0%로 입력해 주세요.');
+  }
   const enriched = settings.volatilityMa10Enabled === true || settings.volatilityMa60Enabled === true || settings.volatilityMa60BelowEnabled === true ? enrichCandles(candles) : null;
   const signals: Signal[] = [];
   for (let index = 0; index < candles.length; index += 1) {
@@ -419,7 +423,7 @@ function volatilitySignals(
       const ma10Distance = side === 'LONG'
         ? (ma10 - candle.close) / ma10
         : (candle.close - ma10) / ma10;
-      if (!Number.isFinite(ma10Distance) || ma10Distance < 0.01) continue;
+      if (!Number.isFinite(ma10Distance) || ma10Distance < ma10DistancePercent! / 100) continue;
     }
     if (settings.volatilityMa60Enabled === true) {
       const ma60 = enriched?.[index]?.ma60;

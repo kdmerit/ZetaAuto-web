@@ -98,6 +98,7 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .field-label small { color: #aab6c8; font-size: 12px; font-weight: 400; }
 .checkbox-row { display: flex; align-items: center; gap: 10px; color: #f4f7fb; font-weight: 700; }
 .checkbox-row input, .ma-toggle input { width: 20px; height: 20px; accent-color: #7ea2ff; }
+.checkbox-row .distance-input { width: 72px; height: 36px; min-height: 36px; border: 1px solid #34435b; border-radius: 8px; background: #0d1421; color: #f4f7fb; padding: 0 8px; accent-color: auto; }
 .sizing-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; border: 0; padding: 0; margin: 0; }
 .sizing-choice-label { grid-column: 1 / -1; color: #f4f7fb; font-weight: 700; }
 .radio-option { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 10px; border: 1px solid #34435b; border-radius: 10px; background: transparent; color: #aab6c8; font-weight: 700; }

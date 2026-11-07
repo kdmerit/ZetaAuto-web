@@ -280,7 +280,7 @@ describe('durable local analysis', () => {
   it.each(['2.10.26', '2.10.28', '2.10.29', '2.10.30'])('separates old volatility checkpoints (%s) but preserves other strategy versions and old results', async version => {
     expect(engineVersionFor('PULLBACK')).toBe('2.10.26');
     expect(engineVersionFor('DISPARITY')).toBe('2.10.26');
-    expect(engineVersionFor('VOLATILITY')).toBe('2.10.79');
+    expect(engineVersionFor('VOLATILITY')).toBe('2.10.80');
     const controller = new AbortController();
     await executeLocalJob({ strategy: 'VOLATILITY', settings }, view => {
       if (view.blockStart > origin) controller.abort();

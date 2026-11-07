@@ -77,13 +77,15 @@ describe('wick-pattern volatility breakout preparation', () => {
   it('applies the optional one-percent MA10 distance filter in both directions', () => {
     const farLong = [...Array.from({ length: 10 }, (_, index) => row(index, [120, 121, 119, 120])), qualifyingLong(10)];
     const nearLong = [...Array.from({ length: 10 }, (_, index) => row(index, [110.5, 111.5, 109.5, 110.5])), qualifyingLong(10)];
-    expect(prepared(farLong, 'LONG', { volatilityMa10Enabled: true }).bars.at(-1)!.signal).not.toBeNull();
+    expect(prepared(farLong, 'LONG', { volatilityMa10Enabled: true, volatilityMa10DistancePercent: '5' }).bars.at(-1)!.signal).not.toBeNull();
+    expect(prepared(farLong, 'LONG', { volatilityMa10Enabled: true, volatilityMa10DistancePercent: '10' }).bars.at(-1)!.signal).toBeNull();
     expect(prepared(nearLong, 'LONG', { volatilityMa10Enabled: true }).bars.at(-1)!.signal).toBeNull();
 
     const farShort = mirror(farLong);
     const nearShort = mirror(nearLong);
-    expect(prepared(farShort, 'SHORT', { volatilityMa10Enabled: true }).bars.at(-1)!.signal).not.toBeNull();
+    expect(prepared(farShort, 'SHORT', { volatilityMa10Enabled: true, volatilityMa10DistancePercent: '4.5' }).bars.at(-1)!.signal).not.toBeNull();
     expect(prepared(nearShort, 'SHORT', { volatilityMa10Enabled: true }).bars.at(-1)!.signal).toBeNull();
+    expect(() => prepared([qualifyingLong()], 'LONG', { volatilityMa10Enabled: true, volatilityMa10DistancePercent: '20.1' })).toThrow('0.1~20.0');
   });
 
   it('applies the optional MA60 side filter in both directions', () => {
