@@ -85,6 +85,16 @@ describe('wick-pattern volatility breakout preparation', () => {
     expect(prepared(farShort, 'SHORT', { volatilityMa10Enabled: true }).bars.at(-1)!.signal).not.toBeNull();
     expect(prepared(nearShort, 'SHORT', { volatilityMa10Enabled: true }).bars.at(-1)!.signal).toBeNull();
   });
+
+  it('applies the optional MA60 side filter in both directions', () => {
+    const longAbove = [...Array.from({ length: 60 }, (_, index) => row(index, [100, 101, 99, 100])), qualifyingLong(60)];
+    const longBelow = [...Array.from({ length: 60 }, (_, index) => row(index, [120, 121, 119, 120])), qualifyingLong(60)];
+    expect(prepared(longAbove, 'LONG', { volatilityMa60Enabled: true }).bars.at(-1)!.signal).not.toBeNull();
+    expect(prepared(longBelow, 'LONG', { volatilityMa60Enabled: true }).bars.at(-1)!.signal).toBeNull();
+
+    expect(prepared(mirror(longAbove), 'SHORT', { volatilityMa60Enabled: true }).bars.at(-1)!.signal).not.toBeNull();
+    expect(prepared(mirror(longBelow), 'SHORT', { volatilityMa60Enabled: true }).bars.at(-1)!.signal).toBeNull();
+  });
 });
 
 describe('wick-pattern volatility breakout replay', () => {
