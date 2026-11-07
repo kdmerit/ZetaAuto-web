@@ -8,7 +8,7 @@ import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar
 import { currentEnvelopeSettings, currentPullbackSettings } from './envelope';
 import { currentNewHighSettings, newHighExecutionInterval, newHighWarmup } from './newHigh';
 import { currentReferenceSettings } from './reference';
-import type { BacktestResult, BacktestSettings, Strategy } from './types';
+import type { BacktestResult, BacktestSettings, Candle, Strategy } from './types';
 import { loadWeeklyUniverse, saveWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
 
 export interface LocalRunOptions {
@@ -21,7 +21,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.68' : strategy === 'ENVELOPE' ? '2.10.73' : strategy === 'VOLATILITY' ? '2.10.81' : localEngineVersion;
+  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.68' : strategy === 'ENVELOPE' ? '2.10.73' : strategy === 'VOLATILITY' ? '2.10.82' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);
@@ -96,6 +96,18 @@ export function jobView(job: LocalJob): LocalJobView {
 
 function blockSize(job: LocalJob): number {
   return Math.max(16, Math.min(128, Math.floor(64_000 / Math.max(1, job.universe.length))));
+}
+
+function applyInstrumentEligibility(prepared: PreparedSymbol, instrument: EligibleInstrument): void {
+  for (const bar of prepared.bars) if (bar.signal && !instrument[bar.signal.side]) bar.signal = null;
+  for (const bar of prepared.bars) if (bar.envelope) {
+    bar.envelope.long &&= instrument.LONG;
+    bar.envelope.short &&= instrument.SHORT;
+  }
+  for (const bar of prepared.bars) if (bar.newHigh) {
+    bar.newHigh.long &&= instrument.LONG;
+    bar.newHigh.short &&= instrument.SHORT;
+  }
 }
 
 export async function loadLocalJob(strategy: Strategy): Promise<LocalJobView | null> {
@@ -236,32 +248,39 @@ async function executeWithLease(
       while (job.cursor < job.universe.length) {
         signal.throwIfAborted();
         const instrument = job.universe[job.cursor]!;
+        const activeJob = job;
         const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings) : 200 * seconds;
         try {
           const candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
           const executionInterval = job.strategy === 'NEW_HIGH' ? newHighExecutionInterval(job.settings.interval)
-            : job.strategy === 'VOLATILITY' && job.settings.interval !== '15m' ? '15m'
             : job.strategy === 'REFERENCE' ? '15m' : null;
           const executionCandles = executionInterval
             ? await ensureCandles(instrument, executionInterval, job.blockStart, blockEnd, blockEnd, signal)
             : undefined;
           const newHighIntrabarCandles = job.strategy === 'NEW_HIGH' ? executionCandles : undefined;
           const referenceIntrabarCandles = job.strategy === 'REFERENCE' ? executionCandles : undefined;
-          const volatilityIntrabarCandles = job.strategy === 'VOLATILITY' ? executionCandles : undefined;
-          const prepared = prepareSymbolBlock(instrument.symbol, candles, job.settings, job.strategy, job.blockStart, blockEnd, job.waveStates[instrument.symbol], undefined, undefined, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles);
-          for (const bar of prepared.bars) if (bar.signal && !instrument[bar.signal.side]) bar.signal = null;
-          for (const bar of prepared.bars) if (bar.envelope) {
-            bar.envelope.long &&= instrument.LONG;
-            bar.envelope.short &&= instrument.SHORT;
+          const prepare = (volatilityIntrabarCandles?: Candle[]) => prepareSymbolBlock(instrument.symbol, candles, activeJob.settings, activeJob.strategy, activeJob.blockStart, blockEnd, activeJob.waveStates[instrument.symbol], undefined, undefined, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles);
+          let prepared = prepare();
+          applyInstrumentEligibility(prepared, instrument);
+          if (job.strategy === 'VOLATILITY' && job.settings.interval !== '15m') {
+            const firstSignal = prepared.bars.find(bar => bar.signal !== null);
+            const lowerFrom = job.state.positions[instrument.symbol] ? job.blockStart : firstSignal?.candle.closeTime;
+            if (lowerFrom !== undefined && lowerFrom < blockEnd) {
+              const volatilityIntrabarCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
+              prepared = prepare(volatilityIntrabarCandles);
+              applyInstrumentEligibility(prepared, instrument);
+            }
           }
-          for (const bar of prepared.bars) if (bar.newHigh) { bar.newHigh.long &&= instrument.LONG; bar.newHigh.short &&= instrument.SHORT; }
           for (const bar of prepared.bars) {
             if (bar.signal?.exitMode !== 'VOLATILITY_TP') continue;
             bar.intrabarCandles = await ensureCandles(instrument, '1m', bar.candle.openTime, bar.candle.closeTime, bar.candle.closeTime, signal);
             validateMinuteCandles(bar.candle, bar.intrabarCandles);
           }
           if (job.strategy === 'VOLATILITY' && job.settings.interval !== '15m') {
-            for (const bar of prepared.bars) validateLowerTimeframeCandles(bar.candle, bar.volatilityIntrabarCandles ?? [], 900, '15분봉');
+            for (const bar of prepared.bars) {
+              if (!bar.volatilityIntrabarCandles) continue;
+              validateLowerTimeframeCandles(bar.candle, bar.volatilityIntrabarCandles, 900, '15분봉');
+            }
           }
           await writeValue('prepared', prefix + instrument.symbol, prepared);
           job.cursor += 1;

@@ -219,6 +219,24 @@ describe('durable local analysis', () => {
     expect(vi.mocked(ensureCandles).mock.calls.some(call => call[1] === '1m')).toBe(false);
   });
 
+  it('defers volatility 15m requests until a higher-timeframe entry signal exists', async () => {
+    const signalAt = origin + 6 * 3600;
+    vi.mocked(ensureCandles).mockImplementation(async (_instrument, interval, from, end) => {
+      const step = interval === '15m' ? 900 : 3600;
+      const rows: Candle[] = [];
+      for (let at = from; at < end; at += step) {
+        const parentAt = Math.floor(at / 3600) * 3600;
+        const prices = parentAt === signalAt ? [100, 111, 89, 110] : [100, 101, 99, 100];
+        rows.push({ openTime: at, closeTime: at + step, open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: 10 });
+      }
+      return rows;
+    });
+    await executeLocalJob({ strategy: 'VOLATILITY', settings }, () => undefined, new AbortController().signal);
+    const lowerCalls = vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === '15m');
+    expect(lowerCalls.length).toBeGreaterThan(0);
+    expect(lowerCalls.every(call => call[2]! >= signalAt + 3600)).toBe(true);
+  });
+
   it('prevents another tab from replacing a running checkpoint', async () => {
     expect(await lease('other-tab')).toBe(true);
     await expect(executeLocalJob({ strategy: 'VOLATILITY', settings }, () => undefined, new AbortController().signal)).rejects.toThrow('다른 탭');
@@ -281,7 +299,7 @@ describe('durable local analysis', () => {
   it.each(['2.10.26', '2.10.28', '2.10.29', '2.10.30'])('separates old volatility checkpoints (%s) but preserves other strategy versions and old results', async version => {
     expect(engineVersionFor('PULLBACK')).toBe('2.10.26');
     expect(engineVersionFor('DISPARITY')).toBe('2.10.26');
-    expect(engineVersionFor('VOLATILITY')).toBe('2.10.81');
+    expect(engineVersionFor('VOLATILITY')).toBe('2.10.82');
     const controller = new AbortController();
     await executeLocalJob({ strategy: 'VOLATILITY', settings }, view => {
       if (view.blockStart > origin) controller.abort();
