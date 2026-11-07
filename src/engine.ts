@@ -1,5 +1,4 @@
 import { enrichCandles, intervalSeconds } from './api';
-import { calendarAtr } from './atr';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import { bandFor, envelopeParameters, priorEnvelopeTouchFlags, priorMovingAverages, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
 import { prepareNewHigh, type PreparedNewHigh } from './newHigh';
@@ -399,43 +398,23 @@ function volatilitySignals(
   candles: Candle[],
   settings: BacktestSettings,
 ): Signal[] {
-  const enriched = enrichCandles(candles);
-  const atr = calendarAtr(candles, settings.interval);
   const signals: Signal[] = [];
-  for (let index = 5; index < candles.length; index += 1) {
+  for (let index = 0; index < candles.length; index += 1) {
     const candle = candles[index];
-    const previous = candles[index - 1];
-    const current = enriched[index];
-    const atrValue = atr[index]?.value ?? null;
-    if (!candle || !previous || !current || current.ma5 === null || atrValue === null || !Number.isFinite(atrValue) || atrValue <= 0) continue;
-    const previousBody = Math.abs(previous.close - previous.open);
-    const currentBody = Math.abs(candle.close - candle.open);
-    if (!Number.isFinite(previousBody) || previousBody <= 0 || !Number.isFinite(currentBody)) continue;
-    const previousFiveBelow = candles.slice(index - 5, index).every((row, offset) => {
-      const ma5 = enriched[index - 5 + offset]?.ma5;
-      return ma5 !== null && ma5 !== undefined && bodyHigh(row) < ma5;
-    });
-    const previousFiveAbove = candles.slice(index - 5, index).every((row, offset) => {
-      const ma5 = enriched[index - 5 + offset]?.ma5;
-      return ma5 !== null && ma5 !== undefined && bodyLow(row) > ma5;
-    });
-    const currentCandleMidpoint = (candle.high + candle.low) / 2;
-    const long = previousFiveBelow && currentCandleMidpoint >= current.ma5 && currentBody >= previousBody * 2;
-    const short = previousFiveAbove && currentCandleMidpoint <= current.ma5 && currentBody >= previousBody * 2;
+    if (!candle) continue;
+    const range = candle.high - candle.low;
+    const body = Math.abs(candle.close - candle.open);
+    if (!Number.isFinite(range) || range <= 0 || !Number.isFinite(body) || body <= 0) continue;
+    const lowerWick = candle.close > candle.open ? candle.open - candle.low : candle.close - candle.low;
+    const upperWick = candle.close > candle.open ? candle.high - candle.close : candle.high - candle.open;
+    const long = candle.close > candle.open && lowerWick > body && upperWick <= range * 0.1;
+    const short = candle.close < candle.open && upperWick > body && lowerWick <= range * 0.1;
     if (!long && !short) continue;
     const side = long ? 'LONG' : 'SHORT';
     if (settings.side !== 'BOTH' && settings.side !== side) continue;
-    const entry = long
-      ? Math.max(candle.open + previousBody * 2, current.ma5 * 2 - candle.low)
-      : Math.min(candle.open - previousBody * 2, current.ma5 * 2 - candle.high);
-    // The volatility entry conditions remain unchanged.  The new exit model
-    // uses the entry candle and its immediately preceding candle as the
-    // initial protective range instead of an ATR-derived stop.
-    const stop = long
-      ? Math.min(candle.low, previous.low)
-      : Math.max(candle.high, previous.high);
+    const entry = candle.close;
+    const stop = long ? candle.low : candle.high;
     if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0) continue;
-    if (long ? entry > candle.high : entry < candle.low) continue;
     signals.push({
       strategy: 'VOLATILITY',
       side,
@@ -443,11 +422,10 @@ function volatilitySignals(
       entry,
       stop,
       initialStop: stop,
-      volatilityAtr: atrValue,
       volatilityStopEnabled: true,
       target: 0,
       initialTarget: 0,
-      exitMode: 'VOLATILITY_CANDLE_RULE',
+      exitMode: 'VOLATILITY_WICK_RULE',
     });
   }
   return signals;
@@ -1180,6 +1158,8 @@ export function buildLocalChart(
       if (second) lines.push(line('SECOND_ENTRY', second.price), line('AVERAGE_ENTRY', signal.averageEntry));
       if (signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
       lines.push(line('TP', signal.target));
+    } else if (signal.exitMode === 'VOLATILITY_WICK_RULE') {
+      if (signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
     } else if (signal.exitMode === 'VOLATILITY_CLOSE' || signal.exitMode === 'VOLATILITY_TP' && signal.volatilityTpEnabled !== false) lines.push(line('TP', signal.target));
   }
   lines.push(line('EXIT', trade.exitPrice));
@@ -1221,7 +1201,7 @@ export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'DISPARITY') {
     return 'MA20·MA60 사이 이격, 현재 캔들 절반, 직전 5봉 몸통 돌파와 직전 10봉 MA20 조건을 분석합니다.';
   }
-  return '직전 5개 몸통의 MA5 위치와 현재 몸통 2배 조건으로 선택 주기 봉 안에서 중간 진입하고, 진입봉·직전봉 극값 SL과 후속 캔들의 몸통 비교·2차 진입·몸통 TP 규칙을 적용합니다.';
+  return '아랫꼬리가 몸통보다 큰 양봉(윗꼬리 10% 이하)을 종가에 매수하고, 진입봉 저가 SL과 진입가 기준 후속 캔들의 몸통 비교로 SL을 갱신하거나 청산합니다.';
 }
 
 export function estimateBars(settings: BacktestSettings): number {

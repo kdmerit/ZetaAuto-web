@@ -5,7 +5,6 @@ import { prepareSymbolBlock, type PreparedSymbol, type WaveState } from './engin
 import { analysisWindow, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateMinuteCandles } from './intrabar';
-import { atrWindowSeconds } from './atr';
 import { currentEnvelopeSettings, currentPullbackSettings } from './envelope';
 import { currentNewHighSettings, newHighExecutionInterval, newHighWarmup } from './newHigh';
 import { currentReferenceSettings } from './reference';
@@ -22,7 +21,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.68' : strategy === 'ENVELOPE' ? '2.10.73' : strategy === 'VOLATILITY' ? '2.10.74' : localEngineVersion;
+  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.68' : strategy === 'ENVELOPE' ? '2.10.73' : strategy === 'VOLATILITY' ? '2.10.75' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);
@@ -237,7 +236,7 @@ async function executeWithLease(
       while (job.cursor < job.universe.length) {
         signal.throwIfAborted();
         const instrument = job.universe[job.cursor]!;
-        const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings) : job.strategy === 'VOLATILITY' ? Math.max(atrWindowSeconds + seconds, 200 * seconds) : 200 * seconds;
+        const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings) : 200 * seconds;
         try {
           const candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
           const executionInterval = job.strategy === 'NEW_HIGH' ? newHighExecutionInterval(job.settings.interval)

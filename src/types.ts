@@ -254,7 +254,7 @@ export interface Signal {
   /** Reference candle identity used to prevent a setup from being reused after its two-bar window. */
   referenceOpenTime?: number;
   referenceRole?: 'REFERENCE' | 'NEXT';
-  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'VOLATILITY_MA5' | 'VOLATILITY_CANDLE_RULE' | 'ENVELOPE_TOUCH' | 'ENVELOPE_MA20_CLOSE' | 'PULLBACK_ENVELOPE' | 'NEW_HIGH_TOUCH' | 'REFERENCE_TOUCH';
+  exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'VOLATILITY_MA5' | 'VOLATILITY_CANDLE_RULE' | 'VOLATILITY_WICK_RULE' | 'ENVELOPE_TOUCH' | 'ENVELOPE_MA20_CLOSE' | 'PULLBACK_ENVELOPE' | 'NEW_HIGH_TOUCH' | 'REFERENCE_TOUCH';
   envelopeDeviationPercent?: number;
   envelopeExitMode?: EnvelopeExitMode;
   envelopeMaPeriod?: number;

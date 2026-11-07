@@ -119,8 +119,12 @@ function priceLines(p: Holding): PriceLine[] {
   }
   if (p.signal.strategy === 'VOLATILITY') return [
     { kind: 'ENTRY', price: p.first },
+    ...(p.signal.exitMode === 'VOLATILITY_WICK_RULE' ? [
+      { kind: 'SL' as const, price: p.stop },
+      ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : []),
+    ] : []),
     ...(p.secondFill !== undefined ? [{ kind: 'SECOND_ENTRY' as const, price: p.secondFill }, { kind: 'AVERAGE_ENTRY' as const, price: p.entry }] : []),
-    ...(p.signal.volatilityStopEnabled === true ? [{ kind: 'SL' as const, price: p.stop }] : []),
+    ...(p.signal.exitMode !== 'VOLATILITY_WICK_RULE' && p.signal.volatilityStopEnabled === true ? [{ kind: 'SL' as const, price: p.stop }] : []),
     ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : []),
     ...(p.signal.exitMode === 'VOLATILITY_CANDLE_RULE' && p.target > 0
       || p.signal.exitMode === 'VOLATILITY_CLOSE'
@@ -161,7 +165,7 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE'].includes(reason);
+  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'VOLATILITY_WICK_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE'].includes(reason);
   const fill = market ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
   const qty = Math.min(p.qty, quantity);
   const profit = gross(p, fill, qty);
@@ -175,7 +179,7 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   p.qty -= qty;
   state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + 1;
   recordFill(p, reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE', fill, qty, candle, opening,
-    reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT' || reason === 'VOLATILITY_CANDLE_EXIT' || reason === 'ENVELOPE_MA20_CLOSE');
+    reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT' || reason === 'VOLATILITY_CANDLE_EXIT' || reason === 'VOLATILITY_WICK_EXIT' || reason === 'ENVELOPE_MA20_CLOSE');
   state.trades.push({
     tradeId: `local:${p.symbol}:${p.opened}:${candle.openTime}:${p.executions.length}`,
     symbol: p.symbol, side: p.signal.side, entryAt: p.opened,
@@ -223,10 +227,14 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     : signal.exitMode === 'VOLATILITY_CLOSE' ? entry + direction * signal.breakoutRange! : signal.target;
   if (signal.exitMode !== 'ENVELOPE_MA20_CLOSE'
     && signal.exitMode !== 'VOLATILITY_CANDLE_RULE'
+    && signal.exitMode !== 'VOLATILITY_WICK_RULE'
     && (!Number.isFinite(target) || target <= 0 && (signal.exitMode !== 'VOLATILITY_TP' || signal.volatilityTpEnabled !== false))) return;
   const margin = split ? bet / 2 : bet;
   const fee = margin * leverage * feeRate;
-  const activeStop = signal.strategy === 'VOLATILITY' && signal.exitMode !== 'VOLATILITY_CANDLE_RULE' && signal.volatilityAtr !== undefined
+  const activeStop = signal.strategy === 'VOLATILITY'
+    && signal.exitMode !== 'VOLATILITY_CANDLE_RULE'
+    && signal.exitMode !== 'VOLATILITY_WICK_RULE'
+    && signal.volatilityAtr !== undefined
     ? entry - direction * signal.volatilityAtr * 2
     : signal.stop;
   const envelopeStop = signal.strategy === 'ENVELOPE' && signal.second !== undefined
@@ -252,6 +260,10 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
       volatilityRuleStage: 0,
       volatilityPreviousBody: Math.abs(candle.close - candle.open),
       volatilitySecondFilled: false,
+    } : {}),
+    ...(signal.exitMode === 'VOLATILITY_WICK_RULE' ? {
+      volatilityRuleStage: 0,
+      volatilityPreviousBody: Math.abs(candle.close - candle.open),
     } : {}),
   };
   if (signal.strategy === 'ENVELOPE') {
@@ -366,6 +378,7 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
     close(state, p, p.partial, p.qty / 2, 'PARTIAL_TP', candle, opening);
   }
   const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
+    && p.signal.exitMode !== 'VOLATILITY_WICK_RULE'
     && (p.signal.exitMode !== 'VOLATILITY_CANDLE_RULE' || p.target > 0)
     || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
   if (targetEnabled && (long ? price >= p.target : price <= p.target)) {
@@ -385,6 +398,7 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
     if (liq !== null) levels.add(liq);
   }
   const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
+    && p.signal.exitMode !== 'VOLATILITY_WICK_RULE'
     && (p.signal.exitMode !== 'VOLATILITY_CANDLE_RULE' || p.target > 0)
     || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
   if (targetEnabled) levels.add(p.target);
@@ -633,6 +647,43 @@ function updateVolatilityStop(p: Holding, candidate: number): void {
   p.signal = { ...p.signal, activeStop: p.stop };
 }
 
+/** Replay the replacement wick-pattern volatility rule after the entry bar. */
+function processVolatilityWickRule(state: PortfolioState, symbol: string, bar: PreparedBar, settings: BacktestSettings): void {
+  const position = state.positions[symbol];
+  if (!position) return;
+  const selected = worstPath([
+    replayPath(position, bar, settings, true),
+    replayPath(position, bar, settings, false),
+  ]);
+  mergePath(state, selected, symbol);
+  const remaining = state.positions[symbol];
+  if (!remaining) return;
+
+  const candle = bar.candle;
+  const long = remaining.signal.side === 'LONG';
+  const body = Math.abs(candle.close - candle.open);
+  const previousBody = remaining.volatilityPreviousBody ?? body;
+  const beyondEntry = long ? candle.close > remaining.first : candle.close < remaining.first;
+  const sameDirection = long ? candle.close > candle.open : candle.close < candle.open;
+
+  // A close on the non-profit side simply holds. Once the close is beyond the
+  // first entry, only a larger same-direction body can keep the position open.
+  if (beyondEntry) {
+    if (sameDirection && body > previousBody) {
+      updateVolatilityStop(remaining, long ? candle.low : candle.high);
+    } else {
+      close(state, remaining, candle.close, remaining.qty, 'VOLATILITY_WICK_EXIT', candle);
+    }
+  }
+
+  const after = state.positions[symbol];
+  if (after) {
+    after.volatilityRuleStage = 1;
+    after.volatilityPreviousBody = body;
+    after.mark = candle.close;
+  }
+}
+
 /**
  * Apply the replacement volatility exits after the entry candle. The existing
  * stop/TP is replayed through both admissible OHLC paths first; only if the
@@ -685,6 +736,10 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
   const position = state.positions[symbol];
   if (!position) return;
   if (position.signal.strategy === 'NEW_HIGH') return; // Replayed with intrabar funding together below.
+  if (position.signal.strategy === 'VOLATILITY' && position.signal.exitMode === 'VOLATILITY_WICK_RULE') {
+    processVolatilityWickRule(state, symbol, bar, settings);
+    return;
+  }
   if (position.signal.strategy === 'VOLATILITY' && position.signal.exitMode === 'VOLATILITY_CANDLE_RULE') {
     processVolatilityCandleRule(state, symbol, bar, settings);
     return;
