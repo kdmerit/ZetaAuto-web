@@ -52,7 +52,7 @@ describe('wick-pattern volatility breakout preparation', () => {
     expect(signal).toMatchObject({ strategy: 'VOLATILITY', side, exitMode: 'VOLATILITY_WICK_RULE', volatilityStopEnabled: true });
     expect(signal.entry).toBe(side === 'LONG' ? 110 : 190);
     expect(signal.stop).toBe(side === 'LONG' ? 89 : 211);
-    expect(signal.target).toBe(side === 'LONG' ? 132 : 168);
+    expect(signal.target).toBe(0);
     expect(signal.initialTarget).toBe(signal.target);
     expect(signal.volatilityAtr).toBeUndefined();
   });
@@ -109,7 +109,7 @@ describe('wick-pattern volatility breakout preparation', () => {
     expect(prepared(longAbove, 'LONG', { volatilityMa60Enabled: true, volatilityMa60BelowEnabled: true }).bars.at(-1)!.signal).toBeNull();
   });
 
-  it('uses chronological 15-minute exits before falling back to a parent-bar path', () => {
+  it('uses chronological 15-minute stops before falling back to a parent-bar path', () => {
     const parentRows = [qualifyingLong(), row(1, [110, 140, 80, 100])];
     const childRows = [
       [110, 133, 109, 132], [132, 140, 80, 100], [100, 100, 100, 100], [100, 100, 100, 100],
@@ -117,7 +117,7 @@ describe('wick-pattern volatility breakout preparation', () => {
     const document = prepared(parentRows, 'LONG', {}, childRows);
     const state = initialPortfolio(1_000);
     replayPortfolioBlock(state, [document], { ...settings, side: 'LONG' }, origin, origin + 2 * 3600, 3600);
-    expect(state.exitReasons).toEqual({ FULL_TP: 1 });
+    expect(state.exitReasons).toEqual({ SL: 1 });
   });
 });
 
@@ -131,7 +131,7 @@ describe('wick-pattern volatility breakout replay', () => {
     expect(result.closedTradeCount).toBe(1);
     expect(result.exitReasons).toEqual({ VOLATILITY_WICK_EXIT: 1 });
     expect(result.secondFillCount).toBe(0);
-    expect(result.recentTrades[0]!.signal.target).toBe(side === 'LONG' ? 132 : 168);
+    expect(result.recentTrades[0]!.signal.target).toBe(0);
     expect(result.recentTrades[0]!.executions.map(fill => fill.kind)).toEqual(['ENTRY', 'CLOSE']);
     expect(state.positions.BTCUSDT).toBeUndefined();
   });
@@ -161,23 +161,23 @@ describe('wick-pattern volatility breakout replay', () => {
     expect(result.exitReasons).toEqual({ VOLATILITY_WICK_EXIT: 1 });
   });
 
-  it('uses the entry candle range as the TP and renders it without a second-entry line', () => {
+  it('does not render a TP for wick-rule volatility trades', () => {
     const prefix = Array.from({ length: 19 }, (_, index) => row(index, [100, 101, 99, 100]));
     const tail = [qualifyingLong(19), row(20, [110, 112, 100, 108]), row(21, [108, 120, 100, 115]), row(22, [115, 118, 108, 116])];
     const result = runBacktest([...prefix, ...tail], settings, 'VOLATILITY');
     const trade = result.recentTrades[0]!;
     const chart = buildLocalChart(result, trade, settings);
-    expect(trade.signal.target).toBe(132);
-    expect(chart.priceLines.some(line => line.kind === 'TP' && line.price === 132)).toBe(true);
+    expect(trade.signal.target).toBe(0);
+    expect(chart.priceLines.some(line => line.kind === 'TP')).toBe(false);
     expect(chart.priceLines.some(line => line.kind === 'SECOND_ENTRY')).toBe(false);
   });
 
   it.each([
-    ['LONG', [qualifyingLong(), row(1, [110, 133, 109, 120])]],
-    ['SHORT', mirror([qualifyingLong(), row(1, [110, 133, 109, 120])])],
-  ] as const)('closes at the entry-candle-range TP, %s', (side, rows) => {
+    ['LONG', [qualifyingLong(), row(1, [110, 133, 109, 130])]],
+    ['SHORT', [mirroredRow(0, [100, 111, 89, 110]), row(1, [190, 191, 167, 170])]],
+  ] as const)('does not close when the old entry-range TP is reached, %s', (side, rows) => {
     const { result } = replay(rows, side);
-    expect(result.exitReasons).toEqual({ FULL_TP: 1 });
-    expect(result.recentTrades[0]!.exitPrice).toBeCloseTo(side === 'LONG' ? 132 : 168, 10);
+    expect(result.exitReasons).toEqual({});
+    expect(result.closedTradeCount).toBe(0);
   });
 });

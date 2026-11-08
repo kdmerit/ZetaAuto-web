@@ -705,9 +705,9 @@ function processVolatilityWickRule(state: PortfolioState, symbol: string, bar: P
 
 /**
  * Apply the replacement volatility exits after the entry candle. The existing
- * stop/TP is replayed through both admissible OHLC paths first; only if the
+ * The stop is replayed through both admissible OHLC paths first; only if the
  * position survives the candle do we use its confirmed direction/body size to
- * update the rule. This prevents a newly discovered stop or TP from being
+ * update the rule. This prevents a newly discovered stop from being
  * retroactively triggered inside the candle that created it.
  */
 function processVolatilityCandleRule(state: PortfolioState, symbol: string, bar: PreparedBar, settings: BacktestSettings): void {

@@ -439,8 +439,7 @@ function volatilitySignals(
     }
     const entry = candle.close;
     const stop = long ? candle.low : candle.high;
-    const target = entry + (long ? range : -range);
-    if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0 || !Number.isFinite(target) || target <= 0) continue;
+    if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(stop) || stop <= 0) continue;
     signals.push({
       strategy: 'VOLATILITY',
       side,
@@ -449,8 +448,8 @@ function volatilitySignals(
       stop,
       initialStop: stop,
       volatilityStopEnabled: true,
-      target,
-      initialTarget: target,
+      target: 0,
+      initialTarget: 0,
       exitMode: 'VOLATILITY_WICK_RULE',
     });
   }
@@ -1198,7 +1197,6 @@ export function buildLocalChart(
       lines.push(line('TP', signal.target));
     } else if (signal.exitMode === 'VOLATILITY_WICK_RULE') {
       if (signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
-      lines.push(line('TP', signal.target));
     } else if (signal.exitMode === 'VOLATILITY_CLOSE' || signal.exitMode === 'VOLATILITY_TP' && signal.volatilityTpEnabled !== false) lines.push(line('TP', signal.target));
   }
   lines.push(line('EXIT', trade.exitPrice));
@@ -1240,7 +1238,7 @@ export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'DISPARITY') {
     return 'MA20·MA60 사이 이격, 현재 캔들 절반, 직전 5봉 몸통 돌파와 직전 10봉 MA20 조건을 분석합니다.';
   }
-  return '아랫꼬리가 몸통보다 큰 양봉(윗꼬리 10% 이하)을 종가에 매수하고, 진입봉 가격폭 TP·저가 SL과 진입가 기준 후속 캔들의 몸통 비교로 SL을 갱신하거나 청산합니다.';
+  return '아랫꼬리가 몸통보다 큰 양봉(윗꼬리 10% 이하)을 종가에 매수하고, 진입봉 저가 SL과 진입가 기준 후속 캔들의 몸통 비교로 SL을 갱신하거나 청산합니다.';
 }
 
 export function estimateBars(settings: BacktestSettings): number {
