@@ -26,6 +26,17 @@ function rows(interval: BacktestSettings['interval']): Candle[] {
   });
 }
 
+function lowerRows(interval: BacktestSettings['interval']): Candle[] {
+  const parents = rows(interval); const parentSeconds = intervalSeconds(interval); const count = parentSeconds / 900;
+  return parents.flatMap(parent => Array.from({ length: count }, (_, index) => {
+    const isFirst = index === 0; const isLast = index === count - 1;
+    return { openTime: parent.openTime + index * 900, closeTime: parent.openTime + (index + 1) * 900,
+      open: parent.open, high: isFirst ? parent.high : isLast ? Math.max(parent.open, parent.close) : parent.open,
+      low: isFirst ? parent.low : isLast ? Math.min(parent.open, parent.close) : parent.open,
+      close: isLast ? parent.close : parent.open, volume: parent.volume / count };
+  }));
+}
+
 async function clearDatabase(): Promise<void> {
   const db = await openCacheDatabase();
   await new Promise<void>(resolve => { const tx = db.transaction([...db.objectStoreNames], 'readwrite'); for (const name of db.objectStoreNames) tx.objectStore(name).clear(); tx.oncomplete = () => resolve(); });
@@ -50,6 +61,7 @@ describe('envelope breakout statistics', () => {
 
   it('searches the selected hourly period with one opposite-band exit case', async () => {
     await cacheCandles('BTCUSDT', '1h', rows('1h'));
+    await cacheCandles('BTCUSDT', '15m', lowerRows('1h'));
     let final: EnvelopeStatisticsJob | null = null;
     await executeEnvelopeStatistics({ settings: { ...settings, envelopeStatisticsInterval: '1h' } }, job => { final = structuredClone(job); }, new AbortController().signal);
     const job = final as unknown as EnvelopeStatisticsJob;
@@ -61,6 +73,7 @@ describe('envelope breakout statistics', () => {
 
   it('loads and searches 4h data rather than forcing hourly candles', async () => {
     await cacheCandles('BTCUSDT', '4h', rows('4h'));
+    await cacheCandles('BTCUSDT', '15m', lowerRows('4h'));
     await executeEnvelopeStatistics({ settings: { ...settings, interval: '4h', envelopeStatisticsInterval: '4h' } }, () => {}, new AbortController().signal);
     const job = (await loadEnvelopeStatistics())!;
     expect(job.status).toBe('COMPLETED'); expect(job.settings.envelopeStatisticsInterval).toBe('4h');
@@ -70,6 +83,7 @@ describe('envelope breakout statistics', () => {
 
   it('keeps only the requested direction and normalizes current settings to opposite-band exits', async () => {
     await cacheCandles('BTCUSDT', '1h', rows('1h'));
+    await cacheCandles('BTCUSDT', '15m', lowerRows('1h'));
     await executeEnvelopeStatistics({ settings: { ...settings, side: 'SHORT', envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: true, envelopeStatisticsInterval: '1h' } }, () => {}, new AbortController().signal);
     const job = (await loadEnvelopeStatistics())!;
     expect(job.settings.envelopeExitMode).toBe('OPPOSITE'); expect(job.settings.envelopeMoveSlOnCenter).toBe(false);
@@ -78,6 +92,7 @@ describe('envelope breakout statistics', () => {
 
   it('resumes a paused current job without changing the saved period or duplicating rows', async () => {
     await cacheCandles('BTCUSDT', '1h', rows('1h'));
+    await cacheCandles('BTCUSDT', '15m', lowerRows('1h'));
     const controller = new AbortController();
     await executeEnvelopeStatistics({ settings: { ...settings, envelopeStatisticsInterval: '1h' } }, job => { if (job.rows.length >= 1) controller.abort(); }, controller.signal);
     const paused = (await loadEnvelopeStatistics())!; expect(paused.status).toBe('PAUSED');

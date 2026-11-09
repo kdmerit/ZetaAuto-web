@@ -1,7 +1,7 @@
 /** Persistent local jobs: exact request snapshots, bounded blocks, and recoverable checkpoints. */
 import { intervalSeconds } from './api';
 import { deletePrefix, deleteValue, lease, maintainCache, readValue, writeValue } from './database';
-import { prepareSymbolBlock, type PreparedSymbol, type WaveState } from './engine';
+import { envelopeEntryMayTouch, prepareSymbolBlock, type PreparedSymbol, type WaveState } from './engine';
 import { analysisWindow, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
@@ -259,7 +259,7 @@ async function executeWithLease(
             : undefined;
           const newHighIntrabarCandles = job.strategy === 'NEW_HIGH' ? executionCandles : undefined;
           const referenceIntrabarCandles = job.strategy === 'REFERENCE' ? executionCandles : undefined;
-          const prepare = (volatilityIntrabarCandles?: Candle[]) => prepareSymbolBlock(instrument.symbol, candles, activeJob.settings, activeJob.strategy, activeJob.blockStart, blockEnd, activeJob.waveStates[instrument.symbol], undefined, undefined, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles);
+          const prepare = (volatilityIntrabarCandles?: Candle[], envelopeIntrabarCandles?: Candle[]) => prepareSymbolBlock(instrument.symbol, candles, activeJob.settings, activeJob.strategy, activeJob.blockStart, blockEnd, activeJob.waveStates[instrument.symbol], undefined, undefined, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles, envelopeIntrabarCandles);
           let prepared = prepare();
           applyInstrumentEligibility(prepared, instrument);
           if (job.strategy === 'VOLATILITY' && job.settings.interval !== '15m') {
@@ -269,6 +269,18 @@ async function executeWithLease(
               const volatilityIntrabarCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
               prepared = prepare(volatilityIntrabarCandles);
               applyInstrumentEligibility(prepared, instrument);
+            }
+          }
+          if (job.strategy === 'ENVELOPE' && job.settings.interval !== '15m') {
+            const firstEntryTouch = prepared.bars.find(bar => envelopeEntryMayTouch(bar, activeJob.settings));
+            const lowerFrom = job.state.positions[instrument.symbol] ? activeJob.blockStart : firstEntryTouch?.candle.openTime;
+            if (lowerFrom !== undefined && lowerFrom < blockEnd) {
+              const envelopeIntrabarCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
+              prepared = prepare(undefined, envelopeIntrabarCandles);
+              applyInstrumentEligibility(prepared, instrument);
+              for (const bar of prepared.bars) {
+                if (bar.envelopeIntrabarCandles) validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles, 900, '15분봉');
+              }
             }
           }
           for (const bar of prepared.bars) {

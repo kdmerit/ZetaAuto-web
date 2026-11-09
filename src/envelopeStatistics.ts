@@ -8,6 +8,7 @@ import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, 
 import type { BacktestInterval, BacktestResult, BacktestSettings, ContractRisk, EnvelopeExitMode } from './types';
 import { fixedEnvelopeSettings, replayFixedEnvelope } from './envelopeReplay';
 import { betterFilteredEnvelopeSetting, defaultEnvelopeResultOptions, profitRatio, validateEnvelopeResultOptions } from './envelopeResults';
+import { validateLowerTimeframeCandles } from './intrabar';
 
 export const statisticsIntervals: BacktestInterval[] = ['1h', '4h', '1d'];
 const jobKey = 'ENVELOPE_STATISTICS';
@@ -178,8 +179,27 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
       while (job.sideIndex < sides.length) {
         const side: StatisticsSide = sides[job.sideIndex]!;
         const directional = { ...settings, side };
-        const document = prepareSymbolBlock(job.instrument.symbol, candles, { ...directional, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: '0.1' }, 'ENVELOPE', start, end);
+        const baseParameters = { ...directional, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: '0.1' };
+        let document = prepareSymbolBlock(job.instrument.symbol, candles, baseParameters, 'ENVELOPE', start, end);
         for (const bar of document.bars) if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }
+        const firstEntryTouch = document.bars.find(bar => {
+          const band = bar.envelope;
+          if (!band) return false;
+          if (directional.side === 'LONG' && !band.long || directional.side === 'SHORT' && !band.short) return false;
+          if (directional.envelopeMa20Enabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
+            || !(directional.side === 'LONG' ? bar.candle.low > bar.ma20 : bar.candle.high < bar.ma20))) return false;
+          if (directional.envelopeMa20BelowEnabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
+            || !(directional.side === 'LONG' ? bar.candle.high < bar.ma20 : bar.candle.low > bar.ma20))) return false;
+          return directional.side === 'LONG' ? bar.candle.low <= band.lower : bar.candle.high >= band.upper;
+        });
+        if (firstEntryTouch) {
+          const lowerCandles = await ensureCandles(job.instrument, '15m', firstEntryTouch.candle.openTime, end, end, signal);
+          document = prepareSymbolBlock(job.instrument.symbol, candles, baseParameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, lowerCandles);
+          for (const bar of document.bars) {
+            if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }
+            if (bar.envelopeIntrabarCandles) validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles, 900, '15분봉');
+          }
+        }
         const key = `${interval}:${maPeriod}:${side}`;
         const maximum = job.maxSteps[key] ?? maximumTouchedStep(document); job.maxSteps[key] = maximum;
         while (job.step <= maximum) {

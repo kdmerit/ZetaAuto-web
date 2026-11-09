@@ -13,6 +13,7 @@ vi.mock('./marketData', async importOriginal => {
 });
 
 const origin = Date.UTC(2026, 0, 1) / 1000;
+let activeParentSeconds = 3600;
 const settings: BacktestSettings = {
   mode: 'ALL', symbol: 'AAA', interval: '1h', startDate: '2026-01-01', startTime: '09:00', endDate: '2026-01-12', endTime: '05:00',
   initialCapitalUsdt: '250', betAmountUsdt: '100', leverage: '2', side: 'BOTH', partialTpEnabled: false,
@@ -30,12 +31,15 @@ beforeEach(async () => {
   });
   vi.mocked(listInstruments).mockResolvedValue([{ symbol: 'AAAUSDT', launchAt: origin - 200 * 3600 }, { symbol: 'ZZZUSDT', launchAt: origin - 200 * 3600 }]);
   vi.mocked(instrumentEligibility).mockImplementation(async instrument => ({ ...instrument, LONG: true, SHORT: true }));
+  vi.mocked(ensureCandles).mockClear(); activeParentSeconds = 3600;
   vi.mocked(ensureCandles).mockImplementation(async (_instrument, interval, from, end) => {
+    const step = interval === '1m' ? 60 : interval === '15m' ? 900 : interval === '4h' ? 14400 : interval === '1d' ? 86400 : 3600;
+    if (interval !== '15m' && interval !== '1m') activeParentSeconds = step;
     if (interval === '1d') return dailyTrendRows(settings).filter(row => row.openTime >= from && row.openTime < end);
     const rows: Candle[] = [];
-    const step = interval === '1m' ? 60 : interval === '15m' ? 900 : interval === '4h' ? 14400 : 3600;
     for (let at = from; at < end; at += step) {
-      const phase = ((Math.floor((at - origin) / 3600) % 20) + 20) % 20;
+      const parentAt = Math.floor((at - origin) / activeParentSeconds) * activeParentSeconds + origin;
+      const phase = ((Math.floor((parentAt - origin) / 3600) % 20) + 20) % 20;
       const prices = phase === 8 ? [101, 102, 99, 100] : phase === 9 ? [100, 102, 99, 101]
         : phase === 10 ? [101, 104, 100, 103] : phase === 11 ? [103, 108, 102, 106] : [100, 101, 99, 100];
       const minute = Math.round((at % 3600) / 60);
@@ -78,7 +82,7 @@ describe('durable local analysis', () => {
     await expect(executeLocalJob({ strategy: 'ENVELOPE', resumeId: paused.id }, () => {}, new AbortController().signal)).rejects.toThrow('새 분석');
     expect((await loadLocalJob('ENVELOPE'))!.id).toBe(paused.id);
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, () => {}, new AbortController().signal);
-    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.85');
+    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.86');
   });
   it('preserves the selected envelope timeframe and drops the legacy daily filter', async () => {
     for (const mode of ['SINGLE', 'ALL'] as const) for (const envelopeDailyTrend of [true, false]) {
@@ -87,7 +91,7 @@ describe('durable local analysis', () => {
       const done = (await loadLocalJob('ENVELOPE'))!;
       expect(done.status).toBe('COMPLETED'); expect(done.settings.interval).toBe('4h'); expect(done.settings.envelopeDailyTrend).toBeUndefined();
       const intervals = new Set(vi.mocked(ensureCandles).mock.calls.map(call => call[1]));
-      expect(intervals).toEqual(new Set(['4h']));
+      expect(intervals).toEqual(new Set(['4h', '15m']));
     }
   });
   it('reuses one direction-neutral weekly universe across all four strategies and refreshes after seven days', async () => {

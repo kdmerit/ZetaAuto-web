@@ -99,4 +99,31 @@ describe('envelope band-touch entries and exits', () => {
     const { document } = replay(false, [[100, 100, 98.5, 100]]);
     expect(maximumTouchedStep(document)).toBe(15);
   });
+
+  it.each([
+    { short: false, targetFirst: true }, { short: false, targetFirst: false },
+    { short: true, targetFirst: true }, { short: true, targetFirst: false },
+  ])('uses 15m chronology after the entry line touch (short=$short, targetFirst=$targetFirst)', ({ short, targetFirst }) => {
+    const parent = candle(20, [100, 101.2, 97, 98]);
+    const source = [
+      [100, 100.1, 99, 99.8],
+      targetFirst ? [99.8, 101.2, 99.7, 101] : [99.8, 100.5, 97, 98],
+      targetFirst ? [101, 101.1, 97, 98] : [98, 101.2, 98, 101],
+      [targetFirst ? 98 : 101, targetFirst ? 98 : 101, targetFirst ? 98 : 101, targetFirst ? 98 : 101],
+    ].map((values, index) => {
+      const prices = short ? [200 - values[0]!, 200 - values[2]!, 200 - values[1]!, 200 - values[3]!] : values;
+      return { openTime: parent.openTime + index * 900, closeTime: parent.openTime + (index + 1) * 900,
+        open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: 10 };
+    });
+    const rows = Array.from({ length: 20 }, (_, index) => candle(index));
+    const all = [...rows, short ? { ...parent, open: 100, high: 103, low: 98.8, close: 102 } : parent];
+    const parameters = { ...settings, side: short ? 'SHORT' as const : 'LONG' as const };
+    const start = all[20]!.openTime; const end = all.at(-1)!.closeTime;
+    const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, source);
+    const state = initialPortfolio(1000);
+    replayPortfolioBlock(state, [document], parameters, start, end, 3600);
+    const result = portfolioResult(state, parameters);
+    expect(result.closedTradeCount).toBe(1);
+    expect(result.exitReasons).toEqual(targetFirst ? { ENVELOPE_OPPOSITE: 1 } : { SL: 1 });
+  });
 });

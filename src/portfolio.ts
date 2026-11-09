@@ -604,6 +604,58 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
       || !(side === 'LONG' ? candle.high < bar.ma20 : candle.low > bar.ma20))) return [];
     return [{ side, band, parameters, price: side === 'LONG' ? band.lower : band.upper }];
   });
+  if (bar.envelopeIntrabarCandles?.length) {
+    const simulate = (lowFirst: boolean): PortfolioState => {
+      const state = initialPortfolio(available);
+      let attempted = false;
+      let enteredSettings = settings;
+      const fill = (definition: typeof definitions[number], price: number, executionCandle: Candle): void => {
+        attempted = true;
+        const { side, band, parameters } = definition;
+        const { percent, period } = envelopeParameters(parameters);
+        const target = side === 'LONG' ? band.upper : band.lower;
+        enteredSettings = parameters;
+        enter(state, symbol, {
+          strategy: 'ENVELOPE', side, index: candle.openTime, entry: price,
+          stop: price * (1 + (side === 'LONG' ? -1 : 1) * percent / 100), target, initialTarget: target,
+          exitMode: 'ENVELOPE_TOUCH', envelopeDeviationPercent: percent, envelopeExitMode: 'OPPOSITE',
+          envelopeMaPeriod: period, envelopeCenter: band.center, envelopeMoveSlOnCenter: false,
+          envelopeEntryMode: 'BAND_TOUCH',
+          ...(band.sourceInterval ? { envelopeSourceInterval: band.sourceInterval } : {}),
+        }, executionCandle, parameters);
+      };
+      for (const rawCandle of [...(bar.envelopeIntrabarCandles ?? [])].sort((a, b) => a.openTime - b.openTime)) {
+        if (attempted && !state.positions[symbol]) break;
+        const executionCandle = { ...rawCandle, parentOpenTime: candle.openTime };
+        const path = lowFirst
+          ? [executionCandle.open, executionCandle.low, executionCandle.high, executionCandle.close]
+          : [executionCandle.open, executionCandle.high, executionCandle.low, executionCandle.close];
+        let before = path[0]!;
+        if (attempted && state.positions[symbol]) {
+          atPrice(state, symbol, executionCandle.open, executionCandle, enteredSettings, true);
+        }
+        if (!attempted) {
+          const atOpen = definitions.find(definition => definition.side === 'LONG'
+            ? executionCandle.open <= definition.price : executionCandle.open >= definition.price);
+          if (atOpen) fill(atOpen, executionCandle.open, executionCandle);
+        }
+        for (let index = 1; index < path.length && (!attempted || state.positions[symbol]); index += 1) {
+          const after = path[index]!;
+          if (!attempted) {
+            const crossed = definitions.filter(definition => definition.price >= Math.min(before, after) && definition.price <= Math.max(before, after))
+              .sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
+            const first = crossed[0];
+            if (first) { fill(first, first.price, executionCandle); before = first.price; }
+          }
+          const position = state.positions[symbol];
+          if (position) replaySegment(state, position, before, after, executionCandle, enteredSettings);
+          before = after;
+        }
+      }
+      return state;
+    };
+    return worstPath([simulate(true), simulate(false)]);
+  }
   const simulate = (lowFirst: boolean): PortfolioState => {
     const state = initialPortfolio(available);
     const path = lowFirst ? [candle.open, candle.low, candle.high, candle.close] : [candle.open, candle.high, candle.low, candle.close];
@@ -763,6 +815,24 @@ function processVolatilityCandleRule(state: PortfolioState, symbol: string, bar:
   }
 }
 
+/** Replay a held envelope position through chronological 15-minute candles. */
+function replayEnvelopeIntrabarHolding(position: Holding, bar: PreparedBar, settings: BacktestSettings): PortfolioState {
+  const state = initialPortfolio(0);
+  state.positions[position.symbol] = structuredClone(position);
+  for (const rawCandle of [...bar.envelopeIntrabarCandles!].sort((a, b) => a.openTime - b.openTime)) {
+    const current = state.positions[position.symbol];
+    if (!current) break;
+    const executionCandle = { ...rawCandle, parentOpenTime: bar.candle.openTime };
+    const childBar: PreparedBar = { ...bar, candle: executionCandle, signal: null, envelopeIntrabarCandles: undefined };
+    const selected = worstPath([
+      replayPath(current, childBar, settings, true),
+      replayPath(current, childBar, settings, false),
+    ]);
+    mergePath(state, selected, position.symbol);
+  }
+  return state;
+}
+
 function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, settings: BacktestSettings): void {
   const position = state.positions[symbol];
   if (!position) return;
@@ -798,6 +868,11 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
     if (position.signal.envelopeEntryMode === 'BAND_TOUCH') {
       if (!bar.envelope) throw new Error(`${symbol}의 엔벨로프 계산에 필요한 캔들이 부족합니다.`);
       position.target = position.signal.side === 'LONG' ? bar.envelope.upper : bar.envelope.lower;
+      if (bar.envelopeIntrabarCandles?.length) {
+        const selected = replayEnvelopeIntrabarHolding(position, bar, settings);
+        mergePath(state, selected, symbol);
+        return;
+      }
     }
   }
   if (position.signal.strategy === 'PULLBACK' && position.signal.exitMode === 'PULLBACK_ENVELOPE') {

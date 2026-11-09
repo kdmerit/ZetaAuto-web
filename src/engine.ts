@@ -561,6 +561,8 @@ export interface PreparedBar {
   referenceIntrabarCandles?: Candle[];
   /** 15-minute candles used to replay volatility exits inside 1h/4h/1d bars. */
   volatilityIntrabarCandles?: Candle[];
+  /** 15-minute candles used to replay envelope entries and exits inside 1h/4h/1d bars. */
+  envelopeIntrabarCandles?: Candle[];
   /** First lower-timeframe candle where the reference candle's line-defining extreme is known. */
   referenceLineConfirmedAt?: number;
 }
@@ -585,6 +587,7 @@ export function prepareSymbolBlock(
   newHighIntrabarCandles?: Candle[],
   referenceIntrabarCandles?: Candle[],
   volatilityIntrabarCandles?: Candle[],
+  envelopeIntrabarCandles?: Candle[],
 ): PreparedSymbol {
   if (strategy === 'NEW_HIGH') {
     const definitions = prepareNewHigh(candles, settings);
@@ -605,10 +608,19 @@ export function prepareSymbolBlock(
   if (strategy === 'ENVELOPE') {
     const { percent, period } = envelopeParameters(settings);
     const centers = priorMovingAverages(candles, period);
+    const seconds = intervalSeconds(settings.interval);
+    const envelopeGroups = new Map<number, Candle[]>();
+    for (const intrabar of envelopeIntrabarCandles ?? []) {
+      const parentOpenTime = Math.floor(intrabar.openTime / seconds) * seconds;
+      const rows = envelopeGroups.get(parentOpenTime) ?? [];
+      rows.push(intrabar);
+      envelopeGroups.set(parentOpenTime, rows);
+    }
     return { symbol, bars: enrichCandles(candles).flatMap((candle, index) => {
       if (candle.openTime < start || candle.openTime >= end) return [];
       const center = centers[index];
       return [{ candle, signal: null, ma20: candle.ma20, ma60Exit: null,
+        ...(envelopeGroups.has(candle.openTime) ? { envelopeIntrabarCandles: envelopeGroups.get(candle.openTime)!.sort((a, b) => a.openTime - b.openTime) } : {}),
         ...(center === null || center === undefined ? {} : { envelope: {
           ...bandFor(center, percent), long: settings.side !== 'SHORT', short: settings.side !== 'LONG',
         } }),
@@ -686,6 +698,22 @@ export function prepareSymbolBlock(
     }; }).filter(bar => bar.candle.openTime >= start && bar.candle.openTime < end),
     waveState,
   };
+}
+
+/** True when the selected candle can touch an enabled envelope entry line. */
+export function envelopeEntryMayTouch(bar: PreparedBar, settings: BacktestSettings): boolean {
+  const definitions = (['LONG', 'SHORT'] as const).map(side => {
+    const band = bar.envelopeBySide?.[side] ?? bar.envelope;
+    return { side, band };
+  });
+  return definitions.some(({ side, band }) => {
+    if (!band || !(side === 'LONG' ? band.long : band.short) || settings.side !== 'BOTH' && settings.side !== side) return false;
+    if (settings.envelopeMa20Enabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
+      || !(side === 'LONG' ? bar.candle.low > bar.ma20 : bar.candle.high < bar.ma20))) return false;
+    if (settings.envelopeMa20BelowEnabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
+      || !(side === 'LONG' ? bar.candle.high < bar.ma20 : bar.candle.low > bar.ma20))) return false;
+    return side === 'LONG' ? bar.candle.low <= band.lower : bar.candle.high >= band.upper;
+  });
 }
 
 function profit(position: Position, price: number): number {
@@ -1035,13 +1063,14 @@ export function runBacktest(
   newHighIntrabarCandles?: Candle[],
   referenceIntrabarCandles?: Candle[],
   volatilityIntrabarCandles?: Candle[],
+  envelopeIntrabarCandles?: Candle[],
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
   if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK' || strategy === 'REFERENCE') {
     const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
     const start = candles[0]!.openTime;
     const end = candles.at(-1)!.closeTime;
-    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles, undefined, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles);
+    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles, undefined, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles, envelopeIntrabarCandles);
     const state = initialPortfolio(Number(settings.initialCapitalUsdt));
     replayPortfolioBlock(state, [prepared], settings, start, end, intervalSeconds(settings.interval));
     const result = portfolioResult(state, settings);
@@ -1226,7 +1255,7 @@ export function buildLocalChart(
 export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 조건 충족 시 봉 중간 진입하고, 초기 SL과 단계형 트레일링 SL로 청산합니다.';
-  if (strategy === 'ENVELOPE') return '롱은 엔벨로프 하단에서 매수해 상단에서 청산하고 숏은 반대로 적용합니다. SL은 체결가에서 입력 이격률만큼 설정합니다. MA20 위 필터는 롱 전체 캔들이 MA20 위·숏 전체 캔들이 MA20 아래일 때, MA20 아래 필터는 롱 전체 캔들이 MA20 아래·숏 전체 캔들이 MA20 위일 때만 진입하며, MA20에 닿거나 걸친 캔들은 제외합니다.';
+  if (strategy === 'ENVELOPE') return '롱은 엔벨로프 하단에서 매수해 상단에서 청산하고 숏은 반대로 적용합니다. SL은 체결가에서 입력 이격률만큼 설정합니다. 1h·4h·1d는 매수 가능 봉 이후의 15분봉을 시간순으로 재생해 매수 후 SL·반대 밴드 중 먼저 닿은 선으로 청산합니다. MA20 위 필터는 롱 전체 캔들이 MA20 위·숏 전체 캔들이 MA20 아래일 때, MA20 아래 필터는 롱 전체 캔들이 MA20 아래·숏 전체 캔들이 MA20 위일 때만 진입하며, MA20에 닿거나 걸친 캔들은 제외합니다.';
   if (strategy === 'PULLBACK') {
     return 'MA20·MA60·MA120 5봉 정배열과 MA60·MA120·이격 증가, 직전 10봉 엔벨로프 접촉 이력을 확인한 뒤 MA20 눌림에서 진입하고, MA60·엔벨로프와 정배열 해제로 청산합니다.';
   }

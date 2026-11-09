@@ -7,8 +7,9 @@ import { defaultEnvelopeResultOptions, envelopeBests, matchesEnvelopeFilters, re
 import { analysisWindow, ensureCandles, listInstruments, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { fixedEnvelopeSettings, yieldAnalysis } from './envelopeReplay';
-import { prepareSymbolBlock, type PreparedSymbol } from './engine';
-import type { BacktestInterval, BacktestResult, BacktestSettings, ContractRisk, EnvelopeResultOptions } from './types';
+import { envelopeEntryMayTouch, prepareSymbolBlock, type PreparedSymbol } from './engine';
+import { validateLowerTimeframeCandles } from './intrabar';
+import type { BacktestInterval, BacktestResult, BacktestSettings, Candle, ContractRisk, EnvelopeResultOptions } from './types';
 
 export type EnvelopeBatchKind = 'ALL_STATS' | 'VIRTUAL';
 export interface OptimizedSymbol {
@@ -225,11 +226,25 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
         for (const row of job.rows) {
           signal.throwIfAborted();
           const candles = await ensureCandles(row, job.settings.interval, start - 200 * seconds, end, job.end, signal);
-          const directional = (['LONG', 'SHORT'] as const).flatMap(side => {
+          const prepareDirectional = (envelopeIntrabarCandles?: Candle[]) => (['LONG', 'SHORT'] as const).flatMap(side => {
             const p = parametersBySide[row.symbol]?.[side];
             if (!p) return [];
-            return [{ side, document: prepareSymbolBlock(row.symbol, candles, p, 'ENVELOPE', start, end) }];
+            return [{ side, document: prepareSymbolBlock(row.symbol, candles, p, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, envelopeIntrabarCandles) }];
           });
+          let directional = prepareDirectional();
+          const firstEntryTouch = directional.flatMap(({ side, document }) => {
+            const parameters = parametersBySide[row.symbol]?.[side];
+            if (!parameters) return [];
+            return document.bars.filter(bar => envelopeEntryMayTouch(bar, parameters));
+          }).sort((a, b) => a.candle.openTime - b.candle.openTime)[0];
+          const lowerFrom = job.state!.positions[row.symbol] ? start : firstEntryTouch?.candle.openTime;
+          if (lowerFrom !== undefined && lowerFrom < end) {
+            const envelopeIntrabarCandles = await ensureCandles(row, '15m', lowerFrom, end, end, signal);
+            directional = prepareDirectional(envelopeIntrabarCandles);
+            for (const { document } of directional) for (const bar of document.bars) {
+              if (bar.envelopeIntrabarCandles) validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles, 900, '15분봉');
+            }
+          }
           const base = directional[0]?.document;
           if (!base) throw new Error(`${row.symbol}의 방향별 최적 세팅이 없습니다.`);
           documents.push({ symbol: row.symbol, bars: base.bars.map((bar, index) => ({ ...bar, envelope: undefined,
