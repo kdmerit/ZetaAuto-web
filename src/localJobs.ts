@@ -5,7 +5,7 @@ import { prepareSymbolBlock, type PreparedSymbol, type WaveState } from './engin
 import { analysisWindow, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
-import { currentEnvelopeSettings, currentPullbackSettings } from './envelope';
+import { currentEnvelopeSettings, currentPullbackSettings, envelopeModelVersion } from './envelope';
 import { currentNewHighSettings, newHighExecutionInterval, newHighWarmup } from './newHigh';
 import { currentReferenceSettings } from './reference';
 import type { BacktestResult, BacktestSettings, Candle, Strategy } from './types';
@@ -21,7 +21,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.68' : strategy === 'ENVELOPE' ? '2.10.73' : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
+  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.68' : strategy === 'ENVELOPE' ? envelopeModelVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);

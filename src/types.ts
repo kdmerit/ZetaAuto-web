@@ -58,7 +58,8 @@ export interface BacktestSettings {
   envelopeRisk?: ContractRisk;
   envelopeStatisticsInterval?: EnvelopeStatisticsInterval;
   envelopeMoveSlOnCenter?: boolean;
-  envelopeEntryMode?: 'RECLAIM';
+  envelopeEntryMode?: 'RECLAIM' | 'BAND_TOUCH';
+  envelopeMa20Enabled?: boolean;
   envelopeDailyTrend?: boolean;
   envelopeResultOptions?: EnvelopeResultOptions;
   newHighLookback?: string;
@@ -265,7 +266,7 @@ export interface Signal {
   envelopeSourceInterval?: BacktestInterval;
   envelopeCenter?: number;
   envelopeMoveSlOnCenter?: boolean;
-  envelopeEntryMode?: 'RECLAIM';
+  envelopeEntryMode?: 'RECLAIM' | 'BAND_TOUCH';
   waves?: Wave[];
 }
 

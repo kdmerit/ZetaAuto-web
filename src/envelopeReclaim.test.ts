@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { currentEnvelopeSettings } from './envelope';
+import { currentEnvelopeSettings, envelopePeriods } from './envelope';
 import { betterEnvelopeSetting, qualifiesEnvelopeSetting, statisticsTotalFor, type EnvelopeStatisticsRow } from './envelopeStatistics';
 import type { BacktestSettings } from './types';
 
@@ -9,17 +9,22 @@ const candidate: EnvelopeStatisticsRow = { interval: '4h', side: 'LONG', maPerio
   maxDrawdownPercent: 1, openPositionCount: 0 };
 
 describe('current envelope model settings', () => {
+  it('offers only five periods and migrates a removed period and daily trend preference', () => {
+    expect(envelopePeriods).toEqual([3, 5, 20, 60, 120]);
+    expect(currentEnvelopeSettings({ ...base, envelopeMaPeriod: '10', envelopeDailyTrend: true })).toMatchObject({ envelopeMaPeriod: '20', envelopeEntryMode: 'BAND_TOUCH' });
+    expect(currentEnvelopeSettings({ ...base, envelopeDailyTrend: true }).envelopeDailyTrend).toBeUndefined();
+  });
   it('preserves the selected 1h/4h/1d trading and statistics periods', () => {
     for (const interval of ['1h', '4h', '1d'] as const) {
-      expect(currentEnvelopeSettings({ ...base, interval, envelopeStatisticsInterval: interval })).toMatchObject({ interval, envelopeStatisticsInterval: interval, envelopeExitMode: 'MA20', envelopeMoveSlOnCenter: false });
+      expect(currentEnvelopeSettings({ ...base, interval, envelopeStatisticsInterval: interval })).toMatchObject({ interval, envelopeStatisticsInterval: interval, envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: false });
     }
-    expect(currentEnvelopeSettings({ ...base, interval: '15m', envelopeStatisticsInterval: 'ALL' })).toMatchObject({ interval: '1h', envelopeStatisticsInterval: '1h', envelopeExitMode: 'MA20' });
+    expect(currentEnvelopeSettings({ ...base, interval: '15m', envelopeStatisticsInterval: 'ALL' })).toMatchObject({ interval: '1h', envelopeStatisticsInterval: '1h', envelopeExitMode: 'OPPOSITE' });
   });
 
-  it('keeps the inclusive result filters and one fixed MA20 exit case', () => {
+  it('keeps the inclusive result filters and one fixed opposite-band exit case', () => {
     expect(qualifiesEnvelopeSetting(candidate)).toBe(true); expect(betterEnvelopeSetting(candidate)).toBe(true);
     expect(qualifiesEnvelopeSetting({ ...candidate, entryCount: 1 })).toBe(false);
-    expect(statisticsTotalFor({ ...base, envelopeStatisticsInterval: '1h' })).toBe(3200);
-    expect(statisticsTotalFor({ ...base, envelopeStatisticsInterval: '4h' })).toBe(3200);
+    expect(statisticsTotalFor({ ...base, envelopeStatisticsInterval: '1h' })).toBe(2000);
+    expect(statisticsTotalFor({ ...base, envelopeStatisticsInterval: '4h' })).toBe(2000);
   });
 });

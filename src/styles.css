@@ -184,7 +184,8 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .candle-ma-grid > span { white-space: nowrap; }
 .chart-modal > .muted, .chart-modal > .error { flex: 0 0 auto; margin: 4px 6px; font-size: 12px; }
 .envelope-chart-caption { flex: 0 0 auto; margin: 0; padding: 1px 8px 3px; color: #cfb1ff; font-size: 11px; line-height: 14px; }
-.envelope-periods { row-gap: 8px; }
+.segmented.envelope-periods { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.envelope-periods button { padding-inline: 2px; font-size: 0.85rem; }
 .envelope-statistics { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .envelope-statistics h3, .envelope-statistics p { margin: 0; }
 .envelope-statistics select { min-width: 0; max-width: 100%; padding-right: 6px; font-size: 14px; }

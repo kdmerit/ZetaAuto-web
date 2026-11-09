@@ -8,11 +8,11 @@ function day(index: number, price: number): Candle {
 }
 const settings = currentEnvelopeSettings({ mode: 'SINGLE', symbol: 'BTC', interval: '4h', side: 'LONG', initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '1', envelopeMaPeriod: '5', envelopeDeviationPercent: '1' } as BacktestSettings);
 
-describe('envelope timeframe and retained trend input', () => {
+describe('envelope timeframe and legacy trend helpers', () => {
   it('allows the new 1h/4h/1d trading periods and normalizes removed 15m data', () => {
-    expect(currentEnvelopeSettings({ ...settings, interval: '1h', envelopeStatisticsInterval: '1h' })).toMatchObject({ interval: '1h', envelopeStatisticsInterval: '1h', envelopeExitMode: 'MA20' });
-    expect(currentEnvelopeSettings({ ...settings, interval: '4h', envelopeStatisticsInterval: '4h' })).toMatchObject({ interval: '4h', envelopeStatisticsInterval: '4h', envelopeExitMode: 'MA20' });
-    expect(currentEnvelopeSettings({ ...settings, interval: '1d', envelopeStatisticsInterval: '1d' })).toMatchObject({ interval: '1d', envelopeStatisticsInterval: '1d', envelopeExitMode: 'MA20' });
+    expect(currentEnvelopeSettings({ ...settings, interval: '1h', envelopeStatisticsInterval: '1h' })).toMatchObject({ interval: '1h', envelopeStatisticsInterval: '1h', envelopeExitMode: 'OPPOSITE' });
+    expect(currentEnvelopeSettings({ ...settings, interval: '4h', envelopeStatisticsInterval: '4h' })).toMatchObject({ interval: '4h', envelopeStatisticsInterval: '4h', envelopeExitMode: 'OPPOSITE' });
+    expect(currentEnvelopeSettings({ ...settings, interval: '1d', envelopeStatisticsInterval: '1d' })).toMatchObject({ interval: '1d', envelopeStatisticsInterval: '1d', envelopeExitMode: 'OPPOSITE' });
     expect(currentEnvelopeSettings({ ...settings, interval: '15m', envelopeStatisticsInterval: '15m' })).toMatchObject({ interval: '1h', envelopeStatisticsInterval: '1h' });
   });
 

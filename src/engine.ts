@@ -1,6 +1,6 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
-import { bandFor, envelopeParameters, priorEnvelopeTouchFlags, priorMovingAverages, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
+import { bandFor, envelopeParameters, priorMovingAverages, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
 import { prepareNewHigh, type PreparedNewHigh } from './newHigh';
 import { referenceTpPercent } from './reference';
 import { enrichMarketCandles } from './marketIndicators';
@@ -608,14 +608,9 @@ export function prepareSymbolBlock(
     return { symbol, bars: enrichCandles(candles).flatMap((candle, index) => {
       if (candle.openTime < start || candle.openTime >= end) return [];
       const center = centers[index];
-      const priorTouches = center === null || center === undefined ? null : priorEnvelopeTouchFlags(candles, centers, index, percent);
       return [{ candle, signal: null, ma20: candle.ma20, ma60Exit: null,
-        ma5: candle.ma5, ma10: candle.ma10,
-        ...(candle.ma60 !== null ? { ma60: candle.ma60 } : {}),
         ...(center === null || center === undefined ? {} : { envelope: {
           ...bandFor(center, percent), long: settings.side !== 'SHORT', short: settings.side !== 'LONG',
-          priorUpperTouch: priorTouches?.upper ?? false, priorLowerTouch: priorTouches?.lower ?? false,
-          ...(index > 0 ? { previousClose: candles[index - 1]!.close } : {}),
         } }),
       }];
     }) };
@@ -1162,7 +1157,7 @@ export function buildLocalChart(
     if (signal.partial) lines.push(line('PARTIAL_TP', signal.partial));
   } else if (signal.strategy === 'ENVELOPE' || signal.strategy === 'NEW_HIGH') {
     lines.push(line('ENTRY', trade.executions.find(fill => fill.kind === 'ENTRY')?.price ?? trade.entryPrice));
-    if (signal.strategy === 'ENVELOPE' && signal.exitMode !== 'ENVELOPE_MA20_CLOSE') {
+    if (signal.strategy === 'ENVELOPE' && signal.second !== undefined && signal.exitMode !== 'ENVELOPE_MA20_CLOSE') {
       lines.push(line('SECOND_ENTRY', signal.second));
       if (trade.executions.some(fill => fill.kind === 'SPLIT_ENTRY')) lines.push(line('AVERAGE_ENTRY', signal.averageEntry));
     }
@@ -1231,7 +1226,7 @@ export function buildLocalChart(
 export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 조건 충족 시 봉 중간 진입하고, 초기 SL과 단계형 트레일링 SL로 청산합니다.';
-  if (strategy === 'ENVELOPE') return '엔벨로프 상·하단 돌파를 종가로 확인하고 MA5·MA10·MA20·MA60 정배열일 때 진입합니다. 보유 후 종가가 MA20을 이탈하면 종가 기준으로 청산합니다. SMA·이격은 통계로 비교합니다.';
+  if (strategy === 'ENVELOPE') return '롱은 엔벨로프 하단에서 매수해 상단에서 청산하고 숏은 반대로 적용합니다. SL은 체결가에서 입력 이격률만큼 설정하며, MA20 필터를 켜면 캔들 전체가 MA20 위(롱)·아래(숏)일 때만 진입합니다.';
   if (strategy === 'PULLBACK') {
     return 'MA20·MA60·MA120 5봉 정배열과 MA60·MA120·이격 증가, 직전 10봉 엔벨로프 접촉 이력을 확인한 뒤 MA20 눌림에서 진입하고, MA60·엔벨로프와 정배열 해제로 청산합니다.';
   }

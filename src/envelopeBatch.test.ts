@@ -34,11 +34,11 @@ beforeEach(async () => {
 });
 afterEach(() => vi.unstubAllGlobals());
 function best(side: 'LONG' | 'SHORT'): EnvelopeStatisticsRow {
-  return { side, interval: '1h', maPeriod: side === 'LONG' ? 5 : 60, deviationPercent: .2, exitMode: 'MA20', leverage: 5, profitRatioPercent: 80, winningProfitUsdt: 4, losingLossUsdt: 1,
+  return { side, interval: '1h', maPeriod: side === 'LONG' ? 5 : 60, deviationPercent: .2, exitMode: 'OPPOSITE', leverage: 5, profitRatioPercent: 80, winningProfitUsdt: 4, losingLossUsdt: 1,
     returnPercent: 3, profitUsdt: 3.03, realizedProfitUsdt: 3.03, feesUsdt: .5, entryCount: 3, closedTradeCount: 3, winCount: 2, lossCount: 1, winRatePercent: 66.67, maxDrawdownPercent: 1, openPositionCount: 0 };
 }
 async function sourceReport(): Promise<EnvelopeBatchJob> {
-  const source: EnvelopeBatchJob = { id: 'source', version: '2.10.73', kind: 'ALL_STATS', status: 'COMPLETED', updatedAt: Date.now(), message: 'complete', settings,
+  const source: EnvelopeBatchJob = { id: 'source', version: '2.10.84', kind: 'ALL_STATS', status: 'COMPLETED', updatedAt: Date.now(), message: 'complete', settings,
     universe: ['AAAUSDT', 'BBBUSDT'].map(symbol => ({ symbol, launchAt: 0 })), cursor: 2,
     rows: ['AAAUSDT', 'BBBUSDT'].map(symbol => ({ symbol, launchAt: 0, status: 'OK', best: best('LONG'), bestBySide: { LONG: best('LONG'), SHORT: best('SHORT') } })) };
   await writeValue('results', 'envelope-batch:source', source); return source;
@@ -50,7 +50,7 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     const first = (await loadEnvelopeBatch('ALL_STATS'))!; expect(first.status).toBe('PAUSED');
     await executeEnvelopeBatch({ kind: 'ALL_STATS', resumeId: first.id }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('ALL_STATS'))!;
-    expect(done.status).toBe('COMPLETED'); expect(done.rows).toHaveLength(2); expect(done.rows[0]).toEqual(first.rows[0]); expect(done.version).toBe('2.10.73');
+    expect(done.status).toBe('COMPLETED'); expect(done.rows).toHaveLength(2); expect(done.rows[0]).toEqual(first.rows[0]); expect(done.version).toBe('2.10.84');
     expect(done.rows.every(row => row.status === 'NO_TRADES' || row.status === 'NO_QUALIFYING' || row.status === 'OK')).toBe(true);
     expect((await loadEnvelopeBatchHistory('ALL_STATS'))[0]!.optimized).toBeGreaterThanOrEqual(0); expect(fetch).not.toHaveBeenCalled();
   }, 60000);
@@ -62,7 +62,7 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     }
     await executeEnvelopeBatch({ kind: 'ALL_STATS', settings: { ...settings, envelopeStatisticsInterval: '4h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('ALL_STATS'))!;
-    expect(done.status).toBe('COMPLETED'); expect(done.total).toBe(6400); expect(done.completed).toBe(6400);
+    expect(done.status).toBe('COMPLETED'); expect(done.total).toBe(4000); expect(done.completed).toBe(4000);
     expect(done.rows.every(row => row.status === 'NO_TRADES' || row.status === 'NO_QUALIFYING' || row.status === 'OK')).toBe(true); expect(fetch).not.toHaveBeenCalled();
   });
   it('distinguishes trades failing the optimal thresholds from symbols with no trades', async () => {
@@ -70,7 +70,7 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     const done = (await loadEnvelopeBatch('ALL_STATS'))!;
     expect(done.rows.every(row => !row.best && !row.bestBySide?.LONG && !row.bestBySide?.SHORT)).toBe(true);
   });
-  it.each(['2.10.42', '2.10.43', '2.10.44', '2.10.46'])('preserves %s completed reports but refuses to mix prior trading rules into a new or resumed job', async oldVersion => {
+  it.each(['2.10.42', '2.10.43', '2.10.44', '2.10.46', '2.10.73'])('preserves %s completed reports but refuses to mix prior trading rules into a new or resumed job', async oldVersion => {
     const old = await sourceReport(); old.version = oldVersion; await writeValue('results', 'envelope-batch:source', old);
     expect((await loadEnvelopeBatchReport(old.id))!.version).toBe(oldVersion);
     await expect(executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: old.id, settings: evaluation }, () => {}, new AbortController().signal)).rejects.toThrow('새 매매 조건');
@@ -90,13 +90,13 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     await executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: source.id, settings: evaluation }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('VIRTUAL'))!;
     expect(done.status).toBe('COMPLETED'); expect(done.start).toBe(analysisWindow(evaluation).start); expect(done.end).toBe(analysisWindow(evaluation).end);
-    expect(done.settings).toMatchObject({ startDate: '2026-03-01', endDate: '2026-03-11', initialCapitalUsdt: '1500', betAmountUsdt: '50', leverage: '3', envelopeMoveSlOnCenter: false, envelopeExitMode: 'MA20', envelopeEntryMode: 'RECLAIM' });
+    expect(done.settings).toMatchObject({ startDate: '2026-03-01', endDate: '2026-03-11', initialCapitalUsdt: '1500', betAmountUsdt: '50', leverage: '3', envelopeMoveSlOnCenter: false, envelopeExitMode: 'OPPOSITE', envelopeEntryMode: 'BAND_TOUCH' });
     expect(done.result!.initialCapitalUsdt).toBe(1500);
     for (const trade of done.result!.recentTrades) {
       expect(trade.entryAt).toBeGreaterThanOrEqual(done.start!); expect(trade.entryAt).toBeLessThan(done.end!);
       expect(trade.signal.envelopeSourceInterval).toBe('1h'); expect(trade.signal.envelopeMaPeriod).toBe(trade.side === 'LONG' ? 5 : 60);
-      expect(trade.signal.envelopeExitMode).toBe('MA20'); expect(trade.signal.envelopeMoveSlOnCenter).toBe(false);
-      expect(trade.reason).toBe('ENVELOPE_MA20_CLOSE');
+      expect(trade.signal.envelopeExitMode).toBe('OPPOSITE'); expect(trade.signal.envelopeMoveSlOnCenter).toBe(false);
+      expect(['ENVELOPE_OPPOSITE', 'SL']).toContain(trade.reason);
       const fills = trade.executions.filter(fill => fill.kind === 'ENTRY' || fill.kind === 'SPLIT_ENTRY');
       expect(fills[0]!.price * fills[0]!.quantity).toBeCloseTo(50 * 3, 8);
     }
@@ -181,7 +181,7 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     const restored = await saveEnvelopeBatchSelection(source.id, { ...options, sort: 'returnPercent' });
     expect(restored.rows.every(row => row.best?.maPeriod === 5)).toBe(true); expect(fetch).not.toHaveBeenCalled();
   });
-  it('retains the legacy daily-trend checkbox without using it for the new model', async () => {
+  it('drops the legacy daily-trend setting without fetching daily candles', async () => {
     const db = await openCacheDatabase();
     await new Promise<void>(resolve => { const tx = db.transaction(['pages', 'pageMetadata'], 'readwrite'); tx.objectStore('pages').clear(); tx.objectStore('pageMetadata').clear(); tx.oncomplete = () => resolve(); });
     for (const symbol of ['AAAUSDT', 'BBBUSDT']) {
@@ -189,7 +189,7 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     }
     await executeEnvelopeBatch({ kind: 'ALL_STATS', settings: { ...settings, envelopeDailyTrend: false } }, () => {}, new AbortController().signal);
     const source = (await loadEnvelopeBatch('ALL_STATS'))!;
-    expect(source.status).toBe('COMPLETED'); expect(source.settings.envelopeDailyTrend).toBe(false);
-    expect(source.settings.envelopeDailyTrend).toBe(false); expect(fetch).not.toHaveBeenCalled();
+    expect(source.status).toBe('COMPLETED'); expect(source.settings.envelopeDailyTrend).toBeUndefined();
+    expect(source.settings.envelopeDailyTrend).toBeUndefined(); expect(fetch).not.toHaveBeenCalled();
   });
 });

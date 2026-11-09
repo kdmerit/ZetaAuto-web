@@ -62,50 +62,41 @@ describe('envelope parameters and causal bands', () => {
   });
 });
 
-describe('current envelope breakout and MA20 close exits', () => {
-  function breakoutRows(short = false): Candle[] {
-    const warmup = Array.from({ length: 60 }, (_, index) => candle(index));
-    const tail = short
-      ? [candle(60, [99.5, 99.6, 98, 98]), candle(61, [98, 102, 97, 101]), candle(62, [101, 102, 98, 101])]
-      : [candle(60, [100.5, 102, 100.4, 102]), candle(61, [102, 103, 98, 101]), candle(62, [101, 102, 98, 99])];
-    return [...warmup, ...tail];
-  }
-
-  it.each([false, true])('enters only after a confirmed %s breakout and exits on a later MA20 close', short => {
-    const all = breakoutRows(short);
-    const parameters = { ...settings, side: short ? 'SHORT' as const : 'LONG' as const };
-    const result = runBacktest(all, parameters, 'ENVELOPE');
-    expect(result.entryCount).toBe(1); expect(result.closedTradeCount).toBe(1);
+describe('envelope band-touch entries and exits', () => {
+  it.each([false, true])('fills at the entry band and closes at the later opposite band, short=%s', short => {
+    const { result, all, parameters } = replay(short, [[100, 100.2, 99, 100], [100, 101, 99.5, 100]]);
     const trade = result.recentTrades[0]!;
-    expect(trade.reason).toBe('ENVELOPE_MA20_CLOSE');
-    expect(trade.signal.exitMode).toBe('ENVELOPE_MA20_CLOSE');
-    expect(trade.signal.envelopeExitMode).toBe('MA20');
-    expect(trade.entryAt).toBe(all[60]!.closeTime);
-    expect(trade.exitAt).toBe(short ? all[61]!.closeTime : all[62]!.closeTime);
+    expect(result.entryCount).toBe(1); expect(result.closedTradeCount).toBe(1);
+    expect(trade.reason).toBe('ENVELOPE_OPPOSITE');
+    expect(trade.signal).toMatchObject({ exitMode: 'ENVELOPE_TOUCH', envelopeEntryMode: 'BAND_TOUCH', envelopeExitMode: 'OPPOSITE' });
+    expect(trade.entryPrice).toBeCloseTo(short ? 101 * .9998 : 99 * 1.0002, 10);
+    expect(trade.signal.stop).toBeCloseTo(trade.entryPrice * (short ? 1.01 : .99), 10);
+    expect(trade.entryAt).toBe(all[20]!.openTime);
+    expect(trade.exitAt).toBe(all[21]!.openTime);
     expect(trade.executions.map(fill => fill.kind)).toEqual(['ENTRY', 'CLOSE']);
-    expect(trade.executions[0]!.timing).toBe('BAR_CLOSE');
-    expect(trade.executions[1]!.timing).toBe('BAR_CLOSE');
+    const chart = buildLocalChart(runBacktest(all, parameters, 'ENVELOPE'), trade, parameters);
+    expect(chart.priceLines.map(line => line.kind)).toEqual(['ENTRY', 'SL', 'TP', 'EXIT']);
   });
 
-  it('does not use an intrabar low/high as a MA20 close exit', () => {
-    const all = breakoutRows(false);
-    const parameters = { ...settings, side: 'LONG' as const };
-    const result = runBacktest(all, parameters, 'ENVELOPE');
-    expect(result.recentTrades[0]!.exitAt).toBe(all[62]!.closeTime);
+  it.each([false, true])('holds at the centre and fixes its SL at the initial fill, short=%s', short => {
+    const { state, result } = replay(short, [[100, 100.2, 99, 100], [100, 100.5, 99.5, 100]]);
+    expect(result.closedTradeCount).toBe(0);
+    const position = state.positions.BTCUSDT!;
+    expect(position.stop).toBeCloseTo(position.first * (short ? 1.01 : .99), 10);
   });
 
-  it('requires the current close to finish beyond the upper band', () => {
-    const all = breakoutRows(false);
-    all[60] = { ...all[60]!, open: 100.5, close: 100.9, high: 101.2, low: 100.4 };
-    const parameters = { ...settings, side: 'LONG' as const };
-    expect(runBacktest(all, parameters, 'ENVELOPE').entryCount).toBe(0);
+  it.each([false, true])('stops at the fill-relative offset without a second entry, short=%s', short => {
+    const { result } = replay(short, [[100, 100.2, 99, 100], [100, 100, 97, 99]]);
+    expect(result.exitReasons).toEqual({ SL: 1 }); expect(result.secondFillCount).toBe(0);
   });
 
-  it('shows only entry and exit levels for the new MA20-close trade', () => {
-    const all = breakoutRows(false); const parameters = { ...settings, side: 'LONG' as const };
-    const result = runBacktest(all, parameters, 'ENVELOPE'); const trade = result.recentTrades[0]!;
-    const chart = buildLocalChart(result, trade, parameters);
-    expect(maximumTouchedStep(prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', all[0]!.openTime, all.at(-1)!.closeTime))).toBe(20);
-    expect(chart.priceLines.map(line => line.kind)).toEqual(['ENTRY', 'EXIT']);
+  it('does not credit an upper-band touch that can precede the lower-band entry', () => {
+    const { state } = replay(false, [[100, 101, 99, 99.5]]);
+    expect(state.entries).toBe(1); expect(state.closed).toBe(0);
+  });
+
+  it('searches wick touches rather than closing breakouts in optimizer bounds', () => {
+    const { document } = replay(false, [[100, 100, 98.5, 100]]);
+    expect(maximumTouchedStep(document)).toBe(15);
   });
 });

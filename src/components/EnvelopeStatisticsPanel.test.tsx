@@ -5,7 +5,7 @@ import { EnvelopeSymbolSettings, VirtualEvaluationFields, VirtualPeriodNotice } 
 import type { EnvelopeStatisticsJob } from '../envelopeStatistics';
 import type { BacktestSettings } from '../types';
 import { EnvelopeResultControls } from './EnvelopeResultControls';
-import { EnvelopeTrendControl } from './EnvelopeTrendControl';
+import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 
 const error = 'BTCUSDT의 유지증거금·위험한도 자료가 부족합니다. 임의의 LIQ로 계산하지 않습니다.';
 function job(overrides: Partial<EnvelopeStatisticsJob> = {}): EnvelopeStatisticsJob {
@@ -90,19 +90,19 @@ describe('envelope fixed-leverage statistics status', () => {
     expect(html).not.toContain('순손익 ÷'); expect(html).toContain('별도 고정 제한 없이');
   });
   it('uses the selected primary metric to label and choose current best cards, with profit ratio shown', () => {
-    const common = { interval: '1h' as const, side: 'LONG' as const, deviationPercent: 1, exitMode: 'MA20' as const, leverage: 5,
+    const common = { interval: '1h' as const, side: 'LONG' as const, deviationPercent: 1, exitMode: 'OPPOSITE' as const, leverage: 5,
       returnPercent: 20, profitUsdt: 200, realizedProfitUsdt: 200, feesUsdt: 1, entryCount: 10, closedTradeCount: 10, winCount: 9, lossCount: 1, winRatePercent: 70, profitRatioPercent: 90, maxDrawdownPercent: 1, openPositionCount: 0 };
     const rows = [{ ...common, maPeriod: 5 }, { ...common, maPeriod: 120, returnPercent: 10, winRatePercent: 95 }];
-    const current = job({ version: '2.10.73', status: 'COMPLETED', settings: { side: 'LONG', leverage: '5' } as BacktestSettings, rows });
+    const current = job({ version: '2.10.84', status: 'COMPLETED', settings: { side: 'LONG', leverage: '5' } as BacktestSettings, rows });
     const options = { minTrades: '10', minReturnPercent: '10', minProfitRatioPercent: '80', sort: 'winRatePercent' as const };
     const html = renderToStaticMarkup(<EnvelopeBestSettings job={current} resultOptions={options} disabled={false} onChoose={() => {}} />);
-    expect(html).toContain('최고 승률 95%'); expect(html).toContain('SMA120'); expect(html).not.toContain('SMA5'); expect(html).toContain('수익비 90%'); expect(html).toContain('MA20 이탈 종가 청산');
+    expect(html).toContain('최고 승률 95%'); expect(html).toContain('SMA120'); expect(html).not.toContain('SMA5'); expect(html).toContain('수익비 90%'); expect(html).toContain('반대 밴드 전량 청산');
     const empty = renderToStaticMarkup(<EnvelopeBestSettings job={current} resultOptions={{ ...options, minTrades: '11' }} disabled={false} onChoose={() => {}} />);
     expect(empty).toContain('필터를 충족한 세팅이 없습니다'); expect(empty).not.toContain('SMA120');
   });
-  it('renders the saved daily-trend checkbox consistently in enabled and disabled states', () => {
-    const on = renderToStaticMarkup(<EnvelopeTrendControl enabled onChange={() => {}} />);
-    const off = renderToStaticMarkup(<EnvelopeTrendControl enabled={false} onChange={() => {}} />);
-    expect(on).toContain('일봉 MA20 5봉 추세 필터'); expect(on).toContain('checked'); expect(off).not.toContain('checked');
+  it('renders the whole-candle MA20 checkbox consistently in enabled and disabled states', () => {
+    const on = renderToStaticMarkup(<EnvelopeMa20Control enabled onChange={() => {}} />);
+    const off = renderToStaticMarkup(<EnvelopeMa20Control enabled={false} onChange={() => {}} />);
+    expect(on).toContain('MA20 위에서만 매수'); expect(on).toContain('checked'); expect(off).not.toContain('checked');
   });
 });

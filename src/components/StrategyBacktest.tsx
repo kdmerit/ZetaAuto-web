@@ -36,7 +36,7 @@ import { chartAtInterval, withChartExecutionTimes } from '../chartIntervals';
 import { serverSettingsSnapshot } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
 import { currentEnvelopeSettings, currentPullbackSettings, envelopeParameters, envelopePeriods, pullbackEnvelopeParameters } from '../envelope';
-import { EnvelopeTrendControl } from './EnvelopeTrendControl';
+import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
@@ -88,9 +88,10 @@ export function defaultSettings(): BacktestSettings {
     volatilityMa60BelowEnabled: false,
     envelopeDeviationPercent: '0.5',
     envelopeMaPeriod: '20',
-    envelopeExitMode: 'MA20',
+    envelopeExitMode: 'OPPOSITE',
     envelopeMoveSlOnCenter: false,
-    envelopeEntryMode: 'RECLAIM',
+    envelopeEntryMode: 'BAND_TOUCH',
+    envelopeMa20Enabled: false,
     newHighLookback: '20',
     newHighSlMultiplier: '2',
     newHighMa60Enabled: false,
@@ -546,7 +547,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     setChart(null);
     setSelectedTrade(null);
     setError(null);
-    setNotice(strategy === 'ENVELOPE' && (!['1h', '4h', '1d'].includes(entry.settings.interval) || typeof entry.settings.envelopeDailyTrend !== 'boolean')
+    setNotice(strategy === 'ENVELOPE' && entry.settings.envelopeEntryMode !== 'BAND_TOUCH'
       ? '이전 엔벨로프 조건의 저장 결과입니다. 차트는 당시 설정으로 표시하며 새 분석은 1h·4h·1d 주기와 현재 조건으로 계산합니다.'
       : strategy === 'VOLATILITY' && (entry.serverJobId || typeof entry.settings.volatilityTpEnabled !== 'boolean')
       ? '이전 변동성 돌파 조건의 이력입니다. 새 분석을 시작하면 변경된 조건으로 계산합니다.'
@@ -735,15 +736,15 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             ) : strategy === 'ENVELOPE' ? (
               <div className="condition-copy">
                 <p>중심선·밴드는 선택한 1h·4h·1d 주기의 봉 시작 전에 확정된 N개 종가 평균으로 계산하며, 봉 안에서는 밴드를 고정합니다.</p>
-                <p>이전 일봉 MA20 추세 필터 입력은 기존 설정 호환을 위해 유지하지만, 현재 엔벨로프 조건에서는 사용하지 않습니다.</p>
                 <p>상단 = 중심선 × (1 + 이격%/100), 하단 = 중심선 × (1 − 이격%/100)</p>
                 <strong>롱 포지션</strong>
-                <p>직전 봉 종가 또는 현재 봉 시가가 상단 아래에 있고 현재 봉 종가가 상단 위에서 확정되며, MA5 &gt; MA10 &gt; MA20 &gt; MA60이면 현재 봉 종가로 매수합니다.</p>
+                <p>엔벨로프 하단에 닿으면 매수하고, 매수 이후 상단에 닿으면 전량 청산합니다. SL은 체결가 × (1 − 이격%/100)입니다.</p>
                 <strong>숏 포지션</strong>
-                <p>숏은 직전 봉 종가 또는 현재 봉 시가가 하단 위에 있고 현재 봉 종가가 하단 아래에서 확정되며, MA5 &lt; MA10 &lt; MA20 &lt; MA60이면 현재 봉 종가로 매도합니다.</p>
-                <p>보유 후 종가가 MA20 아래(롱) 또는 위(숏)가 되는 해당 봉 종가에만 청산합니다. 돌파봉의 고가·저가를 임의의 OHLC 경로로 재생해 진입·청산하지 않으며, SL·TP·분할매수는 사용하지 않습니다.</p>
+                <p>엔벨로프 상단에 닿으면 매도하고, 매도 이후 하단에 닿으면 전량 청산합니다. SL은 체결가 × (1 + 이격%/100)입니다.</p>
+                <p>MA20 필터를 켜면 롱은 선택 주기 캔들의 저가가 MA20보다 높고, 숏은 고가가 MA20보다 낮아야 합니다. MA20에 닿거나 걸친 캔들은 진입하지 않습니다.</p>
+                <p>매 봉 새로 계산한 반대 밴드를 청산선으로 사용하며, SL은 최초 체결가 기준으로 고정합니다.</p>
                 <p>한 종목은 봉당 한 번만 진입하고 봉 시작에 보유했다면 같은 봉에 재진입하지 않습니다. 전체종목은 종목명 순서·봉 시작 가용자금 한도로 배분하며 미래 청산 자금을 재사용하지 않습니다. 기간 말 미청산분은 평가액에 포함합니다.</p>
-                <p>개별통계·전체통계는 선택한 1h·4h·1d 주기에서 방향당 최대 1,600조합, 롱+숏 최대 3,200조합을 비교합니다. 입력 배율을 고정해 8개 SMA·이격 0.1~20.0%(0.1 단위)만 비교하며, MA20 이탈 종가 청산을 사용합니다. 매매횟수·수익률·최소수익비 필터를 통과한 결과를 방향별로 선정합니다.</p>
+                <p>개별통계·전체통계는 선택한 1h·4h·1d 주기에서 방향당 최대 1,000조합, 롱+숏 최대 2,000조합을 비교합니다. 입력 배율과 MA20 필터를 고정해 MA3·MA5·MA20·MA60·MA120과 이격 0.1~20.0%(0.1 단위)를 비교합니다. 매매횟수·수익률·최소수익비 필터를 통과한 결과를 방향별로 선정합니다.</p>
                 <p>전체통계는 슬리피지 필터 없이 모든 활성 USDT 종목에서 조건을 충족한 방향별 세팅을 저장합니다. 가상매매는 선정한 중심선·이격을 고정하고 별도로 입력한 기간·초기자금·베팅액·레버리지로 검증합니다. 검증 기간으로 다시 최적화하지 않습니다. 선정 기간과 겹치거나 그 이전을 검증하면 화면에 표시하며 실제 미래 성과를 보장하지 않습니다.</p>
                 {settings.envelopeRisk ? <p className="notice">통계에서 불러온 세팅은 현재 공개 위험한도에 따른 격리 LIQ 예상치를 사용합니다. 시가 갭이 SL과 LIQ를 모두 넘으면 남은 포지션 증거금을 소진하는 추정 청산으로 처리합니다. 실제 계좌·과거 거래소 청산가와 다를 수 있습니다.</p> : null}
               </div>
@@ -849,11 +850,11 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             </>
           ) : strategy === 'ENVELOPE' ? (
             <>
-              <EnvelopeTrendControl enabled={settings.envelopeDailyTrend !== false} onChange={enabled => update('envelopeDailyTrend', enabled)} />
+              <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
               <h2>엔벨로프 중심선 봉수</h2>
               <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
               <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '0.5'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용</small></label>
-              <p className="notice small">선택 주기 상·하단 돌파를 종가로 확인하고 MA5·MA10·MA20·MA60 정배열일 때 종가 진입 · 종가 MA20 이탈 시 청산</p>
+              <p className="notice small">롱: 하단 매수 → 상단 청산 · 숏: 상단 매도 → 하단 청산 · SL은 체결가에서 입력 이격률만큼 설정</p>
             </>
           ) : strategy === 'VOLATILITY' ? (
             <>

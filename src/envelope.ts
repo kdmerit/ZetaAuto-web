@@ -2,7 +2,9 @@
 import type { BacktestSettings, Candle, ChartData, EnvelopeBand, EnvelopeExitMode } from './types';
 
 export const envelopePeriod = 20;
-export const envelopePeriods = [5, 10, 20, 40, 60, 80, 100, 120];
+export const envelopePeriods = [3, 5, 20, 60, 120];
+export const legacyEnvelopePeriods = [5, 10, 20, 40, 60, 80, 100, 120];
+export const envelopeModelVersion = '2.10.84';
 export const envelopeExitModes: EnvelopeExitMode[] = ['MA20', 'CENTER', 'OPPOSITE', 'HALF'];
 export const envelopeExitLabels: Record<EnvelopeExitMode, string> = {
   CENTER: '중심선 전량 청산', OPPOSITE: '반대 밴드 전량 청산', HALF: '중심선 50% · 반대 밴드 나머지', MA20: 'MA20 이탈 종가 청산',
@@ -31,8 +33,11 @@ export function pullbackEnvelopeParameters(settings: BacktestSettings): { percen
 export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSettings {
   const interval = settings.interval === '4h' || settings.interval === '1d' ? settings.interval : '1h';
   const statisticsInterval = settings.envelopeStatisticsInterval === '4h' || settings.envelopeStatisticsInterval === '1d' ? settings.envelopeStatisticsInterval : '1h';
-  return { ...settings, interval, envelopeStatisticsInterval: statisticsInterval, envelopeDailyTrend: settings.envelopeDailyTrend ?? true,
-    envelopeEntryMode: 'RECLAIM', envelopeExitMode: 'MA20', envelopeMoveSlOnCenter: false, envelopeRisk: undefined };
+  const { envelopeDailyTrend: _trend, ...current } = settings;
+  return { ...current, interval, envelopeStatisticsInterval: statisticsInterval,
+    envelopeMaPeriod: envelopePeriods.includes(Number(settings.envelopeMaPeriod)) ? settings.envelopeMaPeriod : '20',
+    envelopeMa20Enabled: settings.envelopeMa20Enabled === true,
+    envelopeEntryMode: 'BAND_TOUCH', envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: false, envelopeRisk: undefined };
 }
 
 /** MA20 of the last closed daily candle versus five daily candles earlier, never the live daily bar. */
@@ -67,7 +72,7 @@ export function envelopeParameters(settings: BacktestSettings): { percent: numbe
   const exit = settings.envelopeExitMode ?? 'OPPOSITE';
   if (!envelopeExitModes.includes(exit)) throw new Error('엔벨로프 청산 방식을 선택해 주세요.');
   const period = Number(settings.envelopeMaPeriod ?? '20');
-  if (!envelopePeriods.includes(period)) throw new Error('중심선 봉수는 5·10·20·40·60·80·100·120 중에서 선택해 주세요.');
+  if (!envelopePeriods.includes(period)) throw new Error('중심선 봉수는 3·5·20·60·120 중에서 선택해 주세요.');
   return { percent, exit, period };
 }
 
