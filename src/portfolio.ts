@@ -166,7 +166,7 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'VOLATILITY_WICK_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE'].includes(reason);
+  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'VOLATILITY_WICK_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE', 'ENVELOPE_CLOSE_CONFIRM'].includes(reason);
   const fill = market ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
   const qty = Math.min(p.qty, quantity);
   const profit = gross(p, fill, qty);
@@ -180,7 +180,7 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   p.qty -= qty;
   state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + 1;
   recordFill(p, reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE', fill, qty, candle, opening,
-    reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT' || reason === 'VOLATILITY_CANDLE_EXIT' || reason === 'VOLATILITY_WICK_EXIT' || reason === 'ENVELOPE_MA20_CLOSE');
+    reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT' || reason === 'VOLATILITY_CANDLE_EXIT' || reason === 'VOLATILITY_WICK_EXIT' || reason === 'ENVELOPE_MA20_CLOSE' || reason === 'ENVELOPE_CLOSE_CONFIRM');
   state.trades.push({
     tradeId: `local:${p.symbol}:${p.opened}:${candle.openTime}:${p.executions.length}`,
     symbol: p.symbol, side: p.signal.side, entryAt: p.opened,
@@ -381,7 +381,8 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
     if (p.signal.strategy === 'DISPARITY') p.stop = p.first;
     close(state, p, p.partial, p.qty / 2, 'PARTIAL_TP', candle, opening);
   }
-  const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
+  const confirmedEnvelopeExit = p.signal.strategy === 'ENVELOPE' && p.signal.envelopeCloseOnConfirmedBreakout === true;
+  const targetEnabled = !confirmedEnvelopeExit && p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
     && (p.signal.exitMode !== 'VOLATILITY_CANDLE_RULE' || p.target > 0)
     && (p.signal.exitMode !== 'VOLATILITY_WICK_RULE' || p.target > 0)
     || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
@@ -401,7 +402,8 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
     const liq = estimatedLiquidation(p.signal.side, p.entry, p.qty, p.margin, p.risk);
     if (liq !== null) levels.add(liq);
   }
-  const targetEnabled = p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
+  const confirmedEnvelopeExit = p.signal.strategy === 'ENVELOPE' && p.signal.envelopeCloseOnConfirmedBreakout === true;
+  const targetEnabled = !confirmedEnvelopeExit && p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
     && (p.signal.exitMode !== 'VOLATILITY_CANDLE_RULE' || p.target > 0)
     && (p.signal.exitMode !== 'VOLATILITY_WICK_RULE' || p.target > 0)
     || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
@@ -419,6 +421,14 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
     atPrice(state, p.symbol, price, candle, settings);
   }
   if (state.positions[p.symbol]) p.mark = after;
+}
+
+/** Close an envelope position only when the selected parent candle confirms a breakout. */
+function closeEnvelopeOnConfirmedClose(state: PortfolioState, symbol: string, candle: Candle): void {
+  const position = state.positions[symbol];
+  if (!position || position.signal.strategy !== 'ENVELOPE' || position.signal.envelopeCloseOnConfirmedBreakout !== true) return;
+  const confirmed = position.signal.side === 'LONG' ? candle.close > position.target : candle.close < position.target;
+  if (confirmed) close(state, position, candle.close, position.qty, 'ENVELOPE_CLOSE_CONFIRM', candle);
 }
 
 function replayPath(position: Holding, bar: PreparedBar, settings: BacktestSettings, lowFirst: boolean): PortfolioState {
@@ -619,6 +629,7 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
           strategy: 'ENVELOPE', side, index: candle.openTime, entry: price,
           stop: price * (1 + (side === 'LONG' ? -1 : 1) * percent / 100), target, initialTarget: target,
           exitMode: 'ENVELOPE_TOUCH', envelopeDeviationPercent: percent, envelopeExitMode: 'OPPOSITE',
+          envelopeCloseOnConfirmedBreakout: parameters.envelopeCloseOnConfirmedBreakout === true,
           envelopeMaPeriod: period, envelopeCenter: band.center, envelopeMoveSlOnCenter: false,
           envelopeEntryMode: 'BAND_TOUCH',
           ...(band.sourceInterval ? { envelopeSourceInterval: band.sourceInterval } : {}),
@@ -654,7 +665,9 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
       }
       return state;
     };
-    return worstPath([simulate(true), simulate(false)]);
+    const selected = worstPath([simulate(true), simulate(false)]);
+    closeEnvelopeOnConfirmedClose(selected, symbol, candle);
+    return selected;
   }
   const simulate = (lowFirst: boolean): PortfolioState => {
     const state = initialPortfolio(available);
@@ -671,6 +684,7 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
         strategy: 'ENVELOPE', side, index: candle.openTime, entry: price,
         stop: price * (1 + (side === 'LONG' ? -1 : 1) * percent / 100), target, initialTarget: target,
         exitMode: 'ENVELOPE_TOUCH', envelopeDeviationPercent: percent, envelopeExitMode: 'OPPOSITE',
+        envelopeCloseOnConfirmedBreakout: parameters.envelopeCloseOnConfirmedBreakout === true,
         envelopeMaPeriod: period, envelopeCenter: band.center, envelopeMoveSlOnCenter: false,
         envelopeEntryMode: 'BAND_TOUCH',
         ...(band.sourceInterval ? { envelopeSourceInterval: band.sourceInterval } : {}),
@@ -692,7 +706,9 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
     }
     return state;
   };
-  return worstPath([simulate(true), simulate(false)]);
+  const selected = worstPath([simulate(true), simulate(false)]);
+  closeEnvelopeOnConfirmedClose(selected, symbol, candle);
+  return selected;
 }
 
 function mergePath(state: PortfolioState, selected: PortfolioState, symbol: string, baseline = 0): void {
@@ -871,6 +887,7 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
       if (bar.envelopeIntrabarCandles?.length) {
         const selected = replayEnvelopeIntrabarHolding(position, bar, settings);
         mergePath(state, selected, symbol);
+        closeEnvelopeOnConfirmedClose(state, symbol, bar.candle);
         return;
       }
     }
@@ -882,6 +899,7 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
   }
   const candidates = [replayPath(position, bar, settings, true), replayPath(position, bar, settings, false)];
   mergePath(state, worstPath(candidates), symbol);
+  closeEnvelopeOnConfirmedClose(state, symbol, bar.candle);
   const remaining = state.positions[symbol];
   if (remaining?.signal.strategy === 'PULLBACK' && remaining.signal.exitMode === 'PULLBACK_ENVELOPE') {
     const long = remaining.signal.side === 'LONG';

@@ -20,13 +20,13 @@ function replay(short = false, rows = [
   [100, 101.5, 99.5, 100],
   [99.5, 100.4, 99.5, 99.8],
   [100, 101.2, 99.8, 101],
-]) {
+], overrides: Partial<BacktestSettings> = {}) {
   const tail = rows.map((prices, index) => {
     const values = short ? [200 - prices[0]!, 200 - prices[2]!, 200 - prices[1]!, 200 - prices[3]!] : prices;
     return candle(index + 20, values);
   });
   const all = [...Array.from({ length: 20 }, (_, i) => candle(i)), ...tail];
-  const parameters = { ...settings, side: short ? 'SHORT' as const : 'LONG' as const };
+  const parameters = { ...settings, ...overrides, side: short ? 'SHORT' as const : 'LONG' as const };
   const start = all[20]!.openTime; const end = all.at(-1)!.closeTime;
   const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', start, end);
   const state = initialPortfolio(1000);
@@ -125,5 +125,42 @@ describe('envelope band-touch entries and exits', () => {
     const result = portfolioResult(state, parameters);
     expect(result.closedTradeCount).toBe(1);
     expect(result.exitReasons).toEqual(targetFirst ? { ENVELOPE_OPPOSITE: 1 } : { SL: 1 });
+  });
+
+  it.each([false, true])('waits for the parent close to confirm an opposite-band breakout, short=%s', short => {
+    const { result, all, parameters } = replay(short, [
+      [100, 101.2, 99, 100],
+      [100, 101.2, 99.5, 100],
+      [100, 101.2, 99.5, 101.2],
+    ], { envelopeCloseOnConfirmedBreakout: true });
+    const trade = result.recentTrades[0]!;
+    expect(result.closedTradeCount).toBe(1);
+    expect(trade.reason).toBe('ENVELOPE_CLOSE_CONFIRM');
+    expect(trade.signal.envelopeCloseOnConfirmedBreakout).toBe(true);
+    expect(trade.exitAt).toBe(all[22]!.closeTime);
+    expect(trade.executions.at(-1)!.timing).toBe('BAR_CLOSE');
+    expect(buildLocalChart(runBacktest(all, parameters, 'ENVELOPE'), trade, parameters).priceLines.at(-1)!.kind).toBe('EXIT');
+  });
+
+  it('does not close on a 15m opposite-band touch before parent close confirmation', () => {
+    const parent = candle(20, [100, 101.2, 99, 100]);
+    const source = [
+      [100, 100.1, 99, 99.8],
+      [99.8, 101.2, 99.7, 101],
+      [101, 101.1, 100, 100],
+      [100, 100, 100, 100],
+    ].map((values, index) => ({ openTime: parent.openTime + index * 900, closeTime: parent.openTime + (index + 1) * 900,
+      open: values[0]!, high: values[1]!, low: values[2]!, close: values[3]!, volume: 10 }));
+    const rows = Array.from({ length: 20 }, (_, index) => candle(index));
+    const all = [...rows, parent];
+    const parameters = { ...settings, envelopeCloseOnConfirmedBreakout: true };
+    const start = parent.openTime; const end = parent.closeTime;
+    const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, source);
+    const state = initialPortfolio(1000);
+    replayPortfolioBlock(state, [document], parameters, start, end, 3600);
+    const result = portfolioResult(state, parameters);
+    expect(result.entryCount).toBe(1);
+    expect(result.closedTradeCount).toBe(0);
+    expect(state.positions.BTCUSDT).toBeDefined();
   });
 });

@@ -61,6 +61,7 @@ export interface BacktestSettings {
   envelopeEntryMode?: 'RECLAIM' | 'BAND_TOUCH';
   envelopeMa20Enabled?: boolean;
   envelopeMa20BelowEnabled?: boolean;
+  envelopeCloseOnConfirmedBreakout?: boolean;
   envelopeDailyTrend?: boolean;
   envelopeResultOptions?: EnvelopeResultOptions;
   newHighLookback?: string;
@@ -268,6 +269,7 @@ export interface Signal {
   envelopeCenter?: number;
   envelopeMoveSlOnCenter?: boolean;
   envelopeEntryMode?: 'RECLAIM' | 'BAND_TOUCH';
+  envelopeCloseOnConfirmedBreakout?: boolean;
   waves?: Wave[];
 }
 

@@ -45,7 +45,7 @@ describe('new high/low causal strategy', () => {
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
     expect(newHighWarmup({ ...settings, interval: '1d' })).toBe(60 * 86400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.68'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.86'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.83');
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.68'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.87'); expect(engineVersionFor('VOLATILITY')).toBe('2.10.83');
     expect(canResumeLocalJob({ version: '2.10.68', strategy: 'NEW_HIGH', settings })).toBe(true);
   });
   it('changes the breakout window with N while keeping the reversal window fixed and excluding recent five extremes', () => {

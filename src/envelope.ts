@@ -4,7 +4,7 @@ import type { BacktestSettings, Candle, ChartData, EnvelopeBand, EnvelopeExitMod
 export const envelopePeriod = 20;
 export const envelopePeriods = [3, 5, 20, 60, 120];
 export const legacyEnvelopePeriods = [5, 10, 20, 40, 60, 80, 100, 120];
-export const envelopeModelVersion = '2.10.86';
+export const envelopeModelVersion = '2.10.87';
 export const envelopeExitModes: EnvelopeExitMode[] = ['MA20', 'CENTER', 'OPPOSITE', 'HALF'];
 export const envelopeExitLabels: Record<EnvelopeExitMode, string> = {
   CENTER: '중심선 전량 청산', OPPOSITE: '반대 밴드 전량 청산', HALF: '중심선 50% · 반대 밴드 나머지', MA20: 'MA20 이탈 종가 청산',
@@ -38,6 +38,7 @@ export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSet
     envelopeMaPeriod: envelopePeriods.includes(Number(settings.envelopeMaPeriod)) ? settings.envelopeMaPeriod : '20',
     envelopeMa20Enabled: settings.envelopeMa20Enabled === true,
     envelopeMa20BelowEnabled: settings.envelopeMa20BelowEnabled === true,
+    envelopeCloseOnConfirmedBreakout: settings.envelopeCloseOnConfirmedBreakout === true,
     envelopeEntryMode: 'BAND_TOUCH', envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: false, envelopeRisk: undefined };
 }
 
