@@ -1,7 +1,8 @@
 /** Public Bybit data only: bounded requests, retries, and incremental closed-candle caching. */
 import { intervalSeconds } from './api';
 import { cacheCandles, readCandlePages, readValue, writeValue } from './database';
-import type { CandleInterval, BacktestSettings, Candle } from './types';
+import { lowerTimeframePriceMismatch } from './intrabar';
+import type { BacktestInterval, CandleInterval, BacktestSettings, Candle } from './types';
 
 export interface Instrument { symbol: string; launchAt: number }
 export interface EligibleInstrument extends Instrument { LONG: boolean; SHORT: boolean }
@@ -159,6 +160,46 @@ async function download(symbol: string, interval: CandleInterval, start: number,
     throw new Error(`${symbol}의 캔들 가격 또는 시각이 올바르지 않습니다. 다시 이어가 주세요.`);
   }
   return rows.sort((a, b) => a.openTime - b.openTime);
+}
+
+/** Force-refresh only an exact candle range, replacing any cached rows in that range. */
+export async function refreshCandleRange(instrument: Instrument, interval: CandleInterval, from: number, end: number, signal?: AbortSignal): Promise<Candle[]> {
+  const seconds = intervalSeconds(interval);
+  const start = Math.floor(from / seconds) * seconds;
+  const stop = Math.ceil(end / seconds) * seconds;
+  if (stop <= start) return [];
+  const fetched = await download(instrument.symbol, interval, start, stop, signal);
+  await cacheCandles(instrument.symbol, interval, fetched);
+  return fetched;
+}
+
+/** Re-fetch only parent bars whose complete 15-minute OHLC aggregation disagrees with the parent. */
+export async function refreshMismatchedLowerTimeframes(
+  instrument: Instrument,
+  parentInterval: BacktestInterval,
+  parents: Candle[],
+  lowerCandles: Candle[],
+  signal?: AbortSignal,
+): Promise<number> {
+  if (parentInterval === '15m') return 0;
+  const parentSeconds = intervalSeconds(parentInterval);
+  const grouped = new Map<number, Candle[]>();
+  for (const child of lowerCandles) {
+    const parentOpen = Math.floor(child.openTime / parentSeconds) * parentSeconds;
+    const rows = grouped.get(parentOpen) ?? [];
+    rows.push(child);
+    grouped.set(parentOpen, rows);
+  }
+  const mismatched = parents.filter(parent => {
+    const children = grouped.get(parent.openTime);
+    return children !== undefined && lowerTimeframePriceMismatch(parent, children, 900);
+  });
+  for (const parent of mismatched) {
+    signal?.throwIfAborted();
+    await refreshCandleRange(instrument, parentInterval, parent.openTime, parent.closeTime, signal);
+    await refreshCandleRange(instrument, '15m', parent.openTime, parent.closeTime, signal);
+  }
+  return mismatched.length;
 }
 
 /** Read only the needed series pages. Each missing request fills up to 1,000 bars for later blocks. */

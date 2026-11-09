@@ -15,6 +15,21 @@ export function validateMinuteCandles(parent: Candle, minutes: Candle[]): void {
   }
 }
 
+/** Return a price-aggregation mismatch when a complete lower-timeframe series disagrees with its parent. */
+export function lowerTimeframePriceMismatch(parent: Candle, children: Candle[], childSeconds: number): boolean {
+  const duration = parent.closeTime - parent.openTime;
+  const count = duration / childSeconds;
+  if (!Number.isInteger(count) || children.length !== count || children.some((candle, index) => candle.openTime !== parent.openTime + index * childSeconds
+    || candle.closeTime !== candle.openTime + childSeconds
+    || !Object.values(candle).every(Number.isFinite)
+    || Math.min(candle.open, candle.high, candle.low, candle.close) <= 0
+    || candle.low > Math.min(candle.open, candle.close)
+    || candle.high < Math.max(candle.open, candle.close)
+    || candle.high < candle.low)) return false;
+  const values = [children[0]!.open, Math.max(...children.map(candle => candle.high)), Math.min(...children.map(candle => candle.low)), children.at(-1)!.close];
+  return values.some((value, index) => Math.abs(parentValue(parent, index) - value) > Math.max(Math.abs(parentValue(parent, index)), Math.abs(value), 1e-12) * 1e-8);
+}
+
 /** Validate a complete lower-timeframe series against its parent candle. */
 export function validateLowerTimeframeCandles(parent: Candle, children: Candle[], childSeconds: number, label = '하위 주기'): void {
   const duration = parent.closeTime - parent.openTime;
@@ -27,8 +42,7 @@ export function validateLowerTimeframeCandles(parent: Candle, children: Candle[]
     && candle.high >= Math.max(candle.open, candle.close)
     && candle.high >= candle.low);
   if (!valid) throw new Error(`${label} 데이터가 누락되거나 순서가 올바르지 않습니다. 분석을 다시 이어가 주세요.`);
-  const values = [children[0]!.open, Math.max(...children.map(candle => candle.high)), Math.min(...children.map(candle => candle.low)), children.at(-1)!.close];
-  if (values.some((value, index) => Math.abs(parentValue(parent, index) - value) > Math.max(Math.abs(parentValue(parent, index)), Math.abs(value), 1e-12) * 1e-8)) {
+  if (lowerTimeframePriceMismatch(parent, children, childSeconds)) {
     throw new Error(`${label} 데이터와 선택 주기 캔들의 가격이 일치하지 않습니다. 분석을 확인해 주세요.`);
   }
 }

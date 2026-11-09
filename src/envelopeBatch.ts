@@ -4,7 +4,7 @@ import { intervalSeconds } from './api';
 import { envelopeOptimizerVersion, isCurrentEnvelopeStatisticsVersion, isFilteredEnvelopeStatisticsVersion, searchEnvelopeInstrument, selectedStatisticsSides, statisticsAnalysisWindow, statisticsProgress, statisticsTotalFor, type DirectionalBests, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from './envelopeStatistics';
 import { currentEnvelopeSettings } from './envelope';
 import { defaultEnvelopeResultOptions, envelopeBests, matchesEnvelopeFilters, retainEnvelopeCandidates, validateEnvelopeResultOptions } from './envelopeResults';
-import { analysisWindow, ensureCandles, listInstruments, type Instrument } from './marketData';
+import { analysisWindow, ensureCandles, listInstruments, refreshMismatchedLowerTimeframes, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { fixedEnvelopeSettings, yieldAnalysis } from './envelopeReplay';
 import { envelopeEntryMayTouch, prepareSymbolBlock, type PreparedSymbol } from './engine';
@@ -225,7 +225,7 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
         signal.throwIfAborted(); const start = job.blockStart!; const end = Math.min(job.end!, start + size * seconds); const documents: PreparedSymbol[] = [];
         for (const row of job.rows) {
           signal.throwIfAborted();
-          const candles = await ensureCandles(row, job.settings.interval, start - 200 * seconds, end, job.end, signal);
+          let candles = await ensureCandles(row, job.settings.interval, start - 200 * seconds, end, job.end, signal);
           const prepareDirectional = (envelopeIntrabarCandles?: Candle[]) => (['LONG', 'SHORT'] as const).flatMap(side => {
             const p = parametersBySide[row.symbol]?.[side];
             if (!p) return [];
@@ -239,8 +239,14 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
           }).sort((a, b) => a.candle.openTime - b.candle.openTime)[0];
           const lowerFrom = job.state!.positions[row.symbol] ? start : firstEntryTouch?.candle.openTime;
           if (lowerFrom !== undefined && lowerFrom < end) {
-            const envelopeIntrabarCandles = await ensureCandles(row, '15m', lowerFrom, end, end, signal);
+            let envelopeIntrabarCandles = await ensureCandles(row, '15m', lowerFrom, end, end, signal);
             directional = prepareDirectional(envelopeIntrabarCandles);
+            const parents = directional[0]?.document.bars.flatMap(bar => bar.envelopeIntrabarCandles ? [bar.candle] : []) ?? [];
+            if (await refreshMismatchedLowerTimeframes(row, job.settings.interval, parents, envelopeIntrabarCandles, signal)) {
+              candles = await ensureCandles(row, job.settings.interval, start - 200 * seconds, end, job.end, signal);
+              envelopeIntrabarCandles = await ensureCandles(row, '15m', lowerFrom, end, end, signal);
+              directional = prepareDirectional(envelopeIntrabarCandles);
+            }
             for (const { document } of directional) for (const bar of document.bars) {
               if (bar.envelopeIntrabarCandles) validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles, 900, '15분봉');
             }

@@ -2,7 +2,7 @@
 import { intervalSeconds } from './api';
 import { deletePrefix, deleteValue, lease, maintainCache, readValue, writeValue } from './database';
 import { envelopeEntryMayTouch, prepareSymbolBlock, type PreparedSymbol, type WaveState } from './engine';
-import { analysisWindow, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, type EligibleInstrument, type Instrument } from './marketData';
+import { analysisWindow, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
 import { currentEnvelopeSettings, currentPullbackSettings, envelopeModelVersion } from './envelope';
@@ -251,7 +251,7 @@ async function executeWithLease(
         const activeJob = job;
         const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings) : 200 * seconds;
         try {
-          const candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
+          let candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
           const executionInterval = job.strategy === 'NEW_HIGH' ? newHighExecutionInterval(job.settings.interval)
             : job.strategy === 'REFERENCE' ? '15m' : null;
           const executionCandles = executionInterval
@@ -275,9 +275,16 @@ async function executeWithLease(
             const firstEntryTouch = prepared.bars.find(bar => envelopeEntryMayTouch(bar, activeJob.settings));
             const lowerFrom = job.state.positions[instrument.symbol] ? activeJob.blockStart : firstEntryTouch?.candle.openTime;
             if (lowerFrom !== undefined && lowerFrom < blockEnd) {
-              const envelopeIntrabarCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
+              let envelopeIntrabarCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
               prepared = prepare(undefined, envelopeIntrabarCandles);
               applyInstrumentEligibility(prepared, instrument);
+              const parents = prepared.bars.flatMap(bar => bar.envelopeIntrabarCandles ? [bar.candle] : []);
+              if (await refreshMismatchedLowerTimeframes(instrument, job.settings.interval, parents, envelopeIntrabarCandles, signal)) {
+                candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
+                envelopeIntrabarCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
+                prepared = prepare(undefined, envelopeIntrabarCandles);
+                applyInstrumentEligibility(prepared, instrument);
+              }
               for (const bar of prepared.bars) {
                 if (bar.envelopeIntrabarCandles) validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles, 900, '15분봉');
               }

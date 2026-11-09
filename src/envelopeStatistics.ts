@@ -4,7 +4,7 @@ import { lease, maintainCache, readValue, retentionMs, writeValue } from './data
 import { saveEnvelopeStatisticsHistory } from './envelopeStatisticsHistory';
 import { prepareSymbolBlock } from './engine';
 import { currentEnvelopeSettings, envelopePeriods, legacyEnvelopePeriods, envelopeModelVersion } from './envelope';
-import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, type EligibleInstrument } from './marketData';
+import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument } from './marketData';
 import type { BacktestInterval, BacktestResult, BacktestSettings, ContractRisk, EnvelopeExitMode } from './types';
 import { fixedEnvelopeSettings, replayFixedEnvelope } from './envelopeReplay';
 import { betterFilteredEnvelopeSetting, defaultEnvelopeResultOptions, profitRatio, validateEnvelopeResultOptions } from './envelopeResults';
@@ -173,7 +173,7 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
     }
     const { start, end } = window; const seconds = intervalSeconds(interval);
     job.message = `${interval} 캔들 확인`; await checkpoint(true);
-    const candles = await ensureCandles(job.instrument, interval, start - 200 * seconds, end, end, signal);
+    let candles = await ensureCandles(job.instrument, interval, start - 200 * seconds, end, end, signal);
     while (job.periodIndex < envelopePeriods.length) {
       const maPeriod = envelopePeriods[job.periodIndex]!;
       while (job.sideIndex < sides.length) {
@@ -193,10 +193,21 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
           return directional.side === 'LONG' ? bar.candle.low <= band.lower : bar.candle.high >= band.upper;
         });
         if (firstEntryTouch) {
-          const lowerCandles = await ensureCandles(job.instrument, '15m', firstEntryTouch.candle.openTime, end, end, signal);
+          let lowerCandles = await ensureCandles(job.instrument, '15m', firstEntryTouch.candle.openTime, end, end, signal);
           document = prepareSymbolBlock(job.instrument.symbol, candles, baseParameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, lowerCandles);
           for (const bar of document.bars) {
             if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }
+          }
+          const parents = document.bars.flatMap(bar => bar.envelopeIntrabarCandles ? [bar.candle] : []);
+          if (await refreshMismatchedLowerTimeframes(job.instrument, interval, parents, lowerCandles, signal)) {
+            candles = await ensureCandles(job.instrument, interval, start - 200 * seconds, end, end, signal);
+            lowerCandles = await ensureCandles(job.instrument, '15m', firstEntryTouch.candle.openTime, end, end, signal);
+            document = prepareSymbolBlock(job.instrument.symbol, candles, baseParameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, lowerCandles);
+            for (const bar of document.bars) {
+              if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }
+            }
+          }
+          for (const bar of document.bars) {
             if (bar.envelopeIntrabarCandles) validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles, 900, '15분봉');
           }
         }

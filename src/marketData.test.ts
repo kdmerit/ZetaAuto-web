@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cacheCandles, openCacheDatabase } from './database';
-import { ensureCandles, orderBookSlippage } from './marketData';
+import { ensureCandles, orderBookSlippage, refreshMismatchedLowerTimeframes } from './marketData';
 import type { Candle } from './types';
 
 const origin = Date.UTC(2026, 0, 1) / 1000;
@@ -111,6 +111,28 @@ describe('public market data and reuse', () => {
     vi.stubGlobal('fetch', fetcher);
     expect(await ensureCandles({ symbol: 'RETRYUSDT', launchAt: origin }, '1h', origin, origin + 3 * 3600)).toEqual([row(0), row(1), row(2)]);
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes only a mismatched parent and its 15-minute range', async () => {
+    const parent = { openTime: origin, closeTime: origin + 3600, open: 100, high: 105, low: 95, close: 104, volume: 40 };
+    const correctedParent = { ...parent, high: 104, low: 96 };
+    const children = Array.from({ length: 4 }, (_, index) => ({
+      openTime: origin + index * 900, closeTime: origin + (index + 1) * 900,
+      open: index === 0 ? 100 : 100 + index - 1, high: 101 + index, low: 99 - index, close: index === 3 ? 104 : 100 + index, volume: 10,
+    }));
+    await cacheCandles('REPAIRUSDT', '1h', [parent]);
+    const fetcher = vi.fn(async (input: URL | RequestInfo) => {
+      const url = new URL(String(input));
+      const interval = url.searchParams.get('interval');
+      const rows = interval === '60' ? [correctedParent] : children;
+      return new Response(JSON.stringify({ retCode: 0, result: { list: rows.map(candle => [candle.openTime * 1000, candle.open, candle.high, candle.low, candle.close, candle.volume].map(String)) } }));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const repaired = await refreshMismatchedLowerTimeframes({ symbol: 'REPAIRUSDT', launchAt: origin }, '1h', [parent], children);
+    expect(repaired).toBe(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('interval'))).toEqual(['60', '15']);
+    expect(await ensureCandles({ symbol: 'REPAIRUSDT', launchAt: origin }, '1h', origin, origin + 3600)).toEqual([correctedParent]);
   });
 
   it('does not classify malformed prices as an empty listing prefix', async () => {
