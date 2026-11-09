@@ -93,7 +93,7 @@ describe('envelope fixed-leverage statistics status', () => {
     const common = { interval: '1h' as const, side: 'LONG' as const, deviationPercent: 1, exitMode: 'OPPOSITE' as const, leverage: 5,
       returnPercent: 20, profitUsdt: 200, realizedProfitUsdt: 200, feesUsdt: 1, entryCount: 10, closedTradeCount: 10, winCount: 9, lossCount: 1, winRatePercent: 70, profitRatioPercent: 90, maxDrawdownPercent: 1, openPositionCount: 0 };
     const rows = [{ ...common, maPeriod: 5 }, { ...common, maPeriod: 120, returnPercent: 10, winRatePercent: 95 }];
-    const current = job({ version: '2.10.84', status: 'COMPLETED', settings: { side: 'LONG', leverage: '5' } as BacktestSettings, rows });
+    const current = job({ version: '2.10.85', status: 'COMPLETED', settings: { side: 'LONG', leverage: '5' } as BacktestSettings, rows });
     const options = { minTrades: '10', minReturnPercent: '10', minProfitRatioPercent: '80', sort: 'winRatePercent' as const };
     const html = renderToStaticMarkup(<EnvelopeBestSettings job={current} resultOptions={options} disabled={false} onChoose={() => {}} />);
     expect(html).toContain('최고 승률 95%'); expect(html).toContain('SMA120'); expect(html).not.toContain('SMA5'); expect(html).toContain('수익비 90%'); expect(html).toContain('반대 밴드 전량 청산');
@@ -101,8 +101,8 @@ describe('envelope fixed-leverage statistics status', () => {
     expect(empty).toContain('필터를 충족한 세팅이 없습니다'); expect(empty).not.toContain('SMA120');
   });
   it('renders the whole-candle MA20 checkbox consistently in enabled and disabled states', () => {
-    const on = renderToStaticMarkup(<EnvelopeMa20Control enabled onChange={() => {}} />);
-    const off = renderToStaticMarkup(<EnvelopeMa20Control enabled={false} onChange={() => {}} />);
-    expect(on).toContain('MA20 위에서만 매수'); expect(on).toContain('checked'); expect(off).not.toContain('checked');
+    const on = renderToStaticMarkup(<EnvelopeMa20Control enabled onChange={() => {}} belowEnabled={false} onBelowChange={() => {}} />);
+    const off = renderToStaticMarkup(<EnvelopeMa20Control enabled={false} onChange={() => {}} belowEnabled={false} onBelowChange={() => {}} />);
+    expect(on).toContain('MA20 위에서만 매수'); expect(on).toContain('MA20 아래에서만 매수'); expect(on).toContain('checked'); expect(off).not.toContain('checked');
   });
 });

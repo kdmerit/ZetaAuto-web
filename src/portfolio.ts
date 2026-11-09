@@ -600,6 +600,8 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
     if (!band || !(side === 'LONG' ? band.long : band.short) || parameters.side !== 'BOTH' && parameters.side !== side) return [];
     if (parameters.envelopeMa20Enabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
       || !(side === 'LONG' ? candle.low > bar.ma20 : candle.high < bar.ma20))) return [];
+    if (parameters.envelopeMa20BelowEnabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
+      || !(side === 'LONG' ? candle.high < bar.ma20 : candle.low > bar.ma20))) return [];
     return [{ side, band, parameters, price: side === 'LONG' ? band.lower : band.upper }];
   });
   const simulate = (lowFirst: boolean): PortfolioState => {

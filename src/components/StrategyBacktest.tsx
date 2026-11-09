@@ -92,6 +92,7 @@ export function defaultSettings(): BacktestSettings {
     envelopeMoveSlOnCenter: false,
     envelopeEntryMode: 'BAND_TOUCH',
     envelopeMa20Enabled: false,
+    envelopeMa20BelowEnabled: false,
     newHighLookback: '20',
     newHighSlMultiplier: '2',
     newHighMa60Enabled: false,
@@ -741,7 +742,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>엔벨로프 하단에 닿으면 매수하고, 매수 이후 상단에 닿으면 전량 청산합니다. SL은 체결가 × (1 − 이격%/100)입니다.</p>
                 <strong>숏 포지션</strong>
                 <p>엔벨로프 상단에 닿으면 매도하고, 매도 이후 하단에 닿으면 전량 청산합니다. SL은 체결가 × (1 + 이격%/100)입니다.</p>
-                <p>MA20 필터를 켜면 롱은 선택 주기 캔들의 저가가 MA20보다 높고, 숏은 고가가 MA20보다 낮아야 합니다. MA20에 닿거나 걸친 캔들은 진입하지 않습니다.</p>
+                <p>MA20 위 필터는 롱은 선택 주기 캔들의 저가가 MA20보다 높고, 숏은 고가가 MA20보다 낮은 캔들만 허용합니다. MA20 아래 필터는 롱은 고가가 MA20보다 낮고, 숏은 저가가 MA20보다 높은 캔들만 허용합니다. MA20에 닿거나 걸친 캔들은 진입하지 않으며 두 필터를 동시에 켜면 진입하지 않습니다.</p>
                 <p>매 봉 새로 계산한 반대 밴드를 청산선으로 사용하며, SL은 최초 체결가 기준으로 고정합니다.</p>
                 <p>한 종목은 봉당 한 번만 진입하고 봉 시작에 보유했다면 같은 봉에 재진입하지 않습니다. 전체종목은 종목명 순서·봉 시작 가용자금 한도로 배분하며 미래 청산 자금을 재사용하지 않습니다. 기간 말 미청산분은 평가액에 포함합니다.</p>
                 <p>개별통계·전체통계는 선택한 1h·4h·1d 주기에서 방향당 최대 1,000조합, 롱+숏 최대 2,000조합을 비교합니다. 입력 배율과 MA20 필터를 고정해 MA3·MA5·MA20·MA60·MA120과 이격 0.1~20.0%(0.1 단위)를 비교합니다. 매매횟수·수익률·최소수익비 필터를 통과한 결과를 방향별로 선정합니다.</p>
@@ -850,7 +851,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             </>
           ) : strategy === 'ENVELOPE' ? (
             <>
-              <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
+              <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} belowEnabled={settings.envelopeMa20BelowEnabled === true} onBelowChange={enabled => update('envelopeMa20BelowEnabled', enabled)} />
               <h2>엔벨로프 중심선 봉수</h2>
               <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
               <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '0.5'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용</small></label>

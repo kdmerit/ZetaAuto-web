@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { envelopeExitLabels, envelopeExitModes, envelopePeriods, legacyEnvelopePeriods } from '../envelope';
+import { envelopeExitLabels, envelopeExitModes, envelopeMa20FilterLabel, envelopePeriods, legacyEnvelopePeriods } from '../envelope';
 import { canResumeEnvelopeStatistics, isCurrentEnvelopeStatisticsVersion, isDirectionalStatisticsVersion, isFixedEnvelopeStatisticsVersion, isReclaimStatisticsVersion, optimalSettingCriteria, selectedStatisticsIntervals, selectedStatisticsSides, settingsForStatisticsRow, statisticsIntervalLabel, statisticsIntervals, statisticsProgress, statisticsSideLabel, statisticsTotalFor, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from '../envelopeStatistics';
 import { isEnvelopeStatisticsRunning, pauseEnvelopeStatistics, restoreEnvelopeStatistics, startEnvelopeStatistics, subscribeEnvelopeStatistics } from '../envelopeStatisticsClient';
 import type { BacktestSettings, EnvelopeExitMode, EnvelopeResultOptions } from '../types';
@@ -185,7 +185,7 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
       <p className="muted small">{job.settings.startDate} {job.settings.startTime} ~ {job.settings.endDate} {job.settings.endTime} (한국시간)<br />{statisticsIntervalLabel(job.settings)} · {selectedStatisticsIntervals(job.settings).length}개 주기 × {current ? 5 : 8}개 SMA × 0.1~20.0% × {current ? '반대 밴드 청산' : fixedTrade ? '고정 청산 방식' : '3개 청산 방식'}{directional ? ` × ${selectedStatisticsSides(job.settings).length}개 방향` : ''} · 입력 레버리지 고정</p>
       <EnvelopeStatisticsStatus job={job} />
       {directional ? <p className="muted small">롱·숏은 각각 같은 초기자금·고정 배율의 독립 계좌로 비교합니다. 두 최고 수익률은 합산 수익률이 아닙니다. {current ? '밴드 매수 · 반대 밴드 청산 · 체결가 기준 이격률 SL' : '저장 당시의 매매 조건을 적용한 결과입니다.'}</p> : null}
-      {current ? <p className="notice small">{statisticsIntervalLabel(job.settings)} · MA20 필터 {job.settings.envelopeMa20Enabled ? '사용' : '사용 안 함'} · 필터 통과 {rows.length.toLocaleString()}/{job.rows.length.toLocaleString()}건 · {resultSortLabel(resultOptions)} 내림차순</p> : fixedTrade ? <p className="notice small">이전 최적 세팅 필수 기준: {optimalSettingCriteria}</p> : null}
+      {current ? <p className="notice small">{statisticsIntervalLabel(job.settings)} · MA20 필터 {envelopeMa20FilterLabel(job.settings)} · 필터 통과 {rows.length.toLocaleString()}/{job.rows.length.toLocaleString()}건 · {resultSortLabel(resultOptions)} 내림차순</p> : fixedTrade ? <p className="notice small">이전 최적 세팅 필수 기준: {optimalSettingCriteria}</p> : null}
       <p className="muted small">완료한 조건은 기기에 저장되며 화면을 닫아 중단되면 이어갈 수 있습니다.</p>
       {Object.entries(job.skippedIntervals).map(([interval, message]) => <p key={interval} className="notice small">{interval} 제외: {message}</p>)}
       <EnvelopeBestSettings job={job} resultOptions={resultOptions} disabled={running || historyLoading || disabled} onChoose={onChoose} />

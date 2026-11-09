@@ -20,4 +20,27 @@ describe('whole-candle MA20 envelope entry filter', () => {
       expect(state.entries).toBe(Number(!enabled || (long ? ma20 < 99 : ma20 > 101)));
     }
   });
+
+  it.each(['LONG', 'SHORT'] as const)('supports the opposite whole-candle %s MA20 filter', side => {
+    const long = side === 'LONG';
+    for (const enabled of [false, true]) for (const ma20 of [98, 99, 100, 101, 102]) {
+      const settings = { ...base, side, envelopeMa20Enabled: false, envelopeMa20BelowEnabled: enabled };
+      const document: PreparedSymbol = { symbol: 'BTCUSDT', bars: [{ candle: { openTime: at, closeTime: at + 3600,
+        open: 100, high: 101, low: 99, close: 100, volume: 1 }, signal: null, ma20, ma60Exit: null,
+        envelope: { center: 100, lower: 99, upper: 101, long, short: !long } }] };
+      const state = initialPortfolio(1000);
+      replayPortfolioBlock(state, [document], settings, at, at + 3600, 3600);
+      expect(state.entries).toBe(Number(!enabled || (long ? ma20 > 101 : ma20 < 99)));
+    }
+  });
+
+  it.each(['LONG', 'SHORT'] as const)('rejects %s entries when both MA20 filters are enabled', side => {
+    const settings = { ...base, side, envelopeMa20Enabled: true, envelopeMa20BelowEnabled: true };
+    const document: PreparedSymbol = { symbol: 'BTCUSDT', bars: [{ candle: { openTime: at, closeTime: at + 3600,
+      open: 100, high: 101, low: 99, close: 100, volume: 1 }, signal: null, ma20: 100, ma60Exit: null,
+      envelope: { center: 100, lower: 99, upper: 101, long: side === 'LONG', short: side === 'SHORT' } }] };
+    const state = initialPortfolio(1000);
+    replayPortfolioBlock(state, [document], settings, at, at + 3600, 3600);
+    expect(state.entries).toBe(0);
+  });
 });

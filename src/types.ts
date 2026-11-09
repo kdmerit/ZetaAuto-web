@@ -60,6 +60,7 @@ export interface BacktestSettings {
   envelopeMoveSlOnCenter?: boolean;
   envelopeEntryMode?: 'RECLAIM' | 'BAND_TOUCH';
   envelopeMa20Enabled?: boolean;
+  envelopeMa20BelowEnabled?: boolean;
   envelopeDailyTrend?: boolean;
   envelopeResultOptions?: EnvelopeResultOptions;
   newHighLookback?: string;
