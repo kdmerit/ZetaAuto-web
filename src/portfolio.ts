@@ -2,7 +2,7 @@
 import type { PreparedBar, PreparedSymbol } from './engine';
 import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, ContractRisk, Execution, PriceLine, Signal } from './types';
 import { validateMinuteCandles } from './intrabar';
-import { envelopeParameters } from './envelope';
+import { envelopeHalfCandleAllowsEntry, envelopeParameters } from './envelope';
 import { newHighRiskAmount, newHighSlMultiplier } from './newHigh';
 import { estimatedLiquidation } from './contractRisk';
 
@@ -612,6 +612,7 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
       || !(side === 'LONG' ? candle.low > bar.ma20 : candle.high < bar.ma20))) return [];
     if (parameters.envelopeMa20BelowEnabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
       || !(side === 'LONG' ? candle.high < bar.ma20 : candle.low > bar.ma20))) return [];
+    if (!envelopeHalfCandleAllowsEntry(candle, band, side, parameters.interval)) return [];
     return [{ side, band, parameters, price: side === 'LONG' ? band.lower : band.upper }];
   });
   if (bar.envelopeIntrabarCandles?.length) {

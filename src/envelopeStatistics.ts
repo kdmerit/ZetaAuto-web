@@ -3,7 +3,7 @@ import { intervalSeconds } from './api';
 import { lease, maintainCache, readValue, retentionMs, writeValue } from './database';
 import { saveEnvelopeStatisticsHistory } from './envelopeStatisticsHistory';
 import { prepareSymbolBlock } from './engine';
-import { currentEnvelopeSettings, envelopePeriods, legacyEnvelopePeriods, envelopeModelVersion } from './envelope';
+import { currentEnvelopeSettings, envelopeHalfCandleAllowsEntry, envelopePeriods, legacyEnvelopePeriods, envelopeModelVersion } from './envelope';
 import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument } from './marketData';
 import type { BacktestInterval, BacktestResult, BacktestSettings, ContractRisk, EnvelopeExitMode } from './types';
 import { fixedEnvelopeSettings, replayFixedEnvelope } from './envelopeReplay';
@@ -190,6 +190,7 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
             || !(directional.side === 'LONG' ? bar.candle.low > bar.ma20 : bar.candle.high < bar.ma20))) return false;
           if (directional.envelopeMa20BelowEnabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
             || !(directional.side === 'LONG' ? bar.candle.high < bar.ma20 : bar.candle.low > bar.ma20))) return false;
+          if (!envelopeHalfCandleAllowsEntry(bar.candle, band, directional.side, directional.interval)) return false;
           return directional.side === 'LONG' ? bar.candle.low <= band.lower : bar.candle.high >= band.upper;
         });
         if (firstEntryTouch) {

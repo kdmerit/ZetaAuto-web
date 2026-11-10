@@ -1,6 +1,6 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
-import { bandFor, envelopeParameters, priorMovingAverages, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
+import { bandFor, envelopeHalfCandleAllowsEntry, envelopeParameters, priorMovingAverages, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
 import { prepareNewHigh, type PreparedNewHigh } from './newHigh';
 import { referenceTpPercent } from './reference';
 import { enrichMarketCandles } from './marketIndicators';
@@ -712,6 +712,7 @@ export function envelopeEntryMayTouch(bar: PreparedBar, settings: BacktestSettin
       || !(side === 'LONG' ? bar.candle.low > bar.ma20 : bar.candle.high < bar.ma20))) return false;
     if (settings.envelopeMa20BelowEnabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
       || !(side === 'LONG' ? bar.candle.high < bar.ma20 : bar.candle.low > bar.ma20))) return false;
+    if (!envelopeHalfCandleAllowsEntry(bar.candle, band, side, settings.interval)) return false;
     return side === 'LONG' ? bar.candle.low <= band.lower : bar.candle.high >= band.upper;
   });
 }
@@ -1255,7 +1256,7 @@ export function buildLocalChart(
 export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 조건 충족 시 봉 중간 진입하고, 초기 SL과 단계형 트레일링 SL로 청산합니다.';
-  if (strategy === 'ENVELOPE') return '롱은 엔벨로프 하단에서 매수해 상단에서 청산하고 숏은 반대로 적용합니다. SL은 체결가에서 입력 이격률만큼 설정합니다. 1h·4h·1d는 매수 가능 봉 이후의 15분봉을 시간순으로 재생해 매수 후 SL·반대 밴드 중 먼저 닿은 선으로 청산합니다. MA20 위 필터는 롱 전체 캔들이 MA20 위·숏 전체 캔들이 MA20 아래일 때, MA20 아래 필터는 롱 전체 캔들이 MA20 아래·숏 전체 캔들이 MA20 위일 때만 진입하며, MA20에 닿거나 걸친 캔들은 제외합니다.';
+  if (strategy === 'ENVELOPE') return '롱은 엔벨로프 하단에서 매수해 상단에서 청산하고 숏은 반대로 적용합니다. SL은 체결가에서 입력 이격률만큼 설정합니다. 1h·4h·1d는 매수 가능 봉 이후의 15분봉을 시간순으로 재생해 매수 후 SL·반대 밴드 중 먼저 닿은 선으로 청산합니다. MA20 위 필터는 롱 전체 캔들이 MA20 위·숏 전체 캔들이 MA20 아래일 때, MA20 아래 필터는 롱 전체 캔들이 MA20 아래·숏 전체 캔들이 MA20 위일 때만 진입하며, MA20에 닿거나 걸친 캔들은 제외합니다. 1d에서는 캔들 범위 중간값이 롱 상단 이상·숏 하단 이하인 과열 캔들의 진입을 금지합니다.';
   if (strategy === 'PULLBACK') {
     return 'MA20·MA60·MA120 5봉 정배열과 MA60·MA120·이격 증가, 직전 10봉 엔벨로프 접촉 이력을 확인한 뒤 MA20 눌림에서 진입하고, MA60·엔벨로프와 정배열 해제로 청산합니다.';
   }
