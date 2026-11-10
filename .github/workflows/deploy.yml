@@ -59,6 +59,51 @@ jobs:
           VITE_COGNITO_REDIRECT_URI: ${{ vars.VITE_COGNITO_REDIRECT_URI || 'https://kdmerit.github.io/ZetaAuto-web/' }}
           VITE_COGNITO_LOGOUT_URI: ${{ vars.VITE_COGNITO_LOGOUT_URI || 'https://kdmerit.github.io/ZetaAuto-web/' }}
         run: npm run validate
+      - name: Preserve previous hashed assets during rollout
+        env:
+          PAGES_URL: https://kdmerit.github.io/ZetaAuto-web/
+        run: |
+          set -euo pipefail
+          previous_index="$RUNNER_TEMP/zetaauto-previous-index.html"
+          if ! curl --fail --silent --show-error --location --max-time 20 "$PAGES_URL" --output "$previous_index"; then
+            echo 'Previous GitHub Pages assets are unavailable; continuing with the new build.'
+            exit 0
+          fi
+
+          download_asset() {
+            local asset="$1"
+            local target="dist/$asset"
+            local temporary="$RUNNER_TEMP/$(basename "$asset").previous"
+            mkdir -p "$(dirname "$target")"
+            if [ -f "$target" ]; then return 0; fi
+            if curl --fail --silent --show-error --location --max-time 20 "$PAGES_URL$asset" --output "$temporary"; then
+              mv "$temporary" "$target"
+            else
+              rm -f "$temporary"
+              echo "Could not preserve $asset; continuing."
+            fi
+          }
+
+          initial_assets="$RUNNER_TEMP/zetaauto-previous-assets.txt"
+          grep -oE 'assets/[A-Za-z0-9._-]+\.(js|css)' "$previous_index" | sort -u > "$initial_assets" || true
+          while IFS= read -r asset; do
+            [ -n "$asset" ] && download_asset "$asset"
+          done < "$initial_assets"
+
+          # The old entry bundle contains the old worker filenames. Keep those
+          # files too, so a cached index.html cannot reference a missing worker.
+          for _ in 1 2; do
+            nested_assets="$RUNNER_TEMP/zetaauto-nested-assets.txt"
+            : > "$nested_assets"
+            for script in dist/assets/*.js; do
+              [ -f "$script" ] || continue
+              grep -oE 'assets/[A-Za-z0-9._-]+\.js' "$script" >> "$nested_assets" || true
+            done
+            sort -u -o "$nested_assets" "$nested_assets"
+            while IFS= read -r asset; do
+              [ -n "$asset" ] && download_asset "$asset"
+            done < "$nested_assets"
+          done
       - name: Scan published assets for credentials
         run: '"$RUNNER_TEMP/gitleaks" dir --redact=100 --no-banner --ignore-gitleaks-allow dist'
       - name: Upload Pages artifact
