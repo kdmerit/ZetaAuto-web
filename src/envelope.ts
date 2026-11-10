@@ -4,7 +4,7 @@ import type { BacktestInterval, BacktestSettings, Candle, ChartData, EnvelopeBan
 export const envelopePeriod = 20;
 export const envelopePeriods = [3, 5, 20, 60, 120];
 export const legacyEnvelopePeriods = [5, 10, 20, 40, 60, 80, 100, 120];
-export const envelopeModelVersion = '2.10.88';
+export const envelopeModelVersion = '2.10.89';
 export const envelopeExitModes: EnvelopeExitMode[] = ['MA20', 'CENTER', 'OPPOSITE', 'HALF'];
 export const envelopeExitLabels: Record<EnvelopeExitMode, string> = {
   CENTER: '중심선 전량 청산', OPPOSITE: '반대 밴드 전량 청산', HALF: '중심선 50% · 반대 밴드 나머지', MA20: 'MA20 이탈 종가 청산',
@@ -92,8 +92,8 @@ export function bandFor(center: number, percent: number): EnvelopeBand {
 }
 
 /**
- * On daily envelope entries, reject a candle that has already spent at least
- * half of its full range beyond the opposite band.  The midpoint is used so
+ * On daily envelope entries, reject a candle with at least
+ * half of its full range beyond the entry band.  The midpoint is used so
  * equality is also rejected; lower-timeframe envelope rules are unchanged.
  */
 export function envelopeHalfCandleAllowsEntry(
@@ -105,7 +105,7 @@ export function envelopeHalfCandleAllowsEntry(
   if (interval !== '1d') return true;
   const midpoint = (candle.high + candle.low) / 2;
   if (!Number.isFinite(midpoint)) return false;
-  return side === 'LONG' ? midpoint < band.upper : midpoint > band.lower;
+  return side === 'LONG' ? midpoint > band.lower : midpoint < band.upper;
 }
 
 /**

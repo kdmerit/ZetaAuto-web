@@ -81,6 +81,29 @@ describe('envelope breakout statistics', () => {
     expect(fetch).not.toHaveBeenCalled();
   }, 30000);
 
+  it.each(['LONG', 'SHORT'] as const)('loads 15m data for wider daily %s bands even when the 0.1%% half-range filter rejects every candle', async side => {
+    const candles = rows('1d').map((row, index) => index < 200 ? row : {
+      ...row, open: 100, high: side === 'LONG' ? 104 : 107, low: side === 'LONG' ? 93 : 96, close: 100,
+    });
+    const path = [[100, 100, 97, 97], [97, 104, 97, 104], [104, 104, 93, 93], [93, 100, 93, 100]];
+    const lower = candles.flatMap((parent, parentIndex) => Array.from({ length: 96 }, (_, index) => {
+      const raw = parentIndex >= 200 ? path[index] ?? [100, 100, 100, 100] : [100, 100, 100, 100];
+      const prices = side === 'LONG' ? raw : [200 - raw[0]!, 200 - raw[2]!, 200 - raw[1]!, 200 - raw[3]!];
+      return { openTime: parent.openTime + index * 900, closeTime: parent.openTime + (index + 1) * 900,
+        open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: parent.volume / 96 };
+    }));
+    await cacheCandles('BTCUSDT', '1d', candles);
+    await cacheCandles('BTCUSDT', '15m', lower);
+    await executeEnvelopeStatistics({ settings: { ...settings, side, interval: '1d', envelopeStatisticsInterval: '1d' } }, () => {}, new AbortController().signal);
+    const job = (await loadEnvelopeStatistics())!;
+    expect(job.status).toBe('COMPLETED');
+    const threePercent = job.rows.filter(row => row.deviationPercent === 3);
+    expect(threePercent).toHaveLength(5);
+    expect(threePercent.every(row => row.side === side && row.entryCount > 0 && row.winCount > 0 && row.lossCount === 0)).toBe(true);
+    expect(job.rows.filter(row => row.deviationPercent === 0.1).every(row => row.entryCount === 0)).toBe(true);
+    expect(fetch).not.toHaveBeenCalled();
+  }, 30000);
+
   it('keeps only the requested direction and normalizes current settings to opposite-band exits', async () => {
     await cacheCandles('BTCUSDT', '1h', rows('1h'));
     await cacheCandles('BTCUSDT', '15m', lowerRows('1h'));

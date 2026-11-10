@@ -3,7 +3,7 @@ import { intervalSeconds } from './api';
 import { lease, maintainCache, readValue, retentionMs, writeValue } from './database';
 import { saveEnvelopeStatisticsHistory } from './envelopeStatisticsHistory';
 import { prepareSymbolBlock } from './engine';
-import { currentEnvelopeSettings, envelopeHalfCandleAllowsEntry, envelopePeriods, legacyEnvelopePeriods, envelopeModelVersion } from './envelope';
+import { bandFor, currentEnvelopeSettings, envelopeHalfCandleAllowsEntry, envelopePeriods, legacyEnvelopePeriods, envelopeModelVersion } from './envelope';
 import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument } from './marketData';
 import type { BacktestInterval, BacktestResult, BacktestSettings, ContractRisk, EnvelopeExitMode } from './types';
 import { fixedEnvelopeSettings, replayFixedEnvelope } from './envelopeReplay';
@@ -15,16 +15,18 @@ const jobKey = 'ENVELOPE_STATISTICS';
 export const envelopeOptimizerVersion = envelopeModelVersion;
 const version = envelopeOptimizerVersion;
 const previousFixedEntryVersion = '2.10.46';
+const previousHalfFilterVersion = '2.10.88';
 
 export type StatisticsSide = 'LONG' | 'SHORT';
 export type DirectionalBests = Partial<Record<StatisticsSide, EnvelopeStatisticsRow | null>>;
 export const statisticsSideLabel = (side: StatisticsSide): string => side === 'LONG' ? '롱' : '숏';
 export const selectedStatisticsSides = (settings: Pick<BacktestSettings, 'side'>): StatisticsSide[] => settings.side === 'LONG' ? ['LONG'] : settings.side === 'SHORT' ? ['SHORT'] : ['LONG', 'SHORT'];
 export const isCurrentEnvelopeStatisticsVersion = (value: string | undefined): boolean => value === version;
-export const isFilteredEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.44', previousFixedEntryVersion, '2.10.73'].includes(value ?? '') || isCurrentEnvelopeStatisticsVersion(value);
+export const isFilteredEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion].includes(value ?? '') || isCurrentEnvelopeStatisticsVersion(value);
 export const isReclaimStatisticsVersion = (value: string | undefined): boolean => value === '2.10.43' || isFilteredEnvelopeStatisticsVersion(value);
 export const isDirectionalStatisticsVersion = (value: string | undefined): boolean => value === '2.10.42' || isReclaimStatisticsVersion(value);
-export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.40', '2.10.41', '2.10.42', '2.10.43', '2.10.44', previousFixedEntryVersion, '2.10.73', version].includes(value ?? '');
+export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.40', '2.10.41', '2.10.42', '2.10.43', '2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion, version].includes(value ?? '');
+const usesFiveEnvelopePeriods = (value: string | undefined): boolean => value === previousHalfFilterVersion || isCurrentEnvelopeStatisticsVersion(value);
 export const optimalSettingCriteria = '진입 2회 이상 · 승률 60% 이상 · 수익률 2% 이상';
 export function qualifiesEnvelopeSetting(row: Pick<EnvelopeStatisticsRow, 'entryCount' | 'winRatePercent' | 'returnPercent'>): boolean {
   return row.entryCount >= 2 && row.winRatePercent !== null && Number.isFinite(row.winRatePercent) && row.winRatePercent >= 60
@@ -103,12 +105,12 @@ export interface EnvelopeStatisticsJob {
 }
 
 export const statisticsTotal = statisticsIntervals.length * envelopePeriods.length * 200;
-export const statisticsTotalFor = (settings: Pick<BacktestSettings, 'envelopeStatisticsInterval' | 'side'>, calculationVersion = version): number => (isFilteredEnvelopeStatisticsVersion(calculationVersion) ? 1 : selectedStatisticsIntervals(settings).length) * (isCurrentEnvelopeStatisticsVersion(calculationVersion) ? envelopePeriods.length : legacyEnvelopePeriods.length) * 200 * (isReclaimStatisticsVersion(calculationVersion) ? 1 : 3) * (isDirectionalStatisticsVersion(calculationVersion) ? selectedStatisticsSides(settings).length : 1);
+export const statisticsTotalFor = (settings: Pick<BacktestSettings, 'envelopeStatisticsInterval' | 'side'>, calculationVersion = version): number => (isFilteredEnvelopeStatisticsVersion(calculationVersion) ? 1 : selectedStatisticsIntervals(settings).length) * (usesFiveEnvelopePeriods(calculationVersion) ? envelopePeriods.length : legacyEnvelopePeriods.length) * 200 * (isReclaimStatisticsVersion(calculationVersion) ? 1 : 3) * (isDirectionalStatisticsVersion(calculationVersion) ? selectedStatisticsSides(settings).length : 1);
 export const statisticsProgress = (job: EnvelopeStatisticsJob): number => {
   const total = statisticsTotalFor(job.settings, job.version);
   const sides = isDirectionalStatisticsVersion(job.version) ? selectedStatisticsSides(job.settings).length : 1;
   const exits = isReclaimStatisticsVersion(job.version) ? 1 : 3;
-  const periods = isCurrentEnvelopeStatisticsVersion(job.version) ? envelopePeriods.length : legacyEnvelopePeriods.length;
+  const periods = usesFiveEnvelopePeriods(job.version) ? envelopePeriods.length : legacyEnvelopePeriods.length;
   return job.status === 'COMPLETED' ? total : Math.min(total, ((job.intervalIndex * periods + job.periodIndex) * sides + (job.sideIndex ?? 0)) * 200 * exits + (job.step - 1) * exits + job.exitIndex);
 };
 
@@ -190,7 +192,10 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
             || !(directional.side === 'LONG' ? bar.candle.low > bar.ma20 : bar.candle.high < bar.ma20))) return false;
           if (directional.envelopeMa20BelowEnabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
             || !(directional.side === 'LONG' ? bar.candle.high < bar.ma20 : bar.candle.low > bar.ma20))) return false;
-          if (!envelopeHalfCandleAllowsEntry(bar.candle, band, directional.side, directional.interval)) return false;
+          // A narrow band may fail the half-range filter while a wider one passes.
+          // Fetch from the earliest candidate that can pass any tested width;
+          // replay applies the actual width's filter separately to every case.
+          if (!envelopeHalfCandleAllowsEntry(bar.candle, bandFor(band.center, 20), directional.side, directional.interval)) return false;
           return directional.side === 'LONG' ? bar.candle.low <= band.lower : bar.candle.high >= band.upper;
         });
         if (firstEntryTouch) {

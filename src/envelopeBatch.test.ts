@@ -52,7 +52,7 @@ function best(side: 'LONG' | 'SHORT'): EnvelopeStatisticsRow {
     returnPercent: 3, profitUsdt: 3.03, realizedProfitUsdt: 3.03, feesUsdt: .5, entryCount: 3, closedTradeCount: 3, winCount: 2, lossCount: 1, winRatePercent: 66.67, maxDrawdownPercent: 1, openPositionCount: 0 };
 }
 async function sourceReport(): Promise<EnvelopeBatchJob> {
-  const source: EnvelopeBatchJob = { id: 'source', version: '2.10.88', kind: 'ALL_STATS', status: 'COMPLETED', updatedAt: Date.now(), message: 'complete', settings,
+  const source: EnvelopeBatchJob = { id: 'source', version: '2.10.89', kind: 'ALL_STATS', status: 'COMPLETED', updatedAt: Date.now(), message: 'complete', settings,
     universe: ['AAAUSDT', 'BBBUSDT'].map(symbol => ({ symbol, launchAt: 0 })), cursor: 2,
     rows: ['AAAUSDT', 'BBBUSDT'].map(symbol => ({ symbol, launchAt: 0, status: 'OK', best: best('LONG'), bestBySide: { LONG: best('LONG'), SHORT: best('SHORT') } })) };
   await writeValue('results', 'envelope-batch:source', source); return source;
@@ -64,7 +64,7 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     const first = (await loadEnvelopeBatch('ALL_STATS'))!; expect(first.status).toBe('PAUSED');
     await executeEnvelopeBatch({ kind: 'ALL_STATS', resumeId: first.id }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('ALL_STATS'))!;
-    expect(done.status).toBe('COMPLETED'); expect(done.rows).toHaveLength(2); expect(done.rows[0]).toEqual(first.rows[0]); expect(done.version).toBe('2.10.88');
+    expect(done.status).toBe('COMPLETED'); expect(done.rows).toHaveLength(2); expect(done.rows[0]).toEqual(first.rows[0]); expect(done.version).toBe('2.10.89');
     expect(done.rows.every(row => row.status === 'NO_TRADES' || row.status === 'NO_QUALIFYING' || row.status === 'OK')).toBe(true);
     expect((await loadEnvelopeBatchHistory('ALL_STATS'))[0]!.optimized).toBeGreaterThanOrEqual(0); expect(fetch).not.toHaveBeenCalled();
   }, 60000);
@@ -84,7 +84,7 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     const done = (await loadEnvelopeBatch('ALL_STATS'))!;
     expect(done.rows.every(row => !row.best && !row.bestBySide?.LONG && !row.bestBySide?.SHORT)).toBe(true);
   });
-  it.each(['2.10.42', '2.10.43', '2.10.44', '2.10.46', '2.10.73'])('preserves %s completed reports but refuses to mix prior trading rules into a new or resumed job', async oldVersion => {
+  it.each(['2.10.42', '2.10.43', '2.10.44', '2.10.46', '2.10.73', '2.10.88'])('preserves %s completed reports but refuses to mix prior trading rules into a new or resumed job', async oldVersion => {
     const old = await sourceReport(); old.version = oldVersion; await writeValue('results', 'envelope-batch:source', old);
     expect((await loadEnvelopeBatchReport(old.id))!.version).toBe(oldVersion);
     await expect(executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: old.id, settings: evaluation }, () => {}, new AbortController().signal)).rejects.toThrow('새 매매 조건');
