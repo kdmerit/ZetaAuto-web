@@ -54,6 +54,51 @@ beforeEach(async () => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('durable local analysis', () => {
+  it('resumes the NEW_HIGH 640/759 checkpoint and completes a fresh run using cached closed daily candles', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-11T06:29:00Z'));
+    const start = Date.parse('2026-10-11T00:00:00+09:00') / 1000;
+    const end = Date.parse('2026-11-11T06:00:00Z') / 1000;
+    const dailyEnd = Date.parse('2026-11-11T00:00:00Z') / 1000;
+    const input: BacktestSettings = { ...settings, mode: 'SINGLE', symbol: 'BTC', interval: '1h',
+      startDate: '2026-10-11', startTime: '00:00', endDate: '', newHighDailyMa20Enabled: true };
+    const instrument = { symbol: 'BTCUSDT', launchAt: origin };
+    vi.mocked(listInstruments).mockResolvedValue([instrument]);
+    const actual = await vi.importActual<typeof import('./marketData')>('./marketData');
+    vi.mocked(ensureCandles).mockImplementation(actual.ensureCandles);
+    for (const [interval, seconds, from, stop] of [
+      ['1h', 3600, start - 21 * 86400, end],
+      ['15m', 900, start, end],
+      ['1d', 86400, Math.floor(start / 86400) * 86400 - 25 * 86400, dailyEnd],
+    ] as const) {
+      const candles: Candle[] = [];
+      for (let at = from; at < stop; at += seconds) {
+        candles.push({ openTime: at, closeTime: at + seconds, open: 100, high: 102, low: 99, close: 101, volume: 10 });
+      }
+      await cacheCandles('BTCUSDT', interval, candles);
+    }
+    const fetcher = vi.fn(() => { throw new Error('The current daily candle cannot be downloaded as a closed candle'); });
+    vi.stubGlobal('fetch', fetcher);
+    const pause = new AbortController();
+    await executeLocalJob({ strategy: 'NEW_HIGH', settings: input }, view => {
+      if (view.phase === 'DATA' && view.completed === 640) pause.abort();
+    }, pause.signal);
+    const paused = (await loadLocalJob('NEW_HIGH'))!;
+    expect(paused).toMatchObject({ status: 'PAUSED', completed: 640, total: 759 });
+    await executeLocalJob({ strategy: 'NEW_HIGH', resumeId: paused.id }, () => {}, new AbortController().signal);
+    const resumed = (await loadLocalJob('NEW_HIGH'))!;
+    expect(resumed).toMatchObject({ id: paused.id, status: 'COMPLETED', completed: 759, total: 759, failedSymbols: [] });
+    await executeLocalJob({ strategy: 'NEW_HIGH', settings: input }, () => {}, new AbortController().signal);
+    const fresh = (await loadLocalJob('NEW_HIGH'))!;
+    expect(fresh).toMatchObject({ status: 'COMPLETED', completed: 759, total: 759, failedSymbols: [] });
+    expect(fresh.id).not.toBe(paused.id);
+    expect({ ...fresh.result, localRunId: undefined }).toEqual({ ...resumed.result, localRunId: undefined });
+    const dailyCalls = vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === '1d');
+    expect(dailyCalls.length).toBeGreaterThan(0);
+    expect(dailyCalls.every(call => call[3] % 86400 === 0 && call[3] <= dailyEnd)).toBe(true);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it.each(['1h', '4h'] as const)('saves and resumes NEW_HIGH %s with twenty-day ATR warmup and the original Unit/N settings', async interval => {
     const input = { ...settings, interval, newHighLookback: '30' };
     const pause = new AbortController();

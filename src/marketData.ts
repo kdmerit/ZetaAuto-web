@@ -131,12 +131,18 @@ export async function instrumentEligibility(instrument: Instrument, signal?: Abo
   return { ...instrument, LONG: long !== null && long <= 0.005, SHORT: short !== null && short <= 0.005 };
 }
 
+/** Exclusive end in Unix seconds: only candles closed by this time may be required. */
+export function completedCandleEnd(interval: CandleInterval, requestedEnd: number): number {
+  const seconds = intervalSeconds(interval);
+  return Math.floor(Math.min(requestedEnd, Date.now() / 1000) / seconds) * seconds;
+}
+
 export function analysisWindow(settings: BacktestSettings): { start: number; end: number } {
   const seconds = intervalSeconds(settings.interval);
   const requestedStart = Date.parse(`${settings.startDate}T${settings.startTime}:00+09:00`) / 1000;
   const requestedEnd = settings.endDate ? Date.parse(`${settings.endDate}T${settings.endTime}:00+09:00`) / 1000 : Date.now() / 1000;
   const start = Math.ceil(requestedStart / seconds) * seconds;
-  const end = Math.floor(Math.min(requestedEnd, Date.now() / 1000) / seconds) * seconds;
+  const end = completedCandleEnd(settings.interval, requestedEnd);
   if (!Number.isFinite(start) || !Number.isFinite(end) || end - start < 10 * seconds || start < Date.now() / 1000 - 1825 * 86_400) {
     throw new Error('최근 5년 이내의 완성봉 10개 이상인 기간을 선택해 주세요.');
   }
@@ -238,14 +244,15 @@ export async function ensureCandles(instrument: Instrument, interval: CandleInte
   const start = Math.max(Math.floor(from / seconds) * seconds, listingBucket, prefix.emptyUntil);
   // Never require a candle that is still forming at the current clock boundary.
   // This is especially important for the 1d MA20 auxiliary series used by NEW_HIGH.
-  const completedEnd = Math.min(end, Math.floor(Date.now() / seconds) * seconds);
+  const completedEnd = completedCandleEnd(interval, end);
+  const completedPrefetchEnd = completedCandleEnd(interval, prefetchEnd);
   if (completedEnd <= start) return [];
   const byTime = new Map((await readCandlePages(instrument.symbol, interval, start, completedEnd)).map(candle => [candle.openTime, candle]));
   for (let cursor = start; cursor < completedEnd; cursor += seconds) {
     signal?.throwIfAborted();
     if (byTime.has(cursor)) continue;
     let nextKnown = cursor + seconds;
-    while (nextKnown < Math.min(prefetchEnd, completedEnd, cursor + 1000 * seconds) && !byTime.has(nextKnown)) nextKnown += seconds;
+    while (nextKnown < Math.min(completedPrefetchEnd, cursor + 1000 * seconds) && !byTime.has(nextKnown)) nextKnown += seconds;
     const fetched = await download(instrument.symbol, interval, cursor, nextKnown, signal);
     await cacheCandles(instrument.symbol, interval, fetched);
     fetched.forEach(candle => byTime.set(candle.openTime, candle));
@@ -278,5 +285,5 @@ export async function ensureCandles(instrument: Instrument, interval: CandleInte
     }
     if (!byTime.has(cursor)) throw new MissingCandleError(instrument.symbol, interval, cursor);
   }
-  return [...byTime.values()].filter(candle => candle.openTime >= start && candle.openTime < completedEnd).sort((a, b) => a.openTime - b.openTime);
+  return [...byTime.values()].filter(candle => candle.openTime >= start && candle.closeTime <= completedEnd).sort((a, b) => a.openTime - b.openTime);
 }

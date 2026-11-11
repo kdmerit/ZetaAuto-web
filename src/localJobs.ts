@@ -2,7 +2,7 @@
 import { intervalSeconds } from './api';
 import { deletePrefix, deleteValue, lease, maintainCache, readValue, writeValue } from './database';
 import { envelopeEntryMayTouch, prepareSymbolBlock, type PreparedSymbol, type WaveState } from './engine';
-import { analysisWindow, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument, type Instrument } from './marketData';
+import { analysisWindow, completedCandleEnd, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
 import { currentEnvelopeSettings, currentPullbackSettings, envelopeModelVersion } from './envelope';
@@ -253,7 +253,7 @@ async function executeWithLease(
         try {
           let candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
           const dailySeconds = intervalSeconds('1d');
-          const completedDailyEnd = Math.min(blockEnd, Math.floor(Date.now() / dailySeconds) * dailySeconds);
+          const completedDailyEnd = completedCandleEnd('1d', blockEnd);
           const dailyCandles = job.strategy === 'NEW_HIGH' && job.settings.newHighDailyMa20Enabled === true
             ? await ensureCandles(instrument, '1d', job.blockStart - 25 * dailySeconds, completedDailyEnd, Math.min(job.end, completedDailyEnd), signal)
             : undefined;

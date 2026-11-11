@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cacheCandles, openCacheDatabase } from './database';
 import { ensureCandles, orderBookSlippage, refreshMismatchedLowerTimeframes } from './marketData';
-import type { Candle } from './types';
+import type { Candle, CandleInterval } from './types';
 
 const origin = Date.UTC(2026, 0, 1) / 1000;
 const row = (index: number): Candle => ({ openTime: origin + index * 3600, closeTime: origin + (index + 1) * 3600, open: 100, high: 102, low: 99, close: 101, volume: 10 });
@@ -14,9 +14,45 @@ beforeEach(async () => {
     transaction.oncomplete = () => resolve();
   });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('public market data and reuse', () => {
+  it.each<[CandleInterval, number, string]>([
+    ['1m', 60, '2026-11-11T06:29:00Z'],
+    ['15m', 900, '2026-11-11T06:15:00Z'],
+    ['1h', 3600, '2026-11-11T06:00:00Z'],
+    ['4h', 14400, '2026-11-11T04:00:00Z'],
+    ['1d', 86400, '2026-11-11T00:00:00Z'],
+  ])('uses only completed %s candles when the requested end is in the future', async (interval, seconds, boundary) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-11T06:29:00Z'));
+    const end = Date.parse(boundary) / 1000;
+    const previous = { ...row(0), openTime: end - seconds, closeTime: end };
+    await cacheCandles('BTCUSDT', interval, [previous]);
+    const fetcher = vi.fn(() => { throw new Error('A forming candle must not be requested'); });
+    vi.stubGlobal('fetch', fetcher);
+    expect(await ensureCandles({ symbol: 'BTCUSDT', launchAt: origin }, interval, previous.openTime, Date.now() / 1000 + 86400)).toEqual([previous]);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('excludes the partial last daily candle at a historical intraday end and at today\'s 09:00 KST', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-11T06:29:00Z'));
+    const today = Date.parse('2026-11-11T00:00:00Z') / 1000;
+    const yesterday = { ...row(0), openTime: today - 86400, closeTime: today };
+    await cacheCandles('BTCUSDT', '1d', [yesterday]);
+    const fetcher = vi.fn(() => { throw new Error('No complete candle is missing'); });
+    vi.stubGlobal('fetch', fetcher);
+    const instrument = { symbol: 'BTCUSDT', launchAt: origin };
+    expect(await ensureCandles(instrument, '1d', yesterday.openTime, today + 6 * 3600)).toEqual([yesterday]);
+    expect(await ensureCandles(instrument, '1d', today, today + 6 * 3600)).toEqual([]);
+    // This daily candle is now complete, but had not closed at the requested historical end.
+    expect(await ensureCandles(instrument, '1d', yesterday.openTime, yesterday.openTime + 6 * 3600)).toEqual([]);
+    vi.setSystemTime(new Date('2026-11-11T00:00:00Z'));
+    expect(await ensureCandles(instrument, '1d', yesterday.openTime, today)).toEqual([yesterday]);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it('requests only missing 1-minute candles and never confuses them with cached hourly bars', async () => {
     const minutes = Array.from({ length: 60 }, (_, i) => ({ ...row(0), openTime: origin + i * 60, closeTime: origin + (i + 1) * 60 }));
     await cacheCandles('MINUTEUSDT', '1h', [row(0)]);
