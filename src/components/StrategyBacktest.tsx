@@ -58,12 +58,12 @@ function dateText(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-export function defaultSettings(): BacktestSettings {
+export function defaultSettings(strategy?: Strategy): BacktestSettings {
   const start = new Date(Date.now() - 90 * 86_400_000);
   return {
     mode: 'SINGLE',
     symbol: 'BTC',
-    interval: '15m',
+    interval: strategy === 'ENVELOPE' ? '1d' : '15m',
     startDate: dateText(start),
     startTime: '00:00',
     endDate: '',
@@ -86,12 +86,13 @@ export function defaultSettings(): BacktestSettings {
     volatilityMa10DistancePercent: '1',
     volatilityMa60Enabled: false,
     volatilityMa60BelowEnabled: false,
-    envelopeDeviationPercent: '0.5',
+    envelopeDeviationPercent: strategy === 'ENVELOPE' ? '3' : '0.5',
+    envelopeStatisticsInterval: strategy === 'ENVELOPE' ? '1d' : undefined,
     envelopeMaPeriod: '20',
     envelopeExitMode: 'OPPOSITE',
     envelopeMoveSlOnCenter: false,
     envelopeEntryMode: 'BAND_TOUCH',
-    envelopeMa20Enabled: false,
+    envelopeMa20Enabled: strategy === 'ENVELOPE',
     envelopeMa20BelowEnabled: false,
     envelopeCloseOnConfirmedBreakout: false,
     newHighLookback: '20',
@@ -226,7 +227,7 @@ function restoredServerJob(entry: BacktestHistoryEntry): ServerJob {
 }
 
 export function StrategyBacktest({ strategy, context, embedded = false, forcedMode, preferredSettings }: StrategyBacktestProps) {
-  const defaults = useMemo(() => strategySettings(strategy, strategy === 'PULLBACK' ? { ...defaultSettings(), envelopeDeviationPercent: undefined } : defaultSettings()), [strategy]);
+  const defaults = useMemo(() => strategySettings(strategy, strategy === 'PULLBACK' ? { ...defaultSettings(), envelopeDeviationPercent: undefined } : defaultSettings(strategy)), [strategy]);
   const [settings, setSettings] = useState<BacktestSettings>(() => {
     const value = { ...(preferredSettings ?? loadSettings(strategy, defaults)), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
     return strategySettings(strategy, value);
@@ -853,11 +854,12 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             </>
           ) : strategy === 'ENVELOPE' ? (
             <>
-              <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} belowEnabled={settings.envelopeMa20BelowEnabled === true} onBelowChange={enabled => update('envelopeMa20BelowEnabled', enabled)} />
+              <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} belowEnabled={settings.envelopeMa20BelowEnabled === true} onBelowChange={enabled => update('envelopeMa20BelowEnabled', enabled)}>
+                <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnConfirmedBreakout === true} onChange={event => update('envelopeCloseOnConfirmedBreakout', event.target.checked)} /><span>종가 &gt; 엔벨로프 상단 확정 시 청산 (롱) / 종가 &lt; 엔벨로프 하단 확정 시 청산 (숏)</span></label>
+              </EnvelopeMa20Control>
               <h2>엔벨로프 중심선 봉수</h2>
               <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
-              <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '0.5'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용</small></label>
-              <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnConfirmedBreakout === true} onChange={event => update('envelopeCloseOnConfirmedBreakout', event.target.checked)} /><span>종가 &gt; 엔벨로프 상단 확정 시 청산 (롱) / 종가 &lt; 엔벨로프 하단 확정 시 청산 (숏)</span></label>
+              <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '3'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용</small></label>
               <p className="notice small">롱: 하단 매수 → 상단 청산 · 숏: 상단 매도 → 하단 청산 · SL은 체결가에서 입력 이격률만큼 설정. 체크하면 밴드 터치가 아니라 선택 주기 캔들 종가로 돌파가 확정될 때 청산합니다.</p>
             </>
           ) : strategy === 'VOLATILITY' ? (
