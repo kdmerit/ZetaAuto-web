@@ -25,11 +25,13 @@ describe('envelope input defaults and arrangement', () => {
     const html = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
     expect(html).toMatch(/class="selected"[^>]*>1D<|aria-pressed="true"[^>]*>1D</);
     const rows = options(html);
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(3);
     expect(rows[0]).toContain('MA20 위에서만 매수 (롱)');
     expect(rows[0]).toContain('checked=""');
     expect(rows[1]).toContain('중심선 터치후 이탈시 매도');
     expect(rows[1]).not.toContain('checked=""');
+    expect(rows[2]).toContain('롱/숏 비율 50%');
+    expect(rows[2]).not.toContain('checked=""');
     expect(html).not.toContain('MA20 아래에서만 매수 (롱)');
     expect(html).not.toContain('종가 &gt; 엔벨로프 상단 확정 시 청산');
   });
@@ -47,10 +49,12 @@ describe('envelope input defaults and arrangement', () => {
     expect(above).toBeGreaterThanOrEqual(0);
     const centerReturn = html.indexOf('중심선 터치후 이탈시 매도');
     expect(centerReturn).toBeGreaterThan(above);
+    const ratio = html.indexOf('롱/숏 비율 50%');
+    expect(ratio).toBeGreaterThan(centerReturn);
     expect(html).not.toContain('MA20 아래에서만 매수 (롱)');
     expect(html).not.toContain('종가 &gt; 엔벨로프 상단 확정 시 청산 (롱)');
     expect(html).not.toContain('첫 번째는 롱 저가');
-    expect(centerReturn).toBeLessThan(html.indexOf('<h2>엔벨로프 중심선 봉수</h2>'));
+    expect(ratio).toBeLessThan(html.indexOf('<h2>엔벨로프 중심선 봉수</h2>'));
   });
 
   it('retains explicit saved intervals, deviations and unchecked filters', () => {
@@ -62,13 +66,15 @@ describe('envelope input defaults and arrangement', () => {
   });
 
   it('restores the saved center-return exit in ordinary analysis and statistics', () => {
-    saveSettings('ENVELOPE', { ...defaultSettings('ENVELOPE'), envelopeCloseOnCenterReturn: true });
+    saveSettings('ENVELOPE', { ...defaultSettings('ENVELOPE'), envelopeCloseOnCenterReturn: true, envelopeSideRatio50Enabled: true });
     const ordinary = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
     expect(options(ordinary)[1]).toContain('checked=""');
+    expect(options(ordinary)[2]).toContain('checked=""');
     values.set('zetaauto.web.envelope.view', 'SINGLE_STATS');
-    values.set('zetaauto.web.envelope.SINGLE_STATS.settings', JSON.stringify({ envelopeCloseOnCenterReturn: true }));
+    values.set('zetaauto.web.envelope.SINGLE_STATS.settings', JSON.stringify({ envelopeCloseOnCenterReturn: true, envelopeSideRatio50Enabled: true }));
     const statistics = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
     expect(options(statistics)[1]).toContain('checked=""');
+    expect(options(statistics)[2]).toContain('checked=""');
   });
 
   it('keeps saved statistics preferences instead of replacing them with new defaults', () => {

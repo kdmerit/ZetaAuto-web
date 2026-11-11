@@ -15,6 +15,7 @@ import { ProgressBar } from './ProgressBar';
 import { EnvelopeResultControls } from './EnvelopeResultControls';
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
+import { EnvelopeSideRatioControl } from './EnvelopeSideRatioControl';
 
 type View = 'SINGLE' | 'ALL' | 'SINGLE_STATS' | 'ALL_STATS';
 const views: { id: View; label: string }[] = [{ id: 'SINGLE', label: '개별분석' }, { id: 'ALL', label: '전체분석' }, { id: 'SINGLE_STATS', label: '개별통계' }, { id: 'ALL_STATS', label: '전체통계' }];
@@ -42,6 +43,7 @@ function SearchFields({ settings, onChange, disabled, single }: { settings: Back
     <p className="notice small">롱: 엔벨로프 하단 매수 → 상단 청산 · 숏: 상단 매도 → 하단 청산 · SL은 체결가에서 입력 이격률만큼 설정</p>
     <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
     <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
+    <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
     <h2>분석 기간 (한국시간)</h2><div className="field-grid two">
       <label className="field-label">시작일<input inputMode="numeric" value={settings.startDate} onChange={event => update('startDate', formatDateInput(event.target.value))} /></label>
       <label className="field-label">시작시간<input inputMode="numeric" value={settings.startTime} onChange={event => update('startTime', formatTimeInput(event.target.value))} /></label>
@@ -71,7 +73,8 @@ export function VirtualEvaluationFields({ settings, onChange, disabled }: { sett
     </div><p className="notice small">전체통계에서 선정된 1h·4h·1d 주기로 검증합니다. 롱은 하단 매수·상단 청산, 숏은 상단 매도·하단 청산하며 SL은 체결가에서 입력 이격률만큼 설정합니다.</p>
     <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
     <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
-    <p className="muted small">검증 기간·자금·배율·MA20 필터·중심선 터치 후 이탈 청산은 통계와 별도로 저장합니다.</p>
+    <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
+    <p className="muted small">검증 기간·자금·배율·MA20 필터·청산 옵션·롱/숏 비율은 통계와 별도로 저장합니다.</p>
   </fieldset></section>;
 }
 

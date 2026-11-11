@@ -63,6 +63,7 @@ export interface BacktestSettings {
   envelopeMa20BelowEnabled?: boolean;
   envelopeCloseOnConfirmedBreakout?: boolean;
   envelopeCloseOnCenterReturn?: boolean;
+  envelopeSideRatio50Enabled?: boolean;
   envelopeDailyTrend?: boolean;
   envelopeResultOptions?: EnvelopeResultOptions;
   newHighLookback?: string;
