@@ -57,6 +57,12 @@ function formatPrice(value: number): string {
   return Number.isFinite(value) ? value.toLocaleString('ko-KR', { maximumSignificantDigits: 10 }) : '—';
 }
 
+function formatBandPrice(value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  const truncated = Math.trunc(value * 10_000) / 10_000;
+  return truncated.toLocaleString('ko-KR', { maximumFractionDigits: 4 });
+}
+
 function formatDate(value: number | string): string {
   const seconds = chartTimestamp(value);
   if (seconds === null) return '—';
@@ -530,6 +536,15 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
   // Keep the readout's space while hidden so tapping never resizes the plot.
   const infoIndex = selectedIndex >= 0 ? selectedIndex : entryCandleIndex(chart) ?? 0;
   const infoCandle = chart.candles[infoIndex] ?? null;
+  const infoEnvelopeBand = infoCandle
+    ? chart.envelope?.bands.find(band => band.openTime === infoCandle.openTime) ?? null
+    : null;
+  const infoAtrBand = infoCandle
+    ? chart.atrEnvelope?.bands.find(band => band.openTime === infoCandle.openTime) ?? null
+    : null;
+  const infoBollingerBand = infoCandle
+    ? chart.bollinger?.bands.find(band => band.openTime === infoCandle.openTime) ?? null
+    : null;
   const selectedReadings = !infoCandle
     ? []
     : maDefinitions.filter((definition) => visibleMas[definition.key]).map((definition) => {
@@ -596,6 +611,9 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
               {infoCandle.marketMetrics ? <span className="market-true-range positive" title={`ATR=직전 20일 TR 단순평균(선택 완성봉 포함) · 비율=ATR/선택 캔들 종가×100 · ${infoCandle.marketMetrics.atrSamples ?? 0}/${infoCandle.marketMetrics.expectedAtrSamples ?? 0}봉${(infoCandle.marketMetrics.atrSamples ?? 0) < (infoCandle.marketMetrics.expectedAtrSamples ?? 0) ? ' · 20일 미만: 확보된 봉 평균' : ''}`}>ATR {infoCandle.marketMetrics.averageTrueRange20d == null ? '—' : formatPrice(infoCandle.marketMetrics.averageTrueRange20d)} ({infoCandle.marketMetrics.atrPercent == null ? '—' : `${infoCandle.marketMetrics.atrPercent.toFixed(2)}%`})</span> : null}
               <span>시가 {formatPrice(infoCandle.open)} · 고가 {formatPrice(infoCandle.high)}</span>
               <span>저가 {formatPrice(infoCandle.low)} · 종가 {formatPrice(infoCandle.close)}</span>
+              {infoEnvelopeBand ? <span className="candle-envelope-prices">엔벨 상단 {formatBandPrice(infoEnvelopeBand.upper)} · 하단 {formatBandPrice(infoEnvelopeBand.lower)}</span> : null}
+              {infoAtrBand ? <span className="candle-atr-prices">ATR 엔벨 상단 {formatBandPrice(infoAtrBand.upper)} · 하단 {formatBandPrice(infoAtrBand.lower)}</span> : null}
+              {infoBollingerBand ? <span className="candle-bollinger-prices">볼린저 상단 {formatBandPrice(infoBollingerBand.upper)} · 하단 {formatBandPrice(infoBollingerBand.lower)}</span> : null}
               <div className="candle-change-row"><span>몸통 <em className={infoCandle.close >= infoCandle.open ? 'positive' : 'negative'}>{signedPercent(bodyPercent(infoCandle))}</em></span><span>최대 {signedPercent(rangePercent(infoCandle))}</span></div>
               <span className={chart.market ? 'market-volume' : undefined} title={infoCandle.marketMetrics ? `현재 캔들 제외 · 직전 120일 ${infoCandle.marketMetrics.volumeSamples.toLocaleString()}/${infoCandle.marketMetrics.expectedVolumeSamples.toLocaleString()}봉${infoCandle.marketMetrics.volumeSamples < infoCandle.marketMetrics.expectedVolumeSamples ? ' · 120일 미만: 확보된 실제 봉 평균' : ''}` : undefined}>거래량 {formatPrice(infoCandle.volume)}{chart.market && infoCandle.marketMetrics ? <> / {infoCandle.marketMetrics.averageVolume120d === null ? '—' : formatPrice(infoCandle.marketMetrics.averageVolume120d)} ({infoCandle.marketMetrics.volumePercent === null ? '—' : `${infoCandle.marketMetrics.volumePercent.toFixed(1)}%`})</> : null}</span>
               <div className="candle-ma-grid">

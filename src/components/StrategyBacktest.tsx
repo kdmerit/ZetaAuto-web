@@ -54,17 +54,20 @@ interface StrategyBacktestProps {
   preferredSettings?: BacktestSettings;
 }
 
-function dateText(date: Date): string {
-  return date.toISOString().slice(0, 10);
+/** Previous calendar month in Korean time, clamped to that month's last day. */
+function defaultStartDate(): string {
+  const today = new Date(Date.now() + 9 * 3_600_000);
+  const previousMonth = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
+  previousMonth.setUTCDate(Math.min(today.getUTCDate(), previousMonth.getUTCDate()));
+  return previousMonth.toISOString().slice(0, 10);
 }
 
 export function defaultSettings(strategy?: Strategy): BacktestSettings {
-  const start = new Date(Date.now() - 90 * 86_400_000);
   return {
     mode: 'SINGLE',
     symbol: 'BTC',
     interval: strategy === 'ENVELOPE' ? '1d' : '15m',
-    startDate: dateText(start),
+    startDate: defaultStartDate(),
     startTime: '00:00',
     endDate: '',
     endTime: '00:00',
