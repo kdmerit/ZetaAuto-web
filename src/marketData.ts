@@ -8,7 +8,7 @@ export interface Instrument { symbol: string; launchAt: number }
 export interface EligibleInstrument extends Instrument { LONG: boolean; SHORT: boolean }
 export class MissingCandleError extends Error {
   constructor(public readonly symbol: string, public readonly interval: CandleInterval, public readonly openTime: number) {
-    super(`${symbol}의 ${new Date(openTime * 1000).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} 캔들이 누락되었습니다. 다시 이어가 주세요.`);
+    super(`${symbol}의 ${interval} ${new Date(openTime * 1000).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} 캔들이 누락되었습니다. 다시 이어가 주세요.`);
     this.name = 'MissingCandleError';
   }
 }
@@ -162,6 +162,32 @@ async function download(symbol: string, interval: CandleInterval, start: number,
   return rows.sort((a, b) => a.openTime - b.openTime);
 }
 
+/** Rebuild one missing parent bar from a complete lower-timeframe response. */
+async function recoverFromLowerTimeframe(symbol: string, interval: CandleInterval, openTime: number, signal?: AbortSignal): Promise<{ parent: Candle; lower: Candle[] } | null> {
+  const sourceInterval: CandleInterval | null = interval === '1m' ? null : interval === '15m' ? '1m' : '15m';
+  if (!sourceInterval) return null;
+  const parentSeconds = intervalSeconds(interval);
+  const sourceSeconds = intervalSeconds(sourceInterval);
+  if (parentSeconds % sourceSeconds !== 0) return null;
+  const lower = await download(symbol, sourceInterval, openTime, openTime + parentSeconds, signal);
+  const expected = parentSeconds / sourceSeconds;
+  if (lower.length !== expected || lower.some((candle, index) => candle.openTime !== openTime + index * sourceSeconds)) return null;
+  const first = lower[0]!;
+  const last = lower.at(-1)!;
+  return {
+    lower,
+    parent: {
+      openTime,
+      closeTime: openTime + parentSeconds,
+      open: first.open,
+      high: Math.max(...lower.map(candle => candle.high)),
+      low: Math.min(...lower.map(candle => candle.low)),
+      close: last.close,
+      volume: lower.reduce((sum, candle) => sum + candle.volume, 0),
+    },
+  };
+}
+
 /** Force-refresh only an exact candle range, replacing any cached rows in that range. */
 export async function refreshCandleRange(instrument: Instrument, interval: CandleInterval, from: number, end: number, signal?: AbortSignal): Promise<Candle[]> {
   const seconds = intervalSeconds(interval);
@@ -240,6 +266,15 @@ export async function ensureCandles(instrument: Instrument, interval: CandleInte
       const retried = await download(instrument.symbol, interval, cursor, cursor + seconds, signal);
       await cacheCandles(instrument.symbol, interval, retried);
       retried.forEach(candle => byTime.set(candle.openTime, candle));
+    }
+    if (!byTime.has(cursor)) {
+      const recovered = await recoverFromLowerTimeframe(instrument.symbol, interval, cursor, signal);
+      if (recovered) {
+        const lowerInterval: CandleInterval = interval === '15m' ? '1m' : '15m';
+        await cacheCandles(instrument.symbol, lowerInterval, recovered.lower);
+        await cacheCandles(instrument.symbol, interval, [recovered.parent]);
+        byTime.set(cursor, recovered.parent);
+      }
     }
     if (!byTime.has(cursor)) throw new MissingCandleError(instrument.symbol, interval, cursor);
   }
