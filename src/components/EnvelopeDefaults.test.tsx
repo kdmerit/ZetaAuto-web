@@ -25,11 +25,11 @@ describe('envelope input defaults and arrangement', () => {
     const html = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
     expect(html).toMatch(/class="selected"[^>]*>1D<|aria-pressed="true"[^>]*>1D</);
     const rows = options(html);
+    expect(rows).toHaveLength(1);
     expect(rows[0]).toContain('MA20 위에서만 매수 (롱)');
     expect(rows[0]).toContain('checked=""');
-    expect(rows[1]).not.toContain('checked=""');
-    expect(rows[2]).toContain('종가 &gt; 엔벨로프 상단 확정 시 청산');
-    expect(rows[2]).not.toContain('checked=""');
+    expect(html).not.toContain('MA20 아래에서만 매수 (롱)');
+    expect(html).not.toContain('종가 &gt; 엔벨로프 상단 확정 시 청산');
   });
 
   it('uses 3% without changing the defaults of other strategies or the center SMA period', () => {
@@ -39,15 +39,14 @@ describe('envelope input defaults and arrangement', () => {
     expect(html).toMatch(/엔벨로프 이격 \(%\)[\s\S]*?<input[^>]*value="3"/);
   });
 
-  it('places all three checkboxes together before the SMA and deviation inputs', () => {
+  it('keeps only the above-MA20 filter before the SMA and deviation inputs', () => {
     const html = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
     const above = html.indexOf('MA20 위에서만 매수 (롱)');
-    const below = html.indexOf('MA20 아래에서만 매수 (롱)');
-    const confirm = html.indexOf('종가 &gt; 엔벨로프 상단 확정 시 청산 (롱)');
-    expect(above).toBeLessThan(below);
-    expect(below).toBeLessThan(confirm);
-    expect(confirm).toBeLessThan(html.indexOf('첫 번째는 롱 저가'));
-    expect(confirm).toBeLessThan(html.indexOf('<h2>엔벨로프 중심선 봉수</h2>'));
+    expect(above).toBeGreaterThanOrEqual(0);
+    expect(html).not.toContain('MA20 아래에서만 매수 (롱)');
+    expect(html).not.toContain('종가 &gt; 엔벨로프 상단 확정 시 청산 (롱)');
+    expect(html).not.toContain('첫 번째는 롱 저가');
+    expect(above).toBeLessThan(html.indexOf('<h2>엔벨로프 중심선 봉수</h2>'));
   });
 
   it('retains explicit saved intervals, deviations and unchecked filters', () => {
@@ -56,7 +55,6 @@ describe('envelope input defaults and arrangement', () => {
     expect(html).toContain('중심선 · 매매 기준 4H');
     expect(html).toMatch(/엔벨로프 이격 \(%\)[\s\S]*?<input[^>]*value="7.5"/);
     expect(options(html)[0]).not.toContain('checked=""');
-    expect(options(html)[2]).toContain('checked=""');
   });
 
   it('keeps saved statistics preferences instead of replacing them with new defaults', () => {
@@ -65,6 +63,5 @@ describe('envelope input defaults and arrangement', () => {
     const html = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
     expect(html).toMatch(/aria-pressed="true" class="selected">4H</);
     expect(options(html)[0]).not.toContain('checked=""');
-    expect(options(html)[2]).toContain('checked=""');
   });
 });

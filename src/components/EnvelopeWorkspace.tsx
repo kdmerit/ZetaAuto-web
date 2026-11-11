@@ -39,9 +39,7 @@ function SearchFields({ settings, onChange, disabled, single }: { settings: Back
     <p className="muted small">롱 + 숏은 방향별로 독립 분석해 필터·정렬 기준의 최적 세팅을 각각 찾습니다.</p>
     <h2>통계 캔들 주기</h2><div className="segmented interval-selector">{statisticsIntervals.map(interval => <button key={interval} type="button" aria-pressed={settings.envelopeStatisticsInterval === interval} className={settings.envelopeStatisticsInterval === interval ? 'selected' : ''} onClick={() => update('envelopeStatisticsInterval', interval)}>{interval.toUpperCase()}</button>)}</div>
     <p className="notice small">롱: 엔벨로프 하단 매수 → 상단 청산 · 숏: 상단 매도 → 하단 청산 · SL은 체결가에서 입력 이격률만큼 설정</p>
-    <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} belowEnabled={settings.envelopeMa20BelowEnabled === true} onBelowChange={enabled => update('envelopeMa20BelowEnabled', enabled)}>
-      <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnConfirmedBreakout === true} onChange={event => update('envelopeCloseOnConfirmedBreakout', event.target.checked)} /><span>종가 &gt; 엔벨로프 상단 확정 시 청산 (롱) / 종가 &lt; 엔벨로프 하단 확정 시 청산 (숏)</span></label>
-    </EnvelopeMa20Control>
+    <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
     <h2>분석 기간 (한국시간)</h2><div className="field-grid two">
       <label className="field-label">시작일<input inputMode="numeric" value={settings.startDate} onChange={event => update('startDate', formatDateInput(event.target.value))} /></label>
       <label className="field-label">시작시간<input inputMode="numeric" value={settings.startTime} onChange={event => update('startTime', formatTimeInput(event.target.value))} /></label>
@@ -69,9 +67,7 @@ export function VirtualEvaluationFields({ settings, onChange, disabled }: { sett
       <label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /></label>
       <label className="field-label">레버리지<input inputMode="decimal" value={settings.leverage} onChange={event => update('leverage', event.target.value)} /><small>1~100배 · 모든 종목에 동일 적용</small></label>
     </div><p className="notice small">전체통계에서 선정된 1h·4h·1d 주기로 검증합니다. 롱은 하단 매수·상단 청산, 숏은 상단 매도·하단 청산하며 SL은 체결가에서 입력 이격률만큼 설정합니다.</p>
-    <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} belowEnabled={settings.envelopeMa20BelowEnabled === true} onBelowChange={enabled => update('envelopeMa20BelowEnabled', enabled)}>
-      <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnConfirmedBreakout === true} onChange={event => update('envelopeCloseOnConfirmedBreakout', event.target.checked)} /><span>종가 &gt; 엔벨로프 상단 확정 시 청산 (롱) / 종가 &lt; 엔벨로프 하단 확정 시 청산 (숏)</span></label>
-    </EnvelopeMa20Control><p className="muted small">검증 기간·자금·배율·MA20 필터는 통계와 별도로 저장합니다.</p>
+    <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} /><p className="muted small">검증 기간·자금·배율·MA20 필터는 통계와 별도로 저장합니다.</p>
   </fieldset></section>;
 }
 

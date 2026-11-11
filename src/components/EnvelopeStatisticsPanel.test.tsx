@@ -101,8 +101,8 @@ describe('envelope fixed-leverage statistics status', () => {
     expect(empty).toContain('필터를 충족한 세팅이 없습니다'); expect(empty).not.toContain('SMA120');
   });
   it('renders the whole-candle MA20 checkbox consistently in enabled and disabled states', () => {
-    const on = renderToStaticMarkup(<EnvelopeMa20Control enabled onChange={() => {}} belowEnabled={false} onBelowChange={() => {}} />);
-    const off = renderToStaticMarkup(<EnvelopeMa20Control enabled={false} onChange={() => {}} belowEnabled={false} onBelowChange={() => {}} />);
-    expect(on).toContain('MA20 위에서만 매수'); expect(on).toContain('MA20 아래에서만 매수'); expect(on).toContain('checked'); expect(off).not.toContain('checked');
+    const on = renderToStaticMarkup(<EnvelopeMa20Control enabled onChange={() => {}} />);
+    const off = renderToStaticMarkup(<EnvelopeMa20Control enabled={false} onChange={() => {}} />);
+    expect(on).toContain('MA20 위에서만 매수'); expect(on).not.toContain('MA20 아래에서만 매수'); expect(on).toContain('checked'); expect(off).not.toContain('checked');
   });
 });

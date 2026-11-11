@@ -37,18 +37,15 @@ export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSet
   return { ...current, interval, envelopeStatisticsInterval: statisticsInterval,
     envelopeMaPeriod: envelopePeriods.includes(Number(settings.envelopeMaPeriod)) ? settings.envelopeMaPeriod : '20',
     envelopeMa20Enabled: settings.envelopeMa20Enabled === true,
-    envelopeMa20BelowEnabled: settings.envelopeMa20BelowEnabled === true,
-    envelopeCloseOnConfirmedBreakout: settings.envelopeCloseOnConfirmedBreakout === true,
+    // Retain these legacy fields for archived results, but never enable the
+    // removed controls for a new envelope analysis.
+    envelopeMa20BelowEnabled: false,
+    envelopeCloseOnConfirmedBreakout: false,
     envelopeEntryMode: 'BAND_TOUCH', envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: false, envelopeRisk: undefined };
 }
 
 export function envelopeMa20FilterLabel(settings: Pick<BacktestSettings, 'envelopeMa20Enabled' | 'envelopeMa20BelowEnabled'>): string {
-  const above = settings.envelopeMa20Enabled === true;
-  const below = settings.envelopeMa20BelowEnabled === true;
-  if (above && below) return '두 조건(충돌)';
-  if (above) return '위(롱)·아래(숏)';
-  if (below) return '아래(롱)·위(숏)';
-  return '사용 안 함';
+  return settings.envelopeMa20Enabled === true ? '위(롱)·아래(숏)' : '사용 안 함';
 }
 
 /** MA20 of the last closed daily candle versus five daily candles earlier, never the live daily bar. */
