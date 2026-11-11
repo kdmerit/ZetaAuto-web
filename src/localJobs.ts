@@ -252,8 +252,10 @@ async function executeWithLease(
         const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings) : 200 * seconds;
         try {
           let candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
+          const dailySeconds = intervalSeconds('1d');
+          const completedDailyEnd = Math.min(blockEnd, Math.floor(Date.now() / dailySeconds) * dailySeconds);
           const dailyCandles = job.strategy === 'NEW_HIGH' && job.settings.newHighDailyMa20Enabled === true
-            ? await ensureCandles(instrument, '1d', job.blockStart - 25 * intervalSeconds('1d'), blockEnd, job.end, signal)
+            ? await ensureCandles(instrument, '1d', job.blockStart - 25 * dailySeconds, completedDailyEnd, Math.min(job.end, completedDailyEnd), signal)
             : undefined;
           const executionInterval = job.strategy === 'NEW_HIGH' ? newHighExecutionInterval(job.settings.interval)
             : job.strategy === 'REFERENCE' ? '15m' : null;
