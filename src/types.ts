@@ -68,6 +68,7 @@ export interface BacktestSettings {
   newHighSlMultiplier?: string;
   newHighMa60Enabled?: boolean;
   newHighMa10Enabled?: boolean;
+  newHighDailyMa20Enabled?: boolean;
   newHighSizingMode?: 'BET' | 'RISK';
   newHighRiskAmount?: string;
   referenceTpPercent?: string;

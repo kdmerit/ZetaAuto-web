@@ -590,7 +590,7 @@ export function prepareSymbolBlock(
   envelopeIntrabarCandles?: Candle[],
 ): PreparedSymbol {
   if (strategy === 'NEW_HIGH') {
-    const definitions = prepareNewHigh(candles, settings);
+    const definitions = prepareNewHigh(candles, settings, dailyCandles);
     const seconds = intervalSeconds(settings.interval);
     const intrabarGroups = new Map<number, Candle[]>();
     for (const intrabar of newHighIntrabarCandles ?? []) {
@@ -1065,13 +1065,14 @@ export function runBacktest(
   referenceIntrabarCandles?: Candle[],
   volatilityIntrabarCandles?: Candle[],
   envelopeIntrabarCandles?: Candle[],
+  dailyCandles?: Candle[],
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
   if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK' || strategy === 'REFERENCE') {
     const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
     const start = candles[0]!.openTime;
     const end = candles.at(-1)!.closeTime;
-    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles, undefined, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles, envelopeIntrabarCandles);
+    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles, dailyCandles, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles, envelopeIntrabarCandles);
     const state = initialPortfolio(Number(settings.initialCapitalUsdt));
     replayPortfolioBlock(state, [prepared], settings, start, end, intervalSeconds(settings.interval));
     const result = portfolioResult(state, settings);

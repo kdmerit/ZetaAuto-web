@@ -970,9 +970,11 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     const fill = price * (1 + direction * slippage);
     const boundary = side === 'LONG' ? definition.high : definition.low;
     const currentMa60 = ma60(price);
+    const dailyMa20Allowed = side === 'LONG' ? definition.dailyLongAllowed === true : definition.dailyShortAllowed === true;
     if (direction * (ma10(price) - ma20(price)) <= 0
       || settings.newHighMa60Enabled === true && (currentMa60 === null || direction * (price - currentMa60) <= 0)
       || settings.newHighMa10Enabled === true && direction * (price - ma10(price)) >= 0
+      || settings.newHighDailyMa20Enabled === true && !dailyMa20Allowed
       || direction * (fill - boundary) < 0.5 * definition.atr! - tolerance(fill, boundary, definition.atr!)
       || direction * (fill - boundary) > definition.atr! + tolerance(fill, boundary, definition.atr!)) return;
     const stop = fill - direction * slMultiplier * definition.atr!;

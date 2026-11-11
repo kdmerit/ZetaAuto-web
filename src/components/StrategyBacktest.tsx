@@ -102,6 +102,7 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     newHighSlMultiplier: '2',
     newHighMa60Enabled: false,
     newHighMa10Enabled: false,
+    newHighDailyMa20Enabled: false,
     newHighSizingMode: 'BET',
     newHighRiskAmount: '100',
     referenceTpPercent: '80',
@@ -833,10 +834,9 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <label className="field-label">고정 베팅액<input inputMode="decimal" disabled={settings.newHighSizingMode === 'RISK'} value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /><small>고정 베팅액 선택 시 활성화</small></label>
               <label className="field-label">고정 손실액<input type="number" inputMode="decimal" min="0.01" step="0.01" disabled={settings.newHighSizingMode !== 'RISK'} value={settings.newHighRiskAmount ?? '100'} onChange={event => update('newHighRiskAmount', event.target.value)} /><small>고정 손실액 선택 시 활성화 · 초기 SL·수수료·슬리피지 기준 1회 허용 손실</small></label>
             </div>
-            <label className="checkbox-row"><input type="checkbox" checked={settings.newHighMa60Enabled === true} onChange={event => update('newHighMa60Enabled', event.target.checked)} /><span>현재가 &gt; MA60 (롱) / 현재가 &lt; MA60 (숏)일 때만 매수</span></label>
-            <label className="checkbox-row"><input type="checkbox" checked={settings.newHighMa10Enabled === true} onChange={event => update('newHighMa10Enabled', event.target.checked)} /><span>MA10 아래에서 매수 (롱) / MA10 위에서 매수 (숏)</span></label>
+            <label className="checkbox-row"><input type="checkbox" checked={settings.newHighDailyMa20Enabled === true} onChange={event => update('newHighDailyMa20Enabled', event.target.checked)} /><span>1d MA20 위에서만 매수 (롱) / 1d MA20 아래에서만 매수 (숏)</span></label>
             <p className="notice small">조건 충족 시 봉 중간 1회 진입 · 돌파선 +0.5~1.0ATR 범위에서만 매수 · 단계형 트레일링 SL 적용</p>
-            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h·4h·1d 모두 15분봉을 함께 확인해 봉 안의 진입·SL·트레일링 순서를 계산합니다. 종목당 한 번만 진입합니다. 롱은 현재가가 시가보다 높고 숏은 현재가가 시가보다 낮을 때 진입합니다. 진입한 선택 주기 캔들에서는 SL·트레일링 청산을 발동하지 않고 다음 선택 주기 캔들부터 적용합니다. 바로 다음 선택 주기 캔들에서 진입봉 저가(롱)·고가(숏)를 이탈하면 즉시 청산합니다. ATR 단계에 처음 도달한 15분봉에서는 새 트레일링 SL로 청산하지 않고 다음 15분봉부터 적용합니다. +1ATR부터 단계형 트레일링을 청산 시까지 계속 적용합니다. 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
+            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 1h·4h·1d 모두 15분봉을 함께 확인해 봉 안의 진입·SL·트레일링 순서를 계산합니다. 1d MA20 필터를 켜면 선택 주기와 관계없이 진입 시점 전에 확정된 1d 캔들의 전체 범위가 1d MA20 위인 경우에만 롱, 전체 범위가 아래인 경우에만 숏으로 진입합니다. MA20에 닿거나 걸친 캔들은 진입하지 않습니다. 종목당 한 번만 진입합니다. 롱은 현재가가 시가보다 높고 숏은 현재가가 시가보다 낮을 때 진입합니다. 진입한 선택 주기 캔들에서는 SL·트레일링 청산을 발동하지 않고 다음 선택 주기 캔들부터 적용합니다. 바로 다음 선택 주기 캔들에서 진입봉 저가(롱)·고가(숏)를 이탈하면 즉시 청산합니다. ATR 단계에 처음 도달한 15분봉에서는 새 트레일링 SL로 청산하지 않고 다음 15분봉부터 적용합니다. +1ATR부터 단계형 트레일링을 청산 시까지 계속 적용합니다. 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
           </> : strategy === 'REFERENCE' ? (
             <>
               <label className="field-label">TP 비율 (%)<input type="number" inputMode="decimal" min="51" max="200" step="1" value={settings.referenceTpPercent ?? '80'} onChange={event => update('referenceTpPercent', event.target.value)} /><small>51~200 · 기본 80 · SL라인과 기준봉 고가/저가 사이 간격 기준</small></label>

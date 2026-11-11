@@ -21,7 +21,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.68' : strategy === 'ENVELOPE' ? envelopeModelVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
+  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.90' : strategy === 'ENVELOPE' ? envelopeModelVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);
@@ -252,6 +252,9 @@ async function executeWithLease(
         const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings) : 200 * seconds;
         try {
           let candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
+          const dailyCandles = job.strategy === 'NEW_HIGH' && job.settings.newHighDailyMa20Enabled === true
+            ? await ensureCandles(instrument, '1d', job.blockStart - 25 * intervalSeconds('1d'), blockEnd, job.end, signal)
+            : undefined;
           const executionInterval = job.strategy === 'NEW_HIGH' ? newHighExecutionInterval(job.settings.interval)
             : job.strategy === 'REFERENCE' ? '15m' : null;
           const executionCandles = executionInterval
@@ -259,7 +262,7 @@ async function executeWithLease(
             : undefined;
           const newHighIntrabarCandles = job.strategy === 'NEW_HIGH' ? executionCandles : undefined;
           const referenceIntrabarCandles = job.strategy === 'REFERENCE' ? executionCandles : undefined;
-          const prepare = (volatilityIntrabarCandles?: Candle[], envelopeIntrabarCandles?: Candle[]) => prepareSymbolBlock(instrument.symbol, candles, activeJob.settings, activeJob.strategy, activeJob.blockStart, blockEnd, activeJob.waveStates[instrument.symbol], undefined, undefined, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles, envelopeIntrabarCandles);
+          const prepare = (volatilityIntrabarCandles?: Candle[], envelopeIntrabarCandles?: Candle[]) => prepareSymbolBlock(instrument.symbol, candles, activeJob.settings, activeJob.strategy, activeJob.blockStart, blockEnd, activeJob.waveStates[instrument.symbol], undefined, dailyCandles, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles, envelopeIntrabarCandles);
           let prepared = prepare();
           applyInstrumentEligibility(prepared, instrument);
           if (job.strategy === 'VOLATILITY' && job.settings.interval !== '15m') {
