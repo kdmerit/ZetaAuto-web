@@ -164,3 +164,113 @@ describe('envelope band-touch entries and exits', () => {
     expect(state.positions.BTCUSDT).toBeDefined();
   });
 });
+
+describe('envelope center-touch then entry-band return exits', () => {
+  const entry = [99.5, 99.5, 99, 99.5];
+  const center = [99.5, 100, 99.4, 99.8];
+  const returned = [99.8, 99.8, 99, 99.4];
+  const rest = [99.4, 99.6, 99.2, 99.5];
+
+  function simulate(short: boolean, groups: number[][][], enabled = true, interval: '1h' | '4h' | '1d' = '1h') {
+    const seconds = interval === '1d' ? 86400 : interval === '4h' ? 14400 : 3600;
+    const source: Candle[] = groups.flatMap((group, parentIndex) => Array.from({ length: seconds / 900 }, (_, index) => {
+      const lastClose = group.at(-1)![3]!;
+      const values = group[index] ?? [lastClose, lastClose, lastClose, lastClose];
+      const prices = short ? [200 - values[0]!, 200 - values[2]!, 200 - values[1]!, 200 - values[3]!] : values;
+      const openTime = origin + (20 + parentIndex) * seconds + index * 900;
+      return { openTime, closeTime: openTime + 900, open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: 10 };
+    }));
+    const parents = groups.map((_, index) => {
+      const rows = source.slice(index * seconds / 900, (index + 1) * seconds / 900);
+      return { ...rows[0]!, closeTime: rows.at(-1)!.closeTime,
+        high: Math.max(...rows.map(row => row.high)), low: Math.min(...rows.map(row => row.low)), close: rows.at(-1)!.close };
+    });
+    const parameters = { ...settings, interval, side: short ? 'SHORT' as const : 'LONG' as const, envelopeCloseOnCenterReturn: enabled };
+    const all = [...Array.from({ length: 20 }, (_, index) => ({ ...candle(index), openTime: origin + index * seconds, closeTime: origin + (index + 1) * seconds })), ...parents];
+    const start = parents[0]!.openTime; const end = parents.at(-1)!.closeTime;
+    const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, source);
+    const state = initialPortfolio(1000);
+    replayPortfolioBlock(state, [document], parameters, start, end, seconds);
+    return { state, document, parameters, start, end };
+  }
+
+  it.each([false, true])('closes on the third 15m candle after entry and center touch, short=%s', short => {
+    const { state, start } = simulate(short, [[entry, center, returned, rest]]);
+    expect(state.entries).toBe(1);
+    expect(state.exitReasons).toEqual({ ENVELOPE_CENTER_RETURN: 1 });
+    const trade = state.trades[0]!;
+    expect(trade.exitAt).toBe(start + 1800);
+    expect(trade.exitPrice).toBeCloseTo(short ? 101 * 1.0002 : 99 * .9998, 10);
+    expect(trade.signal.envelopeCloseOnCenterReturn).toBe(true);
+  });
+
+  it.each([false, true])('does not use a band return that preceded the center touch, short=%s', short => {
+    const { state } = simulate(short, [[entry, [99.5, 99.7, 99, 99.4], [99.4, 100, 99.4, 99.8], [99.8, 99.9, 99.5, 99.8]]]);
+    expect(state.closed).toBe(0);
+    expect(state.positions.BTCUSDT!.envelopeCenterTouched).toBe(true);
+  });
+
+  it.each([
+    ['4h', false], ['4h', true], ['1d', false], ['1d', true],
+  ] as const)('distinguishes identical %s parent OHLC by the 15m event order, short=%s', (interval, short) => {
+    const afterCenter = simulate(short, [[entry, center, returned, rest]], true, interval);
+    const beforeCenter = simulate(short, [[entry, [99.5, 99.8, 99, 99.8], [99.8, 100, 99.4, 99.8], [99.8, 99.9, 99.5, 99.5]]], true, interval);
+    expect(afterCenter.document.bars[0]!.candle).toEqual(beforeCenter.document.bars[0]!.candle);
+    expect(afterCenter.document.bars[0]!.envelopeIntrabarCandles).toHaveLength(interval === '1d' ? 96 : 16);
+    expect(afterCenter.state.exitReasons).toEqual({ ENVELOPE_CENTER_RETURN: 1 });
+    expect(afterCenter.state.trades[0]!.exitAt).toBe(afterCenter.start + 1800);
+    expect(beforeCenter.state.closed).toBe(0);
+    expect(beforeCenter.state.positions.BTCUSDT!.envelopeCenterTouched).toBe(true);
+  });
+
+  it.each([false, true])('uses the conservative path when both levels occur within the same 15m candle, short=%s', short => {
+    const { state } = simulate(short, [[entry, [99.5, 100, 99, 99.5], [99.5, 99.5, 99.5, 99.5], [99.5, 99.5, 99.5, 99.5]]]);
+    expect(state.exitReasons).toEqual({ ENVELOPE_CENTER_RETURN: 1 });
+  });
+
+  it.each([false, true])('ignores a center touch from before the entry, short=%s', short => {
+    const { state } = simulate(short, [[[100, 100, 99.5, 99.5], entry, [99.5, 99.7, 99, 99.4], [99.4, 99.4, 99.4, 99.4]]]);
+    expect(state.entries).toBe(1);
+    expect(state.closed).toBe(0);
+    expect(state.positions.BTCUSDT!.envelopeCenterTouched).toBe(false);
+  });
+
+  it.each([false, true])('keeps the original holding behavior when the option is off, short=%s', short => {
+    const { state } = simulate(short, [[entry, center, returned, rest]], false);
+    expect(state.closed).toBe(0);
+    expect(state.positions.BTCUSDT!.envelopeCenterTouched).toBeUndefined();
+  });
+
+  it.each([false, true])('preserves the touch over a checkpoint and returns to the updated band, short=%s', short => {
+    const { state: whole, document, parameters, start, end } = simulate(short, [
+      [entry, center, [99.8, 100.4, 99.8, 100.4], [100.4, 100.4, 100.4, 100.4]],
+      [[100.4, 100.5, 99.05, 99.1], [99.1, 99.1, 99.01, 99.1], [99.1, 99.1, 99.1, 99.1], [99.1, 99.1, 99.1, 99.1]],
+    ]);
+    const state = initialPortfolio(1000);
+    const boundary = start + 3600;
+    replayPortfolioBlock(state, [{ ...document, bars: document.bars.slice(0, 1) }], parameters, start, boundary, 3600);
+    expect(state.positions.BTCUSDT!.envelopeCenterTouched).toBe(true);
+    const resumed: typeof state = JSON.parse(JSON.stringify(state));
+    replayPortfolioBlock(resumed, [{ ...document, bars: document.bars.slice(1) }], parameters, boundary, end, 3600);
+    expect(resumed.exitReasons).toEqual({ ENVELOPE_CENTER_RETURN: 1 });
+    expect(resumed.trades).toEqual(whole.trades);
+    expect(resumed.trades[0]!.exitAt).toBe(boundary + 900);
+    const band = document.bars[1]!.envelope!;
+    expect(resumed.trades[0]!.exitPrice).toBeCloseTo(short ? band.upper * 1.0002 : band.lower * .9998, 10);
+  });
+
+  it.each([false, true])('still closes at the opposite band if it is reached before the return, short=%s', short => {
+    const { state, start } = simulate(short, [[entry, center, [99.8, 101, 99.8, 100.5], [100.5, 100.5, 99, 99.5]]]);
+    expect(state.exitReasons).toEqual({ ENVELOPE_OPPOSITE: 1 });
+    expect(state.trades[0]!.exitAt).toBe(start + 1800);
+  });
+
+  it.each([false, true])('uses the observed open on a return gap and gives SL priority beyond the stop, short=%s', short => {
+    const first = [entry, center, [99.8, 100, 99.8, 100], [100, 100, 100, 100]];
+    const gap = simulate(short, [first, Array.from({ length: 4 }, () => [98.5, 98.6, 98.4, 98.5])]);
+    expect(gap.state.exitReasons).toEqual({ ENVELOPE_CENTER_RETURN: 1 });
+    expect(gap.state.trades[0]!.exitPrice).toBeCloseTo(short ? 101.5 * 1.0002 : 98.5 * .9998, 10);
+    const stop = simulate(short, [first, Array.from({ length: 4 }, () => [97, 97.1, 96.9, 97])]);
+    expect(stop.state.exitReasons).toEqual({ SL: 1 });
+  });
+});

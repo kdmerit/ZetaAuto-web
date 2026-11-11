@@ -37,6 +37,7 @@ import { serverSettingsSnapshot } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
 import { currentEnvelopeSettings, currentPullbackSettings, envelopeParameters, envelopePeriods, pullbackEnvelopeParameters } from '../envelope';
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
+import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
@@ -98,6 +99,7 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     envelopeMa20Enabled: strategy === 'ENVELOPE',
     envelopeMa20BelowEnabled: false,
     envelopeCloseOnConfirmedBreakout: false,
+    envelopeCloseOnCenterReturn: false,
     newHighLookback: '20',
     newHighSlMultiplier: '2',
     newHighMa60Enabled: false,
@@ -165,6 +167,7 @@ const reasonLabels: Record<string, string> = {
   ENVELOPE_OPPOSITE: '엔벨로프 반대 밴드 청산',
   ENVELOPE_MA20_CLOSE: '엔벨로프 MA20 이탈 종가 청산',
   ENVELOPE_CLOSE_CONFIRM: '엔벨로프 돌파 종가 확정 청산',
+  ENVELOPE_CENTER_RETURN: '엔벨로프 중심선 터치 후 이탈 청산',
   NEW_HIGH_TRAILING: '단계형 트레일링 청산',
   NEW_HIGH_NEXT_CANDLE_BREAK: '다음 캔들 진입봉 저가·고가 이탈 청산',
   NEW_HIGH_BREAKOUT_FAIL: '돌파봉 종가 확인 실패',
@@ -751,6 +754,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>엔벨로프 상단에 닿으면 매도하고, 매도 이후 하단에 닿으면 전량 청산합니다. SL은 체결가 × (1 + 이격%/100)입니다.</p>
                 <p>MA20 위 필터는 롱은 선택 주기 캔들의 저가가 MA20보다 높고, 숏은 고가가 MA20보다 낮은 캔들만 허용합니다. MA20에 닿거나 걸친 캔들은 진입하지 않습니다. 1d에서는 캔들 전체 범위(꼬리 포함)의 절반 이상이 엔벨로프 하단 아래인 롱, 상단 위인 숏 진입을 금지합니다. 고가·저가 중간값이 롱은 하단 이하, 숏은 상단 이상인 경우이며, 정확히 절반인 경우도 제외합니다.</p>
                 <p>매 봉 새로 계산한 반대 밴드를 청산선으로 사용하며, SL은 최초 체결가 기준으로 고정합니다. 1h·4h·1d 백테스트는 매수 가능 봉 이후의 15분봉을 시간순으로 확인해 매수 라인 터치 후 SL과 청산 조건을 적용합니다.</p>
+                <p>‘중심선 터치후 이탈시 매도’를 켜면 매수 후 중심선 터치를 기록하고, 이후 롱은 엔벨로프 하단, 숏은 상단을 다시 터치할 때 전량 청산합니다. 중심선과 재터치 밴드는 매 봉 갱신하며, 매수 전 터치는 세지 않습니다. 반대 밴드 청산과 최초 SL도 함께 적용합니다.</p>
                 <p>한 종목은 봉당 한 번만 진입하고 봉 시작에 보유했다면 같은 봉에 재진입하지 않습니다. 전체종목은 종목명 순서·봉 시작 가용자금 한도로 배분하며 미래 청산 자금을 재사용하지 않습니다. 기간 말 미청산분은 평가액에 포함합니다.</p>
                 <p>개별통계·전체통계는 선택한 1h·4h·1d 주기에서 방향당 최대 1,000조합, 롱+숏 최대 2,000조합을 비교합니다. 입력 배율과 MA20 필터를 고정해 MA3·MA5·MA20·MA60·MA120과 이격 0.1~20.0%(0.1 단위)를 비교합니다. 매매횟수·수익률·최소수익비 필터를 통과한 결과를 방향별로 선정합니다.</p>
                 <p>전체통계는 슬리피지 필터 없이 모든 활성 USDT 종목에서 조건을 충족한 방향별 세팅을 저장합니다. 가상매매는 선정한 중심선·이격을 고정하고 별도로 입력한 기간·초기자금·베팅액·레버리지로 검증합니다. 검증 기간으로 다시 최적화하지 않습니다. 선정 기간과 겹치거나 그 이전을 검증하면 화면에 표시하며 실제 미래 성과를 보장하지 않습니다.</p>
@@ -858,6 +862,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           ) : strategy === 'ENVELOPE' ? (
             <>
               <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
+              <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
               <h2>엔벨로프 중심선 봉수</h2>
               <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
               <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '3'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용</small></label>

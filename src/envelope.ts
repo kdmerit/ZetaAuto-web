@@ -37,6 +37,7 @@ export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSet
   return { ...current, interval, envelopeStatisticsInterval: statisticsInterval,
     envelopeMaPeriod: envelopePeriods.includes(Number(settings.envelopeMaPeriod)) ? settings.envelopeMaPeriod : '20',
     envelopeMa20Enabled: settings.envelopeMa20Enabled === true,
+    envelopeCloseOnCenterReturn: settings.envelopeCloseOnCenterReturn === true,
     // Retain these legacy fields for archived results, but never enable the
     // removed controls for a new envelope analysis.
     envelopeMa20BelowEnabled: false,

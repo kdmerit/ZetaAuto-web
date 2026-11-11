@@ -32,6 +32,8 @@ interface Holding {
   executions: Execution[];
   risk?: ContractRisk;
   envelopeCenter?: number;
+  envelopeCenterTouched?: boolean;
+  envelopeReturnBand?: number;
   centerStopMoved?: boolean;
   pullbackMa60Exit?: number;
   newHighTrailStep?: number;
@@ -166,7 +168,7 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'VOLATILITY_WICK_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE', 'ENVELOPE_CLOSE_CONFIRM'].includes(reason);
+  const market = ['SL', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'VOLATILITY_WICK_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE', 'ENVELOPE_CLOSE_CONFIRM', 'ENVELOPE_CENTER_RETURN'].includes(reason);
   const fill = market ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
   const qty = Math.min(p.qty, quantity);
   const profit = gross(p, fill, qty);
@@ -273,6 +275,10 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   if (signal.strategy === 'ENVELOPE') {
     p.signal = { ...effectiveSignal, stop: p.stop, initialStop: signal.envelopeEntryMode === 'BAND_TOUCH' ? p.stop : signal.second ?? signal.stop };
     p.envelopeCenter = signal.envelopeCenter;
+    if (signal.envelopeCloseOnCenterReturn === true && signal.envelopeCenter !== undefined) {
+      p.envelopeCenterTouched = false;
+      p.envelopeReturnBand = signal.envelopeCenter * (1 - direction * signal.envelopeDeviationPercent! / 100);
+    }
   }
   state.positions[symbol] = p;
   state.cash -= bet + bet * leverage * feeRate;
@@ -365,6 +371,15 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
   if (stopped) { close(state, p, opening ? price : p.stop, p.qty, 'SL', candle, opening); return; }
   const roi = roiPrice(p, settings);
   if (roi !== null && (long ? price <= roi : price >= roi)) { close(state, p, opening ? price : roi, p.qty, 'ROI_LOSS', candle, opening); return; }
+  if (p.signal.strategy === 'ENVELOPE' && p.signal.envelopeCloseOnCenterReturn === true) {
+    if (p.envelopeCenterTouched && p.envelopeReturnBand !== undefined
+      && (long ? price <= p.envelopeReturnBand : price >= p.envelopeReturnBand)) {
+      close(state, p, opening ? price : p.envelopeReturnBand, p.qty, 'ENVELOPE_CENTER_RETURN', candle, opening);
+      return;
+    }
+    if (!p.envelopeCenterTouched && p.envelopeCenter !== undefined
+      && (long ? price >= p.envelopeCenter : price <= p.envelopeCenter)) p.envelopeCenterTouched = true;
+  }
   if (p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE'
     && p.pullbackMa60Exit !== undefined && (long ? price <= p.pullbackMa60Exit : price >= p.pullbackMa60Exit)) {
     close(state, p, opening ? price : p.pullbackMa60Exit, p.qty, 'PULLBACK_MA60', candle, opening);
@@ -413,6 +428,10 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
   if (p.pending) levels.add(p.second);
   if (p.partial !== null && !p.partialDone) levels.add(p.partial);
   if (p.signal.envelopeMoveSlOnCenter === true && !p.centerStopMoved && p.envelopeCenter !== undefined) levels.add(p.envelopeCenter);
+  if (p.signal.envelopeCloseOnCenterReturn === true) {
+    if (!p.envelopeCenterTouched && p.envelopeCenter !== undefined) levels.add(p.envelopeCenter);
+    if (p.envelopeCenterTouched && p.envelopeReturnBand !== undefined) levels.add(p.envelopeReturnBand);
+  }
   const roi = roiPrice(p, settings);
   if (roi !== null) levels.add(roi);
   const crossed = [...levels].filter(level => level !== before && level >= Math.min(before, after) && level <= Math.max(before, after)).sort((a, b) => after < before ? b - a : a - b);
@@ -631,6 +650,7 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
           stop: price * (1 + (side === 'LONG' ? -1 : 1) * percent / 100), target, initialTarget: target,
           exitMode: 'ENVELOPE_TOUCH', envelopeDeviationPercent: percent, envelopeExitMode: 'OPPOSITE',
           envelopeCloseOnConfirmedBreakout: parameters.envelopeCloseOnConfirmedBreakout === true,
+          envelopeCloseOnCenterReturn: parameters.envelopeCloseOnCenterReturn === true,
           envelopeMaPeriod: period, envelopeCenter: band.center, envelopeMoveSlOnCenter: false,
           envelopeEntryMode: 'BAND_TOUCH',
           ...(band.sourceInterval ? { envelopeSourceInterval: band.sourceInterval } : {}),
@@ -686,6 +706,7 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
         stop: price * (1 + (side === 'LONG' ? -1 : 1) * percent / 100), target, initialTarget: target,
         exitMode: 'ENVELOPE_TOUCH', envelopeDeviationPercent: percent, envelopeExitMode: 'OPPOSITE',
         envelopeCloseOnConfirmedBreakout: parameters.envelopeCloseOnConfirmedBreakout === true,
+        envelopeCloseOnCenterReturn: parameters.envelopeCloseOnCenterReturn === true,
         envelopeMaPeriod: period, envelopeCenter: band.center, envelopeMoveSlOnCenter: false,
         envelopeEntryMode: 'BAND_TOUCH',
         ...(band.sourceInterval ? { envelopeSourceInterval: band.sourceInterval } : {}),
@@ -885,6 +906,10 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
     if (position.signal.envelopeEntryMode === 'BAND_TOUCH') {
       if (!bar.envelope) throw new Error(`${symbol}의 엔벨로프 계산에 필요한 캔들이 부족합니다.`);
       position.target = position.signal.side === 'LONG' ? bar.envelope.upper : bar.envelope.lower;
+      if (position.signal.envelopeCloseOnCenterReturn === true) {
+        position.envelopeCenter = bar.envelope.center;
+        position.envelopeReturnBand = position.signal.side === 'LONG' ? bar.envelope.lower : bar.envelope.upper;
+      }
       if (bar.envelopeIntrabarCandles?.length) {
         const selected = replayEnvelopeIntrabarHolding(position, bar, settings);
         mergePath(state, selected, symbol);
