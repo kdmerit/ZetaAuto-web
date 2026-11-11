@@ -210,13 +210,16 @@ export async function ensureCandles(instrument: Instrument, interval: CandleInte
   const previousPrefix = instrument.launchAt > 0 ? await readValue<ListingPrefix>('publicData', prefixKey) : null;
   let prefix = previousPrefix ?? { emptyUntil: listingBucket };
   const start = Math.max(Math.floor(from / seconds) * seconds, listingBucket, prefix.emptyUntil);
-  if (end <= start) return [];
-  const byTime = new Map((await readCandlePages(instrument.symbol, interval, start, end)).map(candle => [candle.openTime, candle]));
-  for (let cursor = start; cursor < end; cursor += seconds) {
+  // Never require a candle that is still forming at the current clock boundary.
+  // This is especially important for the 1d MA20 auxiliary series used by NEW_HIGH.
+  const completedEnd = Math.min(end, Math.floor(Date.now() / seconds) * seconds);
+  if (completedEnd <= start) return [];
+  const byTime = new Map((await readCandlePages(instrument.symbol, interval, start, completedEnd)).map(candle => [candle.openTime, candle]));
+  for (let cursor = start; cursor < completedEnd; cursor += seconds) {
     signal?.throwIfAborted();
     if (byTime.has(cursor)) continue;
     let nextKnown = cursor + seconds;
-    while (nextKnown < Math.min(prefetchEnd, cursor + 1000 * seconds) && !byTime.has(nextKnown)) nextKnown += seconds;
+    while (nextKnown < Math.min(prefetchEnd, completedEnd, cursor + 1000 * seconds) && !byTime.has(nextKnown)) nextKnown += seconds;
     const fetched = await download(instrument.symbol, interval, cursor, nextKnown, signal);
     await cacheCandles(instrument.symbol, interval, fetched);
     fetched.forEach(candle => byTime.set(candle.openTime, candle));
@@ -240,5 +243,5 @@ export async function ensureCandles(instrument: Instrument, interval: CandleInte
     }
     if (!byTime.has(cursor)) throw new MissingCandleError(instrument.symbol, interval, cursor);
   }
-  return [...byTime.values()].filter(candle => candle.openTime >= start && candle.openTime < end).sort((a, b) => a.openTime - b.openTime);
+  return [...byTime.values()].filter(candle => candle.openTime >= start && candle.openTime < completedEnd).sort((a, b) => a.openTime - b.openTime);
 }
