@@ -5,7 +5,8 @@ import { envelopeEntryMayTouch, prepareSymbolBlock, type PreparedSymbol, type Wa
 import { analysisWindow, completedCandleEnd, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
-import { currentEnvelopeSettings, currentPullbackSettings, envelopeModelVersion } from './envelope';
+import { currentEnvelopeSettings, currentPullbackSettings, envelopeModelVersion, envelopeParameters } from './envelope';
+import { envelopeCandleDataStart } from './envelopeCandleFilter';
 import { currentNewHighSettings, newHighExecutionInterval, newHighWarmup } from './newHigh';
 import { currentReferenceSettings } from './reference';
 import type { BacktestResult, BacktestSettings, Candle, Strategy } from './types';
@@ -180,6 +181,7 @@ async function executeWithLease(
         : options.strategy === 'ENVELOPE' ? currentEnvelopeSettings(copied)
           : options.strategy === 'PULLBACK' ? currentPullbackSettings(copied)
             : options.strategy === 'REFERENCE' ? currentReferenceSettings(copied) : copied;
+      if (options.strategy === 'ENVELOPE') envelopeParameters(settings);
       const { start, end } = analysisWindow(settings);
       previousJob = await readValue<SavedJob>('jobs', options.strategy);
       job = {
@@ -278,7 +280,8 @@ async function executeWithLease(
           }
           if (job.strategy === 'ENVELOPE' && job.settings.interval !== '15m') {
             const firstEntryTouch = prepared.bars.find(bar => envelopeEntryMayTouch(bar, activeJob.settings));
-            const lowerFrom = job.state.positions[instrument.symbol] ? activeJob.blockStart : firstEntryTouch?.candle.openTime;
+            const first = job.state.positions[instrument.symbol] ? activeJob.blockStart : firstEntryTouch?.candle.openTime;
+            const lowerFrom = first === undefined ? undefined : envelopeCandleDataStart(activeJob.settings, first);
             if (lowerFrom !== undefined && lowerFrom < blockEnd) {
               let envelopeIntrabarCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
               prepared = prepare(undefined, envelopeIntrabarCandles);

@@ -2,10 +2,12 @@
 import type { PreparedSymbol } from './engine';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import type { BacktestResult, BacktestSettings } from './types';
+import { envelopeParameters } from './envelope';
 
 export const yieldAnalysis = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0));
 
 export function fixedEnvelopeSettings(settings: BacktestSettings): BacktestSettings {
+  envelopeParameters(settings);
   if (!/^\d{1,3}(\.\d{1,2})?$/.test(settings.leverage) || Number(settings.leverage) < 1 || Number(settings.leverage) > 100) {
     throw new Error('고정 레버리지는 1~100배, 소수 둘째 자리까지 입력해 주세요.');
   }

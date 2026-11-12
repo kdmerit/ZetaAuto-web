@@ -1,6 +1,7 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import { bandFor, envelopeHalfCandleAllowsEntry, envelopeParameters, priorMovingAverages, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
+import { envelopeCandleContexts, type EnvelopeCandleContext } from './envelopeCandleFilter';
 import { prepareNewHigh, type PreparedNewHigh } from './newHigh';
 import { referenceTpPercent } from './reference';
 import { enrichMarketCandles } from './marketIndicators';
@@ -563,6 +564,7 @@ export interface PreparedBar {
   volatilityIntrabarCandles?: Candle[];
   /** 15-minute candles used to replay envelope entries and exits inside 1h/4h/1d bars. */
   envelopeIntrabarCandles?: Candle[];
+  envelopeCandleContexts?: ReadonlyMap<number, EnvelopeCandleContext>;
   /** First lower-timeframe candle where the reference candle's line-defining extreme is known. */
   referenceLineConfirmedAt?: number;
 }
@@ -610,6 +612,7 @@ export function prepareSymbolBlock(
     const centers = priorMovingAverages(candles, period);
     const seconds = intervalSeconds(settings.interval);
     const envelopeGroups = new Map<number, Candle[]>();
+    const candleContexts = settings.envelopeCandleFilterEnabled === true ? envelopeCandleContexts(envelopeIntrabarCandles ?? []) : undefined;
     for (const intrabar of envelopeIntrabarCandles ?? []) {
       const parentOpenTime = Math.floor(intrabar.openTime / seconds) * seconds;
       const rows = envelopeGroups.get(parentOpenTime) ?? [];
@@ -620,6 +623,7 @@ export function prepareSymbolBlock(
       if (candle.openTime < start || candle.openTime >= end) return [];
       const center = centers[index];
       return [{ candle, signal: null, ma20: candle.ma20, ma60Exit: null,
+        ...(candleContexts ? { envelopeCandleContexts: candleContexts } : {}),
         ...(envelopeGroups.has(candle.openTime) ? { envelopeIntrabarCandles: envelopeGroups.get(candle.openTime)!.sort((a, b) => a.openTime - b.openTime) } : {}),
         ...(center === null || center === undefined ? {} : { envelope: {
           ...bandFor(center, percent), long: settings.side !== 'SHORT', short: settings.side !== 'LONG',
@@ -1257,7 +1261,7 @@ export function buildLocalChart(
 export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return 'N봉 신고가·신저가 돌파와 MA10/20 전환을 확인해 조건 충족 시 봉 중간 진입하고, 초기 SL과 단계형 트레일링 SL로 청산합니다.';
-  if (strategy === 'ENVELOPE') return '롱은 엔벨로프 하단에서 매수해 상단에서 청산하고 숏은 반대로 적용합니다. SL은 체결가에서 입력 이격률만큼 설정합니다. 1h·4h·1d는 매수 가능 봉 이후의 15분봉을 시간순으로 재생해 매수 후 SL·반대 밴드 중 먼저 닿은 선으로 청산합니다. MA20 위 필터는 롱 전체 캔들이 MA20 위·숏 전체 캔들이 MA20 아래일 때, MA20 아래 필터는 롱 전체 캔들이 MA20 아래·숏 전체 캔들이 MA20 위일 때만 진입하며, MA20에 닿거나 걸친 캔들은 제외합니다. 1d에서는 캔들 범위 중간값이 롱 상단 이상·숏 하단 이하인 과열 캔들의 진입을 금지합니다.';
+  if (strategy === 'ENVELOPE') return '롱은 엔벨로프 하단에서 매수해 상단에서 청산하고 숏은 반대로 적용합니다. SL은 실제 체결가에서 별도 입력한 SL 비율만큼 설정합니다(기본 3%). 1h·4h·1d는 15분봉을 시간순으로 재생해 진입 후 SL·반대 밴드의 접촉 순서를 확인합니다. MA20 필터를 켜면 롱 전체 캔들이 MA20 위·숏 전체 캔들이 아래여야 하며 접촉·걸침은 제외합니다. 1d 고저 중간값이 롱 하단 이하·숏 상단 이상이면 매수하지 않습니다. 매수금지 캔들 필터를 켜면 선택 주기와 관계없이 진입 시점의 1d 몸통 5배 조건과 4h 꼬리·몸통 및 고점·저점 조건도 검사합니다.';
   if (strategy === 'PULLBACK') {
     return 'MA20·MA60·MA120 5봉 정배열과 MA60·MA120·이격 증가, 직전 10봉 엔벨로프 접촉 이력을 확인한 뒤 MA20 눌림에서 진입하고, MA60·엔벨로프와 정배열 해제로 청산합니다.';
   }

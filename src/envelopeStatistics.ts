@@ -9,6 +9,7 @@ import type { BacktestInterval, BacktestResult, BacktestSettings, ContractRisk, 
 import { fixedEnvelopeSettings, replayFixedEnvelope } from './envelopeReplay';
 import { betterFilteredEnvelopeSetting, defaultEnvelopeResultOptions, profitRatio, validateEnvelopeResultOptions } from './envelopeResults';
 import { validateLowerTimeframeCandles } from './intrabar';
+import { envelopeCandleDataStart } from './envelopeCandleFilter';
 
 export const statisticsIntervals: BacktestInterval[] = ['1h', '4h', '1d'];
 const jobKey = 'ENVELOPE_STATISTICS';
@@ -16,17 +17,18 @@ export const envelopeOptimizerVersion = envelopeModelVersion;
 const version = envelopeOptimizerVersion;
 const previousFixedEntryVersion = '2.10.46';
 const previousHalfFilterVersion = '2.10.88';
+const previousSharedStopVersion = '2.10.89';
 
 export type StatisticsSide = 'LONG' | 'SHORT';
 export type DirectionalBests = Partial<Record<StatisticsSide, EnvelopeStatisticsRow | null>>;
 export const statisticsSideLabel = (side: StatisticsSide): string => side === 'LONG' ? '롱' : '숏';
 export const selectedStatisticsSides = (settings: Pick<BacktestSettings, 'side'>): StatisticsSide[] => settings.side === 'LONG' ? ['LONG'] : settings.side === 'SHORT' ? ['SHORT'] : ['LONG', 'SHORT'];
 export const isCurrentEnvelopeStatisticsVersion = (value: string | undefined): boolean => value === version;
-export const isFilteredEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion].includes(value ?? '') || isCurrentEnvelopeStatisticsVersion(value);
+export const isFilteredEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion, previousSharedStopVersion].includes(value ?? '') || isCurrentEnvelopeStatisticsVersion(value);
 export const isReclaimStatisticsVersion = (value: string | undefined): boolean => value === '2.10.43' || isFilteredEnvelopeStatisticsVersion(value);
 export const isDirectionalStatisticsVersion = (value: string | undefined): boolean => value === '2.10.42' || isReclaimStatisticsVersion(value);
-export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.40', '2.10.41', '2.10.42', '2.10.43', '2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion, version].includes(value ?? '');
-const usesFiveEnvelopePeriods = (value: string | undefined): boolean => value === previousHalfFilterVersion || isCurrentEnvelopeStatisticsVersion(value);
+export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.40', '2.10.41', '2.10.42', '2.10.43', '2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion, previousSharedStopVersion, version].includes(value ?? '');
+export const usesFiveEnvelopePeriods = (value: string | undefined): boolean => value === previousHalfFilterVersion || value === previousSharedStopVersion || isCurrentEnvelopeStatisticsVersion(value);
 export const optimalSettingCriteria = '진입 2회 이상 · 승률 60% 이상 · 수익률 2% 이상';
 export function qualifiesEnvelopeSetting(row: Pick<EnvelopeStatisticsRow, 'entryCount' | 'winRatePercent' | 'returnPercent'>): boolean {
   return row.entryCount >= 2 && row.winRatePercent !== null && Number.isFinite(row.winRatePercent) && row.winRatePercent >= 60
@@ -199,7 +201,8 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
           return directional.side === 'LONG' ? bar.candle.low <= band.lower : bar.candle.high >= band.upper;
         });
         if (firstEntryTouch) {
-          let lowerCandles = await ensureCandles(job.instrument, '15m', firstEntryTouch.candle.openTime, end, end, signal);
+          const lowerFrom = envelopeCandleDataStart(directional, firstEntryTouch.candle.openTime);
+          let lowerCandles = await ensureCandles(job.instrument, '15m', lowerFrom, end, end, signal);
           document = prepareSymbolBlock(job.instrument.symbol, candles, baseParameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, lowerCandles);
           for (const bar of document.bars) {
             if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }
@@ -207,7 +210,7 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
           const parents = document.bars.flatMap(bar => bar.envelopeIntrabarCandles ? [bar.candle] : []);
           if (await refreshMismatchedLowerTimeframes(job.instrument, interval, parents, lowerCandles, signal)) {
             candles = await ensureCandles(job.instrument, interval, start - 200 * seconds, end, end, signal);
-            lowerCandles = await ensureCandles(job.instrument, '15m', firstEntryTouch.candle.openTime, end, end, signal);
+            lowerCandles = await ensureCandles(job.instrument, '15m', lowerFrom, end, end, signal);
             document = prepareSymbolBlock(job.instrument.symbol, candles, baseParameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, lowerCandles);
             for (const bar of document.bars) {
               if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }

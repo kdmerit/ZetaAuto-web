@@ -9,6 +9,7 @@ import { initialPortfolio, portfolioResult, replayPortfolioBlock, type Portfolio
 import { fixedEnvelopeSettings, yieldAnalysis } from './envelopeReplay';
 import { envelopeEntryMayTouch, prepareSymbolBlock, type PreparedSymbol } from './engine';
 import { validateLowerTimeframeCandles } from './intrabar';
+import { envelopeCandleDataStart } from './envelopeCandleFilter';
 import type { BacktestInterval, BacktestResult, BacktestSettings, Candle, ContractRisk, EnvelopeResultOptions } from './types';
 
 export type EnvelopeBatchKind = 'ALL_STATS' | 'VIRTUAL';
@@ -237,7 +238,8 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
             if (!parameters) return [];
             return document.bars.filter(bar => envelopeEntryMayTouch(bar, parameters));
           }).sort((a, b) => a.candle.openTime - b.candle.openTime)[0];
-          const lowerFrom = job.state!.positions[row.symbol] ? start : firstEntryTouch?.candle.openTime;
+          const first = job.state!.positions[row.symbol] ? start : firstEntryTouch?.candle.openTime;
+          const lowerFrom = first === undefined ? undefined : envelopeCandleDataStart(job.settings, first);
           if (lowerFrom !== undefined && lowerFrom < end) {
             let envelopeIntrabarCandles = await ensureCandles(row, '15m', lowerFrom, end, end, signal);
             directional = prepareDirectional(envelopeIntrabarCandles);

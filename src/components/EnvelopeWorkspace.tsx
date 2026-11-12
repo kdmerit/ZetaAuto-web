@@ -16,6 +16,8 @@ import { EnvelopeResultControls } from './EnvelopeResultControls';
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
 import { EnvelopeSideRatioControl } from './EnvelopeSideRatioControl';
+import { EnvelopeCandleFilterControl } from './EnvelopeCandleFilterControl';
+import { EnvelopeStopLossControl } from './EnvelopeStopLossControl';
 
 type View = 'SINGLE' | 'ALL' | 'SINGLE_STATS' | 'ALL_STATS';
 const views: { id: View; label: string }[] = [{ id: 'SINGLE', label: '개별분석' }, { id: 'ALL', label: '전체분석' }, { id: 'SINGLE_STATS', label: '개별통계' }, { id: 'ALL_STATS', label: '전체통계' }];
@@ -40,10 +42,12 @@ function SearchFields({ settings, onChange, disabled, single }: { settings: Back
     <h2>분석 방향</h2><div className="segmented three" role="group" aria-label="통계 분석 방향">{(['BOTH', 'LONG', 'SHORT'] as const).map(side => <button key={side} type="button" aria-pressed={settings.side === side} className={settings.side === side ? 'selected' : ''} onClick={() => update('side', side)}>{side === 'BOTH' ? '롱 + 숏' : side === 'LONG' ? '롱' : '숏'}</button>)}</div>
     <p className="muted small">롱 + 숏은 방향별로 독립 분석해 필터·정렬 기준의 최적 세팅을 각각 찾습니다.</p>
     <h2>통계 캔들 주기</h2><div className="segmented interval-selector">{statisticsIntervals.map(interval => <button key={interval} type="button" aria-pressed={settings.envelopeStatisticsInterval === interval} className={settings.envelopeStatisticsInterval === interval ? 'selected' : ''} onClick={() => update('envelopeStatisticsInterval', interval)}>{interval.toUpperCase()}</button>)}</div>
-    <p className="notice small">롱: 엔벨로프 하단 매수 → 상단 청산 · 숏: 상단 매도 → 하단 청산 · SL은 체결가에서 입력 이격률만큼 설정</p>
+    <p className="notice small">롱: 엔벨로프 하단 매수 → 상단 청산 · 숏: 상단 매도 → 하단 청산 · SL은 별도 입력한 비율로 고정</p>
     <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
     <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
     <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
+    <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
+    <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
     <h2>분석 기간 (한국시간)</h2><div className="field-grid two">
       <label className="field-label">시작일<input inputMode="numeric" value={settings.startDate} onChange={event => update('startDate', formatDateInput(event.target.value))} /></label>
       <label className="field-label">시작시간<input inputMode="numeric" value={settings.startTime} onChange={event => update('startTime', formatTimeInput(event.target.value))} /></label>
@@ -70,11 +74,13 @@ export function VirtualEvaluationFields({ settings, onChange, disabled }: { sett
       <label className="field-label">가상 초기자금<input inputMode="decimal" value={settings.initialCapitalUsdt} onChange={event => update('initialCapitalUsdt', event.target.value)} /></label>
       <label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /></label>
       <label className="field-label">레버리지<input inputMode="decimal" value={settings.leverage} onChange={event => update('leverage', event.target.value)} /><small>1~100배 · 모든 종목에 동일 적용</small></label>
-    </div><p className="notice small">전체통계에서 선정된 1h·4h·1d 주기로 검증합니다. 롱은 하단 매수·상단 청산, 숏은 상단 매도·하단 청산하며 SL은 체결가에서 입력 이격률만큼 설정합니다.</p>
+    </div><p className="notice small">전체통계에서 선정된 1h·4h·1d 주기로 검증합니다. 롱은 하단 매수·상단 청산, 숏은 상단 매도·하단 청산하며 SL은 별도 입력한 비율로 고정합니다.</p>
     <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
     <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
     <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
-    <p className="muted small">검증 기간·자금·배율·MA20 필터·청산 옵션·롱/숏 비율은 통계와 별도로 저장합니다.</p>
+    <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
+    <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
+    <p className="muted small">검증 기간·자금·배율·MA20 필터·청산 옵션·롱/숏 비율・SL・캔들 필터는 통계와 별도로 저장합니다.</p>
   </fieldset></section>;
 }
 
@@ -160,17 +166,17 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
     {running ? <button className="danger-button" type="button" onClick={pauseEnvelopeBatch}>{label} 일시정지</button> : null}
     {!running && latest?.status === 'PAUSED' ? <button className="outline-button" type="button" disabled={busy || loading || !canResumeEnvelopeBatch(latest)} onClick={() => start(true)}>{label} 이어하기</button> : null}
     <button className="outline-button" type="button" disabled={busy || loading} aria-expanded={historyOpen} onClick={() => { void toggleHistory(); }}>{historyOpen ? `${label} 이력 닫기` : `${label} 이력보기`}</button>
-    {historyOpen ? <div className="history-list">{history.length ? history.map(item => <button className="history-card" type="button" key={item.id} onClick={() => { void openHistory(item.id); }} disabled={loading}><strong>{item.settings.startDate} ~ {item.settings.endDate} · {item.kind === 'ALL_STATS' ? `${item.optimized}/${item.symbols}종목` : `${num(item.returnPercent)}%`}</strong>{item.longOptimized !== undefined ? <span>롱 {item.longOptimized}종목 · 숏 {item.shortOptimized ?? 0}종목 최적 세팅</span> : null}<small>{statisticsIntervalLabel(item.settings)} · 레버리지 {item.settings.leverage}배 · {isCurrentEnvelopeStatisticsVersion(item.version) ? '밴드 매수·반대 밴드 청산·이격률 SL' : '이전 매매 조건'} · {new Date(item.at).toLocaleString('ko-KR')}</small></button>) : <p className="muted">{label} 이력이 없습니다.</p>}</div> : null}
+    {historyOpen ? <div className="history-list">{history.length ? history.map(item => <button className="history-card" type="button" key={item.id} onClick={() => { void openHistory(item.id); }} disabled={loading}><strong>{item.settings.startDate} ~ {item.settings.endDate} · {item.kind === 'ALL_STATS' ? `${item.optimized}/${item.symbols}종목` : `${num(item.returnPercent)}%`}</strong>{item.longOptimized !== undefined ? <span>롱 {item.longOptimized}종목 · 숏 {item.shortOptimized ?? 0}종목 최적 세팅</span> : null}<small>{statisticsIntervalLabel(item.settings)} · 레버리지 {item.settings.leverage}배 · {isCurrentEnvelopeStatisticsVersion(item.version) ? `밴드 매수·반대 밴드 청산·SL ${item.settings.envelopeStopLossPercent ?? '3'}%` : '이전 매매 조건'} · {new Date(item.at).toLocaleString('ko-KR')}</small></button>) : <p className="muted">{label} 이력이 없습니다.</p>}</div> : null}
     {error && error !== view?.message ? <p className="error" role="alert">{error}</p> : null}
     {view ? <><h2>{label} {view.status === 'COMPLETED' ? '결과' : view.status === 'PAUSED' ? '일시정지' : '진행 중'}</h2><p className="muted small">{view.settings.startDate} {view.settings.startTime} ~ {view.settings.endDate} {view.settings.endTime} (한국시간)</p>
-      <p className="notice small">{statisticsIntervalLabel(view.settings)} · {isFixedEnvelopeStatisticsVersion(view.version) ? `적용 레버리지 ${view.settings.leverage}배 고정` : '이전 자동 레버리지 탐색 방식의 저장 결과입니다. 새 분석은 입력 배율을 고정 적용합니다.'}{current ? ` · MA20 필터 ${envelopeMa20FilterLabel(view.settings)}` : ''}</p>
+      <p className="notice small">{statisticsIntervalLabel(view.settings)} · {isFixedEnvelopeStatisticsVersion(view.version) ? `적용 레버리지 ${view.settings.leverage}배 고정` : '이전 자동 레버리지 탐색 방식의 저장 결과입니다. 새 분석은 입력 배율을 고정 적용합니다.'}{current ? ` · SL ${view.settings.envelopeStopLossPercent ?? '3'}% · 캔들 필터 ${view.settings.envelopeCandleFilterEnabled ? 'ON' : 'OFF'} · MA20 필터 ${envelopeMa20FilterLabel(view.settings)}` : ''}</p>
       {current && kind === 'ALL_STATS' ? <p className="notice small">필터 통과 {sorted.length}/{view.rows.length}종목 · {resultSortLabel(options)} 내림차순 · 최적 세팅도 같은 정렬 기준입니다.</p> : null}
       {!current ? <p className="notice small">이전 매매 조건·선정 기준의 저장 결과입니다. 새 엔벨로프 조건은 소급 적용하지 않습니다. 새 분석을 시작해 주세요.</p> : null}
       {kind === 'VIRTUAL' && view.trainingSettings ? <><p className="muted small">세팅 선정 기간: {view.trainingSettings.startDate} {view.trainingSettings.startTime} ~ {view.trainingSettings.endDate} {view.trainingSettings.endTime}</p><VirtualPeriodNotice evaluation={view.settings} training={view.trainingSettings} /></> : null}
       {kind === 'ALL_STATS' && !isDirectionalStatisticsVersion(view.version) && view.settings.side === 'BOTH' ? <p className="notice">이전 롱·숏 합산 결과입니다. 방향별 최고 세팅은 새 전체통계를 실행해 확인해 주세요.</p> : null}
       {view.status !== 'COMPLETED' ? <ProgressBar completed={view.completed} total={view.total} label={view.status === 'PAUSED' ? `${label} 일시정지` : view.message} /> : <p className="notice">{view.message}</p>}
       {view.status === 'PAUSED' ? <p className="notice">{view.message}</p> : null}
-      {kind === 'ALL_STATS' ? <><p className="muted small">{isDirectionalStatisticsVersion(view.version) ? '종목·방향별 최적 세팅을 따로 표시합니다. 종목 순서는 각 종목의 최상위 세팅 기준입니다.' : '이전 방식의 종목별 세팅입니다.'} 비교 자금은 종목·방향별로 독립적이며 수익률을 합산하지 않습니다. {current ? '밴드 매수 · 반대 밴드 청산 · 체결가 기준 이격률 SL' : '저장 당시의 매매 조건을 적용한 결과입니다.'}</p>
+      {kind === 'ALL_STATS' ? <><p className="muted small">{isDirectionalStatisticsVersion(view.version) ? '종목·방향별 최적 세팅을 따로 표시합니다. 종목 순서는 각 종목의 최상위 세팅 기준입니다.' : '이전 방식의 종목별 세팅입니다.'} 비교 자금은 종목·방향별로 독립적이며 수익률을 합산하지 않습니다. {current ? '밴드 매수 · 반대 밴드 청산 · 체결가 기준 별도 SL' : '저장 당시의 매매 조건을 적용한 결과입니다.'}</p>
         {current && !sorted.length && view.status === 'COMPLETED' ? <p className="notice">입력한 필터를 충족한 결과가 없습니다. 필터를 낮추면 재분석 없이 다시 확인할 수 있습니다.</p> : null}
         <div className="envelope-stat-rows">{sorted.slice(0, limit).map(row => <EnvelopeSymbolSettings key={row.symbol} row={row} settings={view.settings} resultOptions={current ? options : undefined} disabled={busy || loading || view.status !== 'COMPLETED'} onChoose={side => { void openSetting(row.symbol, side); }} />)}</div>{sorted.length > limit ? <button className="outline-button" type="button" onClick={() => setLimit(value => value + 30)}>종목 더 보기 ({Math.min(limit, sorted.length)}/{sorted.length})</button> : null}</> : null}
       {kind === 'VIRTUAL' && view.result ? <div className="virtual-results" aria-label="가상매매 결과"><div className="result-heading"><h2>공유 계좌 수익률</h2><strong className={`big-number ${view.result.returnPercent >= 0 ? 'positive' : 'negative'}`}>{num(view.result.returnPercent)}%</strong></div><div className="metric-grid">

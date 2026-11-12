@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { envelopeExitLabels, envelopeExitModes, envelopeMa20FilterLabel, envelopePeriods, legacyEnvelopePeriods } from '../envelope';
-import { canResumeEnvelopeStatistics, isCurrentEnvelopeStatisticsVersion, isDirectionalStatisticsVersion, isFixedEnvelopeStatisticsVersion, isReclaimStatisticsVersion, optimalSettingCriteria, selectedStatisticsIntervals, selectedStatisticsSides, settingsForStatisticsRow, statisticsIntervalLabel, statisticsIntervals, statisticsProgress, statisticsSideLabel, statisticsTotalFor, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from '../envelopeStatistics';
+import { canResumeEnvelopeStatistics, isCurrentEnvelopeStatisticsVersion, isDirectionalStatisticsVersion, isFixedEnvelopeStatisticsVersion, isReclaimStatisticsVersion, optimalSettingCriteria, selectedStatisticsIntervals, selectedStatisticsSides, settingsForStatisticsRow, statisticsIntervalLabel, statisticsIntervals, statisticsProgress, statisticsSideLabel, statisticsTotalFor, usesFiveEnvelopePeriods, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from '../envelopeStatistics';
 import { isEnvelopeStatisticsRunning, pauseEnvelopeStatistics, restoreEnvelopeStatistics, startEnvelopeStatistics, subscribeEnvelopeStatistics } from '../envelopeStatisticsClient';
 import type { BacktestSettings, EnvelopeExitMode, EnvelopeResultOptions } from '../types';
 import { defaultEnvelopeResultOptions, envelopeBests, resultSortLabel, selectedEnvelopeRows } from '../envelopeResults';
@@ -21,7 +21,7 @@ export function EnvelopeStatisticsStatus({ job }: { job: EnvelopeStatisticsJob }
       : '이전 버전의 고정 레버리지 통계입니다. 저장된 결과는 당시 기준으로 표시합니다.'
       : `적용 레버리지 ${job.settings.leverage}배 고정 · 최대 한도·위험한도를 조회하지 않습니다.`}</p>
     {!isDirectionalStatisticsVersion(job.version) && job.settings.side === 'BOTH' ? <p className="notice small">이전 롱·숏 합산 결과입니다. 방향별 최고 세팅은 새 통계를 실행해 확인해 주세요.</p> : null}
-    {!isCurrentEnvelopeStatisticsVersion(job.version) ? <p className="notice small">이전 매매 조건·선정 기준의 저장 결과입니다. 새 밴드 매매·이격률 SL·MA20 필터는 소급 적용하지 않습니다.</p> : null}
+    {!isCurrentEnvelopeStatisticsVersion(job.version) ? <p className="notice small">이전 매매 조건·선정 기준의 저장 결과입니다. 새 SL·캔들 필터는 소급 적용하지 않습니다.</p> : null}
     {job.status !== 'COMPLETED' ? <ProgressBar completed={statisticsProgress(job)} total={statisticsTotalFor(job.settings, job.version)} label={job.status === 'PAUSED' ? '개별통계 일시정지' : job.message} /> : <p className="notice">{job.message}</p>}
     {job.status === 'PAUSED' ? <p className="notice" role="status">{job.message}</p> : null}
   </>;
@@ -182,10 +182,10 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
     {error && error !== job?.message ? <p className="error" role="alert">{error}</p> : null}
     {job ? <>
       <h3>{job.settings.symbol} 개별통계 {job.status === 'COMPLETED' ? '결과' : job.status === 'PAUSED' ? '일시정지' : '진행 중'}</h3>
-      <p className="muted small">{job.settings.startDate} {job.settings.startTime} ~ {job.settings.endDate} {job.settings.endTime} (한국시간)<br />{statisticsIntervalLabel(job.settings)} · {selectedStatisticsIntervals(job.settings).length}개 주기 × {current ? 5 : 8}개 SMA × 0.1~20.0% × {current ? '반대 밴드 청산' : fixedTrade ? '고정 청산 방식' : '3개 청산 방식'}{directional ? ` × ${selectedStatisticsSides(job.settings).length}개 방향` : ''} · 입력 레버리지 고정</p>
+      <p className="muted small">{job.settings.startDate} {job.settings.startTime} ~ {job.settings.endDate} {job.settings.endTime} (한국시간)<br />{statisticsIntervalLabel(job.settings)} · {selectedStatisticsIntervals(job.settings).length}개 주기 × {usesFiveEnvelopePeriods(job.version) ? 5 : 8}개 SMA × 0.1~20.0% × {current ? '반대 밴드 청산' : fixedTrade ? '고정 청산 방식' : '3개 청산 방식'}{directional ? ` × ${selectedStatisticsSides(job.settings).length}개 방향` : ''} · 입력 레버리지 고정</p>
       <EnvelopeStatisticsStatus job={job} />
-      {directional ? <p className="muted small">롱·숏은 각각 같은 초기자금·고정 배율의 독립 계좌로 비교합니다. 두 최고 수익률은 합산 수익률이 아닙니다. {current ? '밴드 매수 · 반대 밴드 청산 · 체결가 기준 이격률 SL' : '저장 당시의 매매 조건을 적용한 결과입니다.'}</p> : null}
-      {current ? <p className="notice small">{statisticsIntervalLabel(job.settings)} · MA20 필터 {envelopeMa20FilterLabel(job.settings)} · 필터 통과 {rows.length.toLocaleString()}/{job.rows.length.toLocaleString()}건 · {resultSortLabel(resultOptions)} 내림차순</p> : fixedTrade ? <p className="notice small">이전 최적 세팅 필수 기준: {optimalSettingCriteria}</p> : null}
+      {directional ? <p className="muted small">롱·숏은 각각 같은 초기자금·고정 배율의 독립 계좌로 비교합니다. 두 최고 수익률은 합산 수익률이 아닙니다. {current ? '밴드 매수 · 반대 밴드 청산 · 체결가 기준 별도 SL' : '저장 당시의 매매 조건을 적용한 결과입니다.'}</p> : null}
+      {current ? <p className="notice small">{statisticsIntervalLabel(job.settings)} · SL {job.settings.envelopeStopLossPercent ?? '3'}% · 캔들 필터 {job.settings.envelopeCandleFilterEnabled ? 'ON' : 'OFF'} · MA20 필터 {envelopeMa20FilterLabel(job.settings)} · 필터 통과 {rows.length.toLocaleString()}/{job.rows.length.toLocaleString()}건 · {resultSortLabel(resultOptions)} 내림차순</p> : fixedTrade ? <p className="notice small">이전 최적 세팅 필수 기준: {optimalSettingCriteria}</p> : null}
       <p className="muted small">완료한 조건은 기기에 저장되며 화면을 닫아 중단되면 이어갈 수 있습니다.</p>
       {Object.entries(job.skippedIntervals).map(([interval, message]) => <p key={interval} className="notice small">{interval} 제외: {message}</p>)}
       <EnvelopeBestSettings job={job} resultOptions={resultOptions} disabled={running || historyLoading || disabled} onChoose={onChoose} />
@@ -193,7 +193,7 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
         {directional && job.settings.side === 'BOTH' ? <div className="segmented" role="group" aria-label="통계 결과 방향">{(['LONG', 'SHORT'] as const).map(side => <button type="button" key={side} aria-pressed={activeSide === side} className={activeSide === side ? 'selected' : ''} onClick={() => { setResultSide(side); setLimit(30); }}>{statisticsSideLabel(side)} 결과</button>)}</div> : null}
         <div className="field-grid two">
           <label className="field-label">비교 지표<select value={metric} onChange={event => setMetric(event.target.value as Metric)}>{Object.entries(metrics).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-          <label className="field-label">그래프 중심선<select value={period} onChange={event => setPeriod(Number(event.target.value))}>{(current ? envelopePeriods : legacyEnvelopePeriods).map(value => <option value={value} key={value}>SMA{value}</option>)}</select></label>
+          <label className="field-label">그래프 중심선<select value={period} onChange={event => setPeriod(Number(event.target.value))}>{(usesFiveEnvelopePeriods(job.version) ? envelopePeriods : legacyEnvelopePeriods).map(value => <option value={value} key={value}>SMA{value}</option>)}</select></label>
         </div>
         {!fixedTrade ? <label className="field-label">그래프 청산 방식<select value={exit} onChange={event => setExit(event.target.value as EnvelopeExitMode)}>{envelopeExitModes.map(value => <option value={value} key={value}>{envelopeExitLabels[value]}</option>)}</select></label> : null}
         {graphRows.length ? <ComparisonGraph rows={graphRows} metric={metric} /> : <p className="muted small">선택한 SMA·청산 방식의 비교 결과가 아직 없습니다.</p>}

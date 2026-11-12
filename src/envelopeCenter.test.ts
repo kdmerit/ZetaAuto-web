@@ -26,7 +26,7 @@ describe('envelope held positions', () => {
   it('fills an adverse opening gap at the open and does not reenter the same bar', () => {
     const document: PreparedSymbol = { symbol: 'BTCUSDT', bars: [bar(0, [100, 100, 99, 100]), bar(1, [97, 101, 96, 100])] };
     const state = initialPortfolio(1000);
-    replayPortfolioBlock(state, [document], base, start, start + 7200, 3600);
+    replayPortfolioBlock(state, [document], { ...base, envelopeStopLossPercent: '1' }, start, start + 7200, 3600);
     expect(state.exitReasons).toEqual({ SL: 1 }); expect(state.entries).toBe(1);
     expect(state.trades[0]!.exitPrice).toBeCloseTo(97 * .9998, 10);
   });

@@ -39,6 +39,8 @@ import { currentEnvelopeSettings, currentPullbackSettings, envelopeParameters, e
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
 import { EnvelopeSideRatioControl } from './EnvelopeSideRatioControl';
+import { EnvelopeCandleFilterControl } from './EnvelopeCandleFilterControl';
+import { EnvelopeStopLossControl } from './EnvelopeStopLossControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
@@ -102,6 +104,8 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     envelopeCloseOnConfirmedBreakout: false,
     envelopeCloseOnCenterReturn: false,
     envelopeSideRatio50Enabled: false,
+    envelopeStopLossPercent: strategy === 'ENVELOPE' ? '3' : undefined,
+    envelopeCandleFilterEnabled: false,
     newHighLookback: '20',
     newHighSlMultiplier: '2',
     newHighMa60Enabled: false,
@@ -867,9 +871,11 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
               <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
               <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
+              <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
               <h2>엔벨로프 중심선 봉수</h2>
               <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
               <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '3'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용</small></label>
+              <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
             </>
           ) : strategy === 'VOLATILITY' ? (
             <>

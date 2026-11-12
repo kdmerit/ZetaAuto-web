@@ -27,7 +27,7 @@ describe('fixed-leverage envelope account replay', () => {
     const prepared = prepareSymbolBlock('BTCUSDT', rows, settings, 'ENVELOPE', start, end);
     const state = initialPortfolio(1000); replayPortfolioBlock(state, [prepared], settings, start, end, 3600);
     const result = await replayFixedEnvelope(prepared, { ...settings, envelopeRisk: { symbol: 'BTCUSDT', checkedAt: Date.now(), maxLeverage: 1, model: 'ISOLATED_ESTIMATE_V1', tiers: [{ limit: 1000000, maintenanceRate: .005, deduction: 0, maxLeverage: 1 }] } as ContractRisk }, 3600, new AbortController().signal, async () => {});
-    expect(result).toEqual(portfolioResult(state, settings)); expect(result.entryCount).toBe(2); expect(fetch).not.toHaveBeenCalled();
+    expect(result).toEqual(portfolioResult(state, settings)); expect(result.entryCount).toBe(1); expect(fetch).not.toHaveBeenCalled();
   });
   it('preserves the entered decimal leverage and strips only the old risk snapshot', () => {
     const risk = { symbol: 'BTCUSDT', checkedAt: Date.now(), maxLeverage: 1, model: 'ISOLATED_ESTIMATE_V1' as const, tiers: [] };

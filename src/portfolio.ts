@@ -3,6 +3,7 @@ import type { PreparedBar, PreparedSymbol } from './engine';
 import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, ContractRisk, Execution, PriceLine, Signal } from './types';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
 import { envelopeHalfCandleAllowsEntry, envelopeParameters } from './envelope';
+import { envelopeCandleAllowsEntry } from './envelopeCandleFilter';
 import { newHighRiskAmount, newHighSlMultiplier } from './newHigh';
 import { estimatedLiquidation } from './contractRisk';
 
@@ -257,7 +258,7 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     ? entry - direction * signal.volatilityAtr * 2
     : signal.stop;
   const envelopeStop = signal.strategy === 'ENVELOPE' && signal.envelopeEntryMode === 'BAND_TOUCH'
-    ? entry * (1 - direction * signal.envelopeDeviationPercent! / 100)
+    ? entry * (1 - direction * (signal.envelopeStopLossPercent ?? signal.envelopeDeviationPercent!) / 100)
     : signal.strategy === 'ENVELOPE' && signal.second !== undefined
       ? signal.second - direction * Math.abs(entry - signal.second)
       : activeStop;
@@ -659,18 +660,24 @@ type EnvelopeEntryDefinition = ReturnType<typeof envelopeEntryDefinitions>[numbe
 
 function envelopeEntrySignal(definition: EnvelopeEntryDefinition, price: number, parent: Candle): Signal {
   const { side, band, parameters } = definition;
-  const { percent, period } = envelopeParameters(parameters);
+  const { percent, stopPercent, period } = envelopeParameters(parameters);
   const target = side === 'LONG' ? band.upper : band.lower;
   return {
     strategy: 'ENVELOPE', side, index: parent.openTime, entry: price,
-    stop: price * (1 + (side === 'LONG' ? -1 : 1) * percent / 100), target, initialTarget: target,
+    stop: price * (1 + (side === 'LONG' ? -1 : 1) * stopPercent / 100), target, initialTarget: target,
     exitMode: 'ENVELOPE_TOUCH', envelopeDeviationPercent: percent, envelopeExitMode: 'OPPOSITE',
+    envelopeStopLossPercent: stopPercent,
     envelopeCloseOnConfirmedBreakout: parameters.envelopeCloseOnConfirmedBreakout === true,
     envelopeCloseOnCenterReturn: parameters.envelopeCloseOnCenterReturn === true,
     envelopeMaPeriod: period, envelopeCenter: band.center, envelopeMoveSlOnCenter: false,
     envelopeEntryMode: 'BAND_TOUCH',
     ...(band.sourceInterval ? { envelopeSourceInterval: band.sourceInterval } : {}),
   };
+}
+
+function envelopeShapeAllows(definition: EnvelopeEntryDefinition, bar: PreparedBar, candle: Candle, prices: readonly number[]): boolean {
+  return definition.parameters.envelopeCandleFilterEnabled !== true
+    || envelopeCandleAllowsEntry(bar.envelopeCandleContexts?.get(candle.openTime), definition.side, prices);
 }
 
 /** Replay band-limit fills in both OHLC orders; only movement after a fill can exit it. */
@@ -700,14 +707,16 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
           atPrice(state, symbol, executionCandle.open, executionCandle, enteredSettings, true);
         }
         if (!attempted) {
-          const atOpen = definitions.find(definition => definition.side === 'LONG'
-            ? executionCandle.open <= definition.price : executionCandle.open >= definition.price);
+          const atOpen = definitions.find(definition => (definition.side === 'LONG'
+            ? executionCandle.open <= definition.price : executionCandle.open >= definition.price)
+            && envelopeShapeAllows(definition, bar, executionCandle, [executionCandle.open]));
           if (atOpen) fill(atOpen, executionCandle.open, executionCandle);
         }
         for (let index = 1; index < path.length && (!attempted || state.positions[symbol]); index += 1) {
           const after = path[index]!;
           if (!attempted) {
-            const crossed = definitions.filter(definition => definition.price >= Math.min(before, after) && definition.price <= Math.max(before, after))
+            const crossed = definitions.filter(definition => definition.price >= Math.min(before, after) && definition.price <= Math.max(before, after)
+              && envelopeShapeAllows(definition, bar, executionCandle, [...path.slice(0, index), definition.price]))
               .sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
             const first = crossed[0];
             if (first) { fill(first, first.price, executionCandle); before = first.price; }
@@ -734,13 +743,15 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
       enteredSettings = parameters;
       enter(state, symbol, envelopeEntrySignal(definition, price, candle), candle, parameters);
     };
-    const atOpen = definitions.find(definition => definition.side === 'LONG' ? candle.open <= definition.price : candle.open >= definition.price);
+    const atOpen = definitions.find(definition => (definition.side === 'LONG' ? candle.open <= definition.price : candle.open >= definition.price)
+      && envelopeShapeAllows(definition, bar, candle, [candle.open]));
     if (atOpen) fill(atOpen, candle.open);
     for (let index = 1; index < path.length; index += 1) {
       let before = path[index - 1]!;
       const after = path[index]!;
       if (!attempted) {
-        const crossed = definitions.filter(definition => definition.price >= Math.min(before, after) && definition.price <= Math.max(before, after))
+        const crossed = definitions.filter(definition => definition.price >= Math.min(before, after) && definition.price <= Math.max(before, after)
+          && envelopeShapeAllows(definition, bar, candle, [...path.slice(0, index), definition.price]))
           .sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
         const first = crossed[0];
         if (first) { fill(first, first.price); before = first.price; }
@@ -1213,8 +1224,9 @@ function replayEnvelopeSideLimitedRows(state: PortfolioState, rows: { symbol: st
       };
       for (const row of entries) {
         if (blocked.has(row.symbol)) continue;
-        const definition = row.definitions.find(candidate => candidate.side === 'LONG'
-          ? row.candle.open <= candidate.price : row.candle.open >= candidate.price);
+        const definition = row.definitions.find(candidate => (candidate.side === 'LONG'
+          ? row.candle.open <= candidate.price : row.candle.open >= candidate.price)
+          && envelopeShapeAllows(candidate, row.bar, row.candle, [row.candle.open]));
         if (definition) fill(row, definition, row.candle.open);
       }
       const paths = entries.map(row => lowFirst
@@ -1237,7 +1249,9 @@ function replayEnvelopeSideLimitedRows(state: PortfolioState, rows: { symbol: st
               : blocked.has(row.symbol) || attempted.has(row.symbol) ? [] : row.definitions.map(definition => ({ price: definition.price, definition }));
             return candidates.flatMap(candidate => {
               const progress = (candidate.price - before) / (after - before);
-              return progress > cursors[index]! + 1e-12 && progress <= 1 + 1e-12 ? [{ ...candidate, progress: Math.min(1, progress), row, index }] : [];
+              return progress > cursors[index]! + 1e-12 && progress <= 1 + 1e-12
+                && (!candidate.definition || envelopeShapeAllows(candidate.definition, row.bar, row.candle, [...paths[index]!.slice(0, segment), candidate.price]))
+                ? [{ ...candidate, progress: Math.min(1, progress), row, index }] : [];
             });
           }).sort((a, b) => a.progress - b.progress || Number(!a.definition) - Number(!b.definition) || a.row.symbol.localeCompare(b.row.symbol, 'en'));
           const next = events[0];
