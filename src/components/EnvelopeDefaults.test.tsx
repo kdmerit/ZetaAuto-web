@@ -70,8 +70,9 @@ describe('envelope input defaults and arrangement', () => {
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain('id="envelope-candle-filter-conditions" hidden=""');
     expect(html).toContain('<rect x="8" y="3" width="12" height="12"');
-    expect(html).toContain('4h 직전 캔들의 윗꼬리');
-    expect(html).toContain('현재 캔들의 저점이 직전 캔들의 저점보다 높으면');
+    expect(html).toContain('4h 직전 캔들이 음봉이고 몸통이 전전 캔들 몸통의 5배 이상이면');
+    expect(html).toContain('4h 현재 캔들이 양봉이고 몸통이 직전 캔들 몸통의 5배 이상이면');
+    expect(html).not.toContain('윗꼬리 +');
     expect(envelopeCandleFilterCopyText).toContain('선택한 백테스트 주기와 관계없이 적용');
     expect(envelopeCandleFilterCopyText.split('\n')).toHaveLength(17);
   });

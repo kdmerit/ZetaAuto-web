@@ -7,6 +7,7 @@ export interface EnvelopeCandleContext {
   beforePreviousDaily: Candle;
   fourHourly: Candle;
   previousFourHourly: Candle;
+  beforePreviousFourHourly: Candle;
 }
 
 /** Two fully completed daily candles plus the current day's observed prefix. */
@@ -22,7 +23,7 @@ export function envelopeCandleContexts(rows: Candle[]): Map<number, EnvelopeCand
   let daily: Aggregate | undefined;
   let fourHourly: Aggregate | undefined;
   const closedDaily: Candle[] = [];
-  let previousFourHourly: Candle | undefined;
+  const closedFourHourly: Candle[] = [];
   const startAggregate = (row: Candle, seconds: number): Aggregate => {
     const start = Math.floor(row.openTime / seconds) * seconds;
     return { candle: { ...row, openTime: start, closeTime: start + seconds, high: row.open, low: row.open, close: row.open, volume: 0 },
@@ -44,18 +45,23 @@ export function envelopeCandleContexts(rows: Candle[]): Map<number, EnvelopeCand
       daily = startAggregate(row, 86400);
     }
     if (!fourHourly || row.openTime >= fourHourly.candle.closeTime) {
-      previousFourHourly = fourHourly?.complete && fourHourly.next === fourHourly.candle.closeTime ? fourHourly.candle : undefined;
+      if (fourHourly?.complete && fourHourly.next === fourHourly.candle.closeTime) closedFourHourly.push(fourHourly.candle);
+      else closedFourHourly.length = 0;
+      while (closedFourHourly.length > 2) closedFourHourly.shift();
       fourHourly = startAggregate(row, 14400);
     }
     const previousDaily = closedDaily.at(-1);
     const beforePreviousDaily = closedDaily.at(-2);
+    const previousFourHourly = closedFourHourly.at(-1);
+    const beforePreviousFourHourly = closedFourHourly.at(-2);
     if (daily.complete && fourHourly.complete && daily.next === row.openTime && fourHourly.next === row.openTime
       && previousDaily?.closeTime === daily.candle.openTime && beforePreviousDaily?.closeTime === previousDaily.openTime
-      && previousFourHourly?.closeTime === fourHourly.candle.openTime) {
+      && previousFourHourly?.closeTime === fourHourly.candle.openTime
+      && beforePreviousFourHourly?.closeTime === previousFourHourly.openTime) {
       const observedOpen = (aggregate: Aggregate): Candle => ({ ...aggregate.candle,
         high: Math.max(aggregate.candle.high, row.open), low: Math.min(aggregate.candle.low, row.open), close: row.open });
       snapshots.set(row.openTime, { daily: observedOpen(daily), previousDaily, beforePreviousDaily,
-        fourHourly: observedOpen(fourHourly), previousFourHourly });
+        fourHourly: observedOpen(fourHourly), previousFourHourly, beforePreviousFourHourly });
     }
     append(daily, row);
     append(fourHourly, row);
@@ -64,10 +70,10 @@ export function envelopeCandleContexts(rows: Candle[]): Map<number, EnvelopeCand
 }
 
 const body = (candle: Candle): number => Math.abs(candle.close - candle.open);
-const imbalance = (candle: Candle): number => {
-  const upper = candle.high - Math.max(candle.open, candle.close);
-  const lower = Math.min(candle.open, candle.close) - candle.low;
-  return upper + Math.max(0, candle.open - candle.close) - lower - Math.max(0, candle.close - candle.open);
+/** Account for binary subtraction of decimal market prices at the inclusive boundary. */
+const fiveTimesBody = (candle: Candle, previous: Candle): boolean => {
+  const tolerance = Number.EPSILON * 8 * Math.max(candle.open, candle.close, previous.open, previous.close);
+  return body(candle) >= 5 * body(previous) - tolerance;
 };
 
 /** Any of the four directional exclusions blocks this entry; equality is literal. */
@@ -77,14 +83,9 @@ export function envelopeCandleAllowsEntry(context: EnvelopeCandleContext | undef
   const daily = observed(context.daily);
   const fourHourly = observed(context.fourHourly);
   const adverse = (candle: Candle): boolean => side === 'LONG' ? candle.close < candle.open : candle.close > candle.open;
-  if (adverse(daily) && body(daily) >= 5 * body(context.previousDaily)) return false;
-  if (adverse(context.previousDaily) && body(context.previousDaily) >= 5 * body(context.beforePreviousDaily)) return false;
-  if (side === 'LONG') {
-    if (imbalance(fourHourly) > 0) return false;
-    if (imbalance(context.previousFourHourly) > 0 && fourHourly.high < context.previousFourHourly.high) return false;
-  } else {
-    if (imbalance(fourHourly) < 0) return false;
-    if (imbalance(context.previousFourHourly) < 0 && fourHourly.low > context.previousFourHourly.low) return false;
-  }
+  if (adverse(daily) && fiveTimesBody(daily, context.previousDaily)) return false;
+  if (adverse(context.previousDaily) && fiveTimesBody(context.previousDaily, context.beforePreviousDaily)) return false;
+  if (adverse(fourHourly) && fiveTimesBody(fourHourly, context.previousFourHourly)) return false;
+  if (adverse(context.previousFourHourly) && fiveTimesBody(context.previousFourHourly, context.beforePreviousFourHourly)) return false;
   return true;
 }

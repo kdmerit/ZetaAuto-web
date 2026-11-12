@@ -13,7 +13,9 @@ function candle(open = 100, high = 101, low = 99, close = 100, at = origin, seco
 function context(): EnvelopeCandleContext {
   return { daily: candle(), previousDaily: candle(99, 101, 98, 100, origin - 86400),
     beforePreviousDaily: candle(99, 101, 98, 100, origin - 2 * 86400),
-    fourHourly: candle(100, 101, 99, 100, origin, 14400), previousFourHourly: candle(100, 101, 99, 100, origin - 14400, 14400) };
+    fourHourly: candle(100, 101, 99, 100, origin, 14400),
+    previousFourHourly: candle(99, 101, 98, 100, origin - 14400, 14400),
+    beforePreviousFourHourly: candle(99, 101, 98, 100, origin - 28800, 14400) };
 }
 function reflected(row: Candle): Candle {
   return { ...row, open: 200 - row.open, high: 200 - row.low, low: 200 - row.high, close: 200 - row.close };
@@ -38,26 +40,32 @@ describe.each(['LONG', 'SHORT'] as const)('directional candle exclusions: %s', s
     input.previousDaily.open = 104.9999;
     expect(allows(input, side)).toBe(true);
   });
-  it('uses upper wick plus bearish body versus lower wick plus bullish body, with strict inequality', () => {
+  it('rejects the current adverse 4h body at exactly 5x and permits just below it', () => {
     const input = context();
-    input.fourHourly = candle(100, 102, 99, 100, origin, 14400);
+    input.fourHourly = candle(105, 106, 99, 100, origin, 14400);
     expect(allows(input, side)).toBe(false);
-    input.fourHourly.high = 101;
-    expect(allows(input, side)).toBe(true);
-    input.fourHourly = candle(102, 102, 99, 100, origin, 14400);
-    expect(allows(input, side)).toBe(false);
-    input.fourHourly = candle(98, 101, 98, 100, origin, 14400);
+    input.fourHourly.open = 104.9999;
     expect(allows(input, side)).toBe(true);
   });
-  it('requires both the previous 4h imbalance AND the current lower high / higher low', () => {
+  it('rejects the previous adverse 4h body independently of current highs and lows', () => {
     const input = context();
-    input.previousFourHourly = candle(100, 103, 99, 100, origin - 14400, 14400);
-    input.fourHourly = candle(100, 102, 98, 100, origin, 14400);
+    input.previousFourHourly = candle(105, 106, 99, 100, origin - 14400, 14400);
     expect(allows(input, side)).toBe(false);
-    input.fourHourly = candle(100, 103, 97, 100, origin, 14400);
+    input.previousFourHourly.open = 104.9999;
     expect(allows(input, side)).toBe(true);
-    input.fourHourly = candle(100, 102, 98, 100, origin, 14400);
-    input.previousFourHourly = candle(100, 103, 97, 100, origin - 14400, 14400);
+  });
+  it('ignores wick imbalance and does not reject large favorable bodies', () => {
+    const input = context();
+    input.fourHourly = candle(94, 150, 93, 100, origin, 14400);
+    input.previousFourHourly = candle(94, 150, 93, 100, origin - 14400, 14400);
+    expect(allows(input, side)).toBe(true);
+  });
+  it('includes the exact 5x boundary for decimal market prices', () => {
+    const input = context();
+    input.fourHourly = candle(100.05, 100.05, 100, 100, origin, 14400);
+    input.previousFourHourly = candle(99.99, 100, 99.99, 100, origin - 14400, 14400);
+    expect(allows(input, side)).toBe(false);
+    input.fourHourly.open = 100.04999;
     expect(allows(input, side)).toBe(true);
   });
   it('does not invent a nonzero reference body for a doji', () => {
@@ -83,7 +91,8 @@ describe('causal daily/four-hour snapshots', () => {
     rows[192] = candle(97, 180, 10, 20, origin, 900);
     const snapshots = envelopeCandleContexts(rows);
     expect(snapshots.get(origin)).toMatchObject({ daily: { open: 97, high: 97, low: 97, close: 97 },
-      fourHourly: { open: 97, high: 97, low: 97, close: 97 }, previousDaily: { open: 99, close: 100 } });
+      fourHourly: { open: 97, high: 97, low: 97, close: 97 }, previousDaily: { open: 99, close: 100 },
+      beforePreviousFourHourly: { openTime: origin - 28800, closeTime: origin - 14400 } });
     expect(snapshots.get(origin + 900)?.daily).toMatchObject({ open: 97, high: 180, low: 10, close: 97 });
     expect(snapshots.has(origin - 900)).toBe(false);
   });
@@ -122,16 +131,19 @@ describe('entry execution, independent SL and persisted filters', () => {
       expect(state.entries).toBe(enabled ? 0 : 1);
     }
   });
-  it.each([false, true])('does not use a 15m candle high formed after the fill, allocation=%s', limited => {
-    const lower = history(); lower[192] = candle(97, 103, 95, 100, origin, 900);
-    const all = [...parents.slice(0, -1), candle(97, 103, 95, 97, origin, 3600)];
-    const parameters = { ...settings, envelopeSideRatio50Enabled: limited };
-    const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', origin, origin + 3600,
-      undefined, undefined, undefined, undefined, undefined, undefined, lower);
-    const state = initialPortfolio(1000);
-    replayPortfolioBlock(state, [document], parameters, origin, origin + 3600, 3600);
-    expect(state.entries).toBe(1);
-    expect(state.positions.BTCUSDT?.signal.envelopeStopLossPercent ?? state.trades[0]?.signal.envelopeStopLossPercent).toBe(3);
+  it.each([false, true])('does not use an adverse 15m body formed after the fill, allocation=%s', limited => {
+    for (const side of ['LONG', 'SHORT'] as const) {
+      let lower = history(); lower[192] = candle(97, 103, 80, 81, origin, 900);
+      let all = [...parents.slice(0, -1), candle(97, 103, 80, 97, origin, 3600)];
+      if (side === 'SHORT') { lower = lower.map(reflected); all = all.map(reflected); }
+      const parameters = { ...settings, side, envelopeSideRatio50Enabled: limited };
+      const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', origin, origin + 3600,
+        undefined, undefined, undefined, undefined, undefined, undefined, lower);
+      const state = initialPortfolio(1000);
+      replayPortfolioBlock(state, [document], parameters, origin, origin + 3600, 3600);
+      expect(state.entries).toBe(1);
+      expect(state.positions.BTCUSDT?.signal.envelopeStopLossPercent ?? state.trades[0]?.signal.envelopeStopLossPercent).toBe(3);
+    }
   });
   it.each(['LONG', 'SHORT'] as const)('keeps %s SL independent of the envelope width and retains the fill adjustment', side => {
     const parameters = { ...settings, side, envelopeCandleFilterEnabled: false, envelopeDeviationPercent: '3', envelopeStopLossPercent: '1' };

@@ -18,17 +18,18 @@ const version = envelopeOptimizerVersion;
 const previousFixedEntryVersion = '2.10.46';
 const previousHalfFilterVersion = '2.10.88';
 const previousSharedStopVersion = '2.10.89';
+const previousCandleFilterVersion = '2.10.91';
 
 export type StatisticsSide = 'LONG' | 'SHORT';
 export type DirectionalBests = Partial<Record<StatisticsSide, EnvelopeStatisticsRow | null>>;
 export const statisticsSideLabel = (side: StatisticsSide): string => side === 'LONG' ? '롱' : '숏';
 export const selectedStatisticsSides = (settings: Pick<BacktestSettings, 'side'>): StatisticsSide[] => settings.side === 'LONG' ? ['LONG'] : settings.side === 'SHORT' ? ['SHORT'] : ['LONG', 'SHORT'];
 export const isCurrentEnvelopeStatisticsVersion = (value: string | undefined): boolean => value === version;
-export const isFilteredEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion, previousSharedStopVersion].includes(value ?? '') || isCurrentEnvelopeStatisticsVersion(value);
+export const isFilteredEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion, previousSharedStopVersion, previousCandleFilterVersion].includes(value ?? '') || isCurrentEnvelopeStatisticsVersion(value);
 export const isReclaimStatisticsVersion = (value: string | undefined): boolean => value === '2.10.43' || isFilteredEnvelopeStatisticsVersion(value);
 export const isDirectionalStatisticsVersion = (value: string | undefined): boolean => value === '2.10.42' || isReclaimStatisticsVersion(value);
-export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.40', '2.10.41', '2.10.42', '2.10.43', '2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion, previousSharedStopVersion, version].includes(value ?? '');
-export const usesFiveEnvelopePeriods = (value: string | undefined): boolean => value === previousHalfFilterVersion || value === previousSharedStopVersion || isCurrentEnvelopeStatisticsVersion(value);
+export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.40', '2.10.41', '2.10.42', '2.10.43', '2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion, previousSharedStopVersion, previousCandleFilterVersion, version].includes(value ?? '');
+export const usesFiveEnvelopePeriods = (value: string | undefined): boolean => value === previousHalfFilterVersion || value === previousSharedStopVersion || value === previousCandleFilterVersion || isCurrentEnvelopeStatisticsVersion(value);
 export const optimalSettingCriteria = '진입 2회 이상 · 승률 60% 이상 · 수익률 2% 이상';
 export function qualifiesEnvelopeSetting(row: Pick<EnvelopeStatisticsRow, 'entryCount' | 'winRatePercent' | 'returnPercent'>): boolean {
   return row.entryCount >= 2 && row.winRatePercent !== null && Number.isFinite(row.winRatePercent) && row.winRatePercent >= 60
