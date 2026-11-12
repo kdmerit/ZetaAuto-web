@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { defaultSettings, StrategyBacktest } from './StrategyBacktest';
 import { EnvelopeWorkspace } from './EnvelopeWorkspace';
+import { envelopeCandleFilterCopyText } from './EnvelopeCandleFilterControl';
 import { saveSettings } from '../storage';
 
 const context = { apiBaseUrl: 'https://example.invalid', accessToken: 'fixture-only' };
@@ -60,6 +61,16 @@ describe('envelope input defaults and arrangement', () => {
     expect(html).not.toContain('종가 &gt; 엔벨로프 상단 확정 시 청산 (롱)');
     expect(html).not.toContain('첫 번째는 롱 저가');
     expect(ratio).toBeLessThan(html.indexOf('<h2>엔벨로프 중심선 봉수</h2>'));
+  });
+
+  it('shows and copies the four directional candle-entry exclusions', () => {
+    const html = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
+    expect(html).toContain('매수금지 조건');
+    expect(html).toContain('조건 복사');
+    expect(html).toContain('4h 직전 캔들의 윗꼬리');
+    expect(html).toContain('현재 캔들의 저점이 직전 캔들의 저점보다 높으면');
+    expect(envelopeCandleFilterCopyText).toContain('선택한 백테스트 주기와 관계없이 적용');
+    expect(envelopeCandleFilterCopyText.split('\n')).toHaveLength(17);
   });
 
   it('retains explicit saved intervals, deviations and unchecked filters', () => {

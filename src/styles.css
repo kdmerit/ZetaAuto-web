@@ -99,6 +99,15 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .checkbox-row { display: flex; align-items: center; gap: 10px; color: #f4f7fb; font-weight: 700; }
 .checkbox-row input, .ma-toggle input { width: 20px; height: 20px; accent-color: #7ea2ff; }
 .checkbox-row .distance-input { width: 72px; height: 36px; min-height: 36px; border: 1px solid #34435b; border-radius: 8px; background: #0d1421; color: #f4f7fb; padding: 0 8px; accent-color: auto; }
+.candle-filter-info { display: flex; flex-direction: column; gap: 10px; margin: -4px 0 0 30px; padding: 14px; border: 1px solid #34435b; border-radius: 12px; background: #202d42; color: #aab6c8; font-size: 13px; line-height: 1.55; }
+.candle-filter-info p { margin: 0; }
+.candle-filter-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.candle-filter-heading strong { color: #f4f7fb; font-size: 15px; }
+.candle-filter-copy { flex: 0 0 auto; min-height: 34px; padding: 4px 10px; border: 1px solid #7ea2ff; border-radius: 8px; background: transparent; color: #7ea2ff; font-size: 12px; font-weight: 800; }
+.candle-filter-copy:hover { background: rgba(126, 162, 255, .12); }
+.candle-filter-side { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; border-top: 1px solid #34435b; }
+.candle-filter-side strong { color: #7ea2ff; }
+.candle-filter-footnote { color: #7f8da4; font-size: 12px; }
 .sizing-choice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; border: 0; padding: 0; margin: 0; }
 .sizing-choice-label { grid-column: 1 / -1; color: #f4f7fb; font-weight: 700; }
 .radio-option { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 10px; border: 1px solid #34435b; border-radius: 10px; background: transparent; color: #aab6c8; font-weight: 700; }
