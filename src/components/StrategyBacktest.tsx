@@ -40,7 +40,7 @@ import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
 import { EnvelopeSideRatioControl } from './EnvelopeSideRatioControl';
 import { EnvelopeCandleFilterControl } from './EnvelopeCandleFilterControl';
-import { EnvelopeStopLossControl } from './EnvelopeStopLossControl';
+import { EnvelopeStopLossControl, EnvelopeTrailingStopControl } from './EnvelopeStopLossControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
@@ -105,6 +105,8 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     envelopeCloseOnCenterReturn: false,
     envelopeSideRatio50Enabled: false,
     envelopeStopLossPercent: strategy === 'ENVELOPE' ? '3' : undefined,
+    envelopeTrailingStopEnabled: strategy === 'ENVELOPE' ? false : undefined,
+    envelopeTrailingStopPercent: strategy === 'ENVELOPE' ? '3' : undefined,
     envelopeCandleFilterEnabled: false,
     newHighLookback: '20',
     newHighSlMultiplier: '2',
@@ -160,6 +162,7 @@ const reasonLabels: Record<string, string> = {
   MA60_TOUCH: 'MA60 접촉 청산',
   MA20_HALF_BREAK: '캔들 절반 MA20 청산',
   ROI_LOSS: 'ROI 손실 청산',
+  TRAILING_STOP: '트레일링 스탑 청산',
   SESSION_CLOSE: '신호 캔들 마감 청산',
   VOLATILITY_CLOSE: '변동폭 K1 종가 청산',
   VOLATILITY_MA5_EXIT: '수익구간 MA5 기준 청산',
@@ -876,6 +879,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
               <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '3'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용</small></label>
               <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
+              <EnvelopeTrailingStopControl enabled={settings.envelopeTrailingStopEnabled === true} value={settings.envelopeTrailingStopPercent ?? '3'} onToggle={enabled => update('envelopeTrailingStopEnabled', enabled)} onChange={value => update('envelopeTrailingStopPercent', value)} />
             </>
           ) : strategy === 'VOLATILITY' ? (
             <>
