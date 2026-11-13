@@ -76,7 +76,17 @@ const fiveTimesBody = (candle: Candle, previous: Candle): boolean => {
   return body(candle) >= 5 * body(previous) - tolerance;
 };
 
-/** Any of the four directional exclusions blocks this entry; equality is literal. */
+/** Both wick thresholds must hold on the same daily candle; equality blocks. */
+export function envelopeDailyWickBlocksEntry(candle: Candle, side: 'LONG' | 'SHORT'): boolean {
+  const range = candle.high - candle.low;
+  if (range <= 0) return false;
+  const wick = side === 'LONG' ? candle.high - Math.max(candle.open, candle.close) : Math.min(candle.open, candle.close) - candle.low;
+  const adverseBody = Math.max(side === 'LONG' ? candle.open - candle.close : candle.close - candle.open, 0);
+  const tolerance = Number.EPSILON * 8 * Math.max(candle.high, Math.abs(candle.low));
+  return wick >= 3 * body(candle) - tolerance && 10 * (wick + adverseBody) >= 7 * range - 10 * tolerance;
+}
+
+/** Any current/previous 1d/4h body or current/previous 1d wick exclusion blocks entry. */
 export function envelopeCandleAllowsEntry(context: EnvelopeCandleContext | undefined, side: 'LONG' | 'SHORT', prices: readonly number[]): boolean {
   if (!context || !prices.length || prices.some(price => !Number.isFinite(price) || price <= 0)) return false;
   const observed = (candle: Candle): Candle => ({ ...candle, high: Math.max(candle.high, ...prices), low: Math.min(candle.low, ...prices), close: prices.at(-1)! });
@@ -87,5 +97,6 @@ export function envelopeCandleAllowsEntry(context: EnvelopeCandleContext | undef
   if (adverse(context.previousDaily) && fiveTimesBody(context.previousDaily, context.beforePreviousDaily)) return false;
   if (adverse(fourHourly) && fiveTimesBody(fourHourly, context.previousFourHourly)) return false;
   if (adverse(context.previousFourHourly) && fiveTimesBody(context.previousFourHourly, context.beforePreviousFourHourly)) return false;
+  if (envelopeDailyWickBlocksEntry(daily, side) || envelopeDailyWickBlocksEntry(context.previousDaily, side)) return false;
   return true;
 }

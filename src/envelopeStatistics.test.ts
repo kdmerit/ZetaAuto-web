@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { intervalSeconds } from './api';
 import { cacheCandles, openCacheDatabase, readValue, writeValue } from './database';
-import { executeEnvelopeStatistics, loadEnvelopeStatistics, selectedStatisticsIntervals, statisticsAnalysisWindow, statisticsIntervals, statisticsProgress, statisticsTotalFor, type EnvelopeStatisticsJob } from './envelopeStatistics';
+import { executeEnvelopeStatistics, isCurrentEnvelopeStatisticsVersion, loadEnvelopeStatistics, selectedStatisticsIntervals, statisticsAnalysisWindow, statisticsIntervals, statisticsProgress, statisticsTotalFor, usesFiveEnvelopePeriods, type EnvelopeStatisticsJob } from './envelopeStatistics';
 import { currentEnvelopeSettings } from './envelope';
 import { analysisWindow } from './marketData';
 import type { BacktestSettings, Candle } from './types';
@@ -51,6 +51,11 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('envelope breakout statistics', () => {
+  it('keeps v2.10.92 report totals without treating the body-only engine as current', () => {
+    expect(isCurrentEnvelopeStatisticsVersion('2.10.92')).toBe(false);
+    expect(usesFiveEnvelopePeriods('2.10.92')).toBe(true);
+    expect(statisticsTotalFor(settings, '2.10.92')).toBe(2000);
+  });
   it('offers only 1h, 4h and 1d and uses the selected period for validation', () => {
     expect(statisticsIntervals).toEqual(['1h', '4h', '1d']);
     expect(selectedStatisticsIntervals({ envelopeStatisticsInterval: '4h' })).toEqual(['4h']);

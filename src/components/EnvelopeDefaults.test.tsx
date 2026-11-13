@@ -63,7 +63,7 @@ describe('envelope input defaults and arrangement', () => {
     expect(ratio).toBeLessThan(html.indexOf('<h2>엔벨로프 중심선 봉수</h2>'));
   });
 
-  it('shows and copies the four directional candle-entry exclusions', () => {
+  it('shows and copies the body and daily wick exclusions', () => {
     const html = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
     expect(html).toContain('매수금지 조건');
     expect(html).toContain('조건 복사');
@@ -72,9 +72,10 @@ describe('envelope input defaults and arrangement', () => {
     expect(html).toContain('<rect x="8" y="3" width="12" height="12"');
     expect(html).toContain('4h 직전 캔들이 음봉이고 몸통이 전전 캔들 몸통의 5배 이상이면');
     expect(html).toContain('4h 현재 캔들이 양봉이고 몸통이 직전 캔들 몸통의 5배 이상이면');
-    expect(html).not.toContain('윗꼬리 +');
+    expect(html).toContain('윗꼬리 + 음봉 몸통이 전체 캔들 길이의 70% 이상');
+    expect(html).toContain('아랫꼬리 + 양봉 몸통이 전체 캔들 길이의 70% 이상');
     expect(envelopeCandleFilterCopyText).toContain('선택한 백테스트 주기와 관계없이 적용');
-    expect(envelopeCandleFilterCopyText.split('\n')).toHaveLength(17);
+    expect(envelopeCandleFilterCopyText.split('\n')).toHaveLength(19);
   });
 
   it('retains explicit saved intervals, deviations and unchecked filters', () => {
