@@ -76,8 +76,8 @@ const fiveTimesBody = (candle: Candle, previous: Candle): boolean => {
   return body(candle) >= 5 * body(previous) - tolerance;
 };
 
-/** Both wick thresholds must hold on the same daily candle; equality blocks. */
-export function envelopeDailyWickBlocksEntry(candle: Candle, side: 'LONG' | 'SHORT'): boolean {
+/** Both wick thresholds must hold on the same 1d or 4h candle; equality blocks. */
+export function envelopeWickBlocksEntry(candle: Candle, side: 'LONG' | 'SHORT'): boolean {
   const range = candle.high - candle.low;
   if (range <= 0) return false;
   const wick = side === 'LONG' ? candle.high - Math.max(candle.open, candle.close) : Math.min(candle.open, candle.close) - candle.low;
@@ -86,7 +86,7 @@ export function envelopeDailyWickBlocksEntry(candle: Candle, side: 'LONG' | 'SHO
   return wick >= 3 * body(candle) - tolerance && 10 * (wick + adverseBody) >= 7 * range - 10 * tolerance;
 }
 
-/** Any current/previous 1d/4h body or current/previous 1d wick exclusion blocks entry. */
+/** Any current/previous 1d/4h body or wick exclusion blocks entry. */
 export function envelopeCandleAllowsEntry(context: EnvelopeCandleContext | undefined, side: 'LONG' | 'SHORT', prices: readonly number[]): boolean {
   if (!context || !prices.length || prices.some(price => !Number.isFinite(price) || price <= 0)) return false;
   const observed = (candle: Candle): Candle => ({ ...candle, high: Math.max(candle.high, ...prices), low: Math.min(candle.low, ...prices), close: prices.at(-1)! });
@@ -97,6 +97,7 @@ export function envelopeCandleAllowsEntry(context: EnvelopeCandleContext | undef
   if (adverse(context.previousDaily) && fiveTimesBody(context.previousDaily, context.beforePreviousDaily)) return false;
   if (adverse(fourHourly) && fiveTimesBody(fourHourly, context.previousFourHourly)) return false;
   if (adverse(context.previousFourHourly) && fiveTimesBody(context.previousFourHourly, context.beforePreviousFourHourly)) return false;
-  if (envelopeDailyWickBlocksEntry(daily, side) || envelopeDailyWickBlocksEntry(context.previousDaily, side)) return false;
+  if (envelopeWickBlocksEntry(daily, side) || envelopeWickBlocksEntry(context.previousDaily, side)) return false;
+  if (envelopeWickBlocksEntry(fourHourly, side) || envelopeWickBlocksEntry(context.previousFourHourly, side)) return false;
   return true;
 }

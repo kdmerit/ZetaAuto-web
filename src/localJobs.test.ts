@@ -117,17 +117,17 @@ describe('durable local analysis', () => {
     const whole = (await loadLocalJob('NEW_HIGH'))!;
     expect({ ...whole.result, localRunId: undefined }).toEqual({ ...saved.result, localRunId: undefined });
   });
-  it('preserves an old envelope checkpoint but requires a new analysis after the reclaim model change', async () => {
+  it.each(['2.10.36', '2.10.94'])('preserves an old envelope checkpoint %s but requires a new analysis after the model change', async version => {
     const controller = new AbortController();
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, view => { if (view.blockStart > origin) controller.abort(); }, controller.signal);
     const header = (await readValue<Record<string, unknown>>('jobs', 'ENVELOPE'))!;
-    await writeValue('jobs', 'ENVELOPE', { ...header, version: '2.10.36' });
+    await writeValue('jobs', 'ENVELOPE', { ...header, version });
     const paused = (await loadLocalJob('ENVELOPE'))!; expect(canResumeLocalJob(paused)).toBe(false);
     expect(canResumeLocalJob({ ...paused, settings: { ...settings, envelopeMoveSlOnCenter: true } })).toBe(false);
     await expect(executeLocalJob({ strategy: 'ENVELOPE', resumeId: paused.id }, () => {}, new AbortController().signal)).rejects.toThrow('새 분석');
     expect((await loadLocalJob('ENVELOPE'))!.id).toBe(paused.id);
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, () => {}, new AbortController().signal);
-    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.94');
+    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.95');
   });
   it('preserves the selected envelope timeframe and drops the legacy daily filter', async () => {
     for (const mode of ['SINGLE', 'ALL'] as const) for (const envelopeDailyTrend of [true, false]) {

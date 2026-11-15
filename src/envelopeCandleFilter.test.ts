@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { envelopeCandleAllowsEntry, envelopeCandleContexts, envelopeCandleDataStart, envelopeDailyWickBlocksEntry, type EnvelopeCandleContext } from './envelopeCandleFilter';
+import { envelopeCandleAllowsEntry, envelopeCandleContexts, envelopeCandleDataStart, envelopeWickBlocksEntry, type EnvelopeCandleContext } from './envelopeCandleFilter';
 import { currentEnvelopeSettings, envelopeParameters } from './envelope';
 import { prepareSymbolBlock } from './engine';
 import { initialPortfolio, replayPortfolioBlock } from './portfolio';
@@ -54,10 +54,10 @@ describe.each(['LONG', 'SHORT'] as const)('directional candle exclusions: %s', s
     input.previousFourHourly.open = 104.9999;
     expect(allows(input, side)).toBe(true);
   });
-  it('ignores wick imbalance and does not reject large favorable bodies', () => {
+  it('permits large favorable bodies when the wick is shorter than three bodies', () => {
     const input = context();
-    input.fourHourly = candle(94, 150, 93, 100, origin, 14400);
-    input.previousFourHourly = candle(94, 150, 93, 100, origin - 14400, 14400);
+    input.fourHourly = candle(94, 117.5, 93, 100, origin, 14400);
+    input.previousFourHourly = candle(94, 117.5, 93, 100, origin - 14400, 14400);
     expect(allows(input, side)).toBe(true);
   });
   it('includes the exact 5x boundary for decimal market prices', () => {
@@ -85,7 +85,7 @@ function history(): Candle[] {
     return candle(99 + part / 96, 99 + (part + 1) / 96, 99 + part / 96, 99 + (part + 1) / 96, at, 900);
   });
 }
-describe.each(['LONG', 'SHORT'] as const)('daily wick exclusion: %s', side => {
+describe.each(['LONG', 'SHORT'] as const)('daily/four-hour wick exclusion: %s', side => {
   it.each([
     ['exactly three bodies', 1, 4, -1, true],
     ['less than three bodies', 1, 3.9999, -1, false],
@@ -96,18 +96,19 @@ describe.each(['LONG', 'SHORT'] as const)('daily wick exclusion: %s', side => {
     ['doji with long wick', 0, 7, -3, true],
     ['doji with balanced wicks', 0, 5, -5, false],
     ['flat candle', 0, 0, 0, false],
-  ] as const)('%s, on either current or previous daily candle', (_, open, high, low, blocked) => {
-    for (const target of ['daily', 'previousDaily'] as const) {
+  ] as const)('%s, on either current or previous 1d/4h candle', (_, open, high, low, blocked) => {
+    for (const target of ['daily', 'previousDaily', 'fourHourly', 'previousFourHourly'] as const) {
       const input = context();
-      input[target] = candle(100 + open, 100 + high, 100 + low, 100, input[target].openTime);
+      input[target] = { ...input[target], open: 100 + open, high: 100 + high, low: 100 + low, close: 100 };
       expect(allows(input, side)).toBe(!blocked);
     }
   });
-  it('requires both thresholds on the same candle and never uses a 4h wick', () => {
+  it('does not combine thresholds from separate candles or timeframes', () => {
     const input = context();
     input.daily = candle(101, 107, 96, 100);
     input.previousDaily = candle(101, 103.9, 100, 100, origin - 86400);
-    input.fourHourly = candle(100, 107, 97, 100, origin, 14400);
+    input.fourHourly = candle(101, 103.9, 100, 100, origin, 14400);
+    input.previousFourHourly = candle(101, 107, 96, 100, origin - 14400, 14400);
     expect(allows(input, side)).toBe(true);
   });
   it('includes decimal boundaries and uses the latest observed price for the body', () => {
@@ -122,10 +123,23 @@ describe.each(['LONG', 'SHORT'] as const)('daily wick exclusion: %s', side => {
   });
   it('mirrors upper and lower wick calculations exactly', () => {
     const row = candle(101, 104, 99, 100);
-    expect(envelopeDailyWickBlocksEntry(side === 'LONG' ? row : reflected(row), side)).toBe(true);
+    expect(envelopeWickBlocksEntry(side === 'LONG' ? row : reflected(row), side)).toBe(true);
   });
 });
 describe('causal daily/four-hour snapshots', () => {
+  it.each(['LONG', 'SHORT'] as const)('uses observed 4h wicks after the UTC rollover without seeing later 15m prices: %s', side => {
+    const rows = history().slice(0, 192);
+    for (let i = 0; i < 20; i++) rows.push(candle(100, 100, 100, 100, origin + i * 900, 900));
+    rows[192] = candle(90, 100, 90, 100, origin, 900);
+    rows[208] = candle(100, 107, 97, 100, origin + 14400, 900);
+    const snapshots = envelopeCandleContexts(side === 'LONG' ? rows : rows.map(reflected));
+    const before = snapshots.get(origin + 14400);
+    const after = snapshots.get(origin + 14400 + 900)!;
+    expect(envelopeCandleAllowsEntry(before, side, [100])).toBe(true);
+    expect(envelopeWickBlocksEntry(after.daily, side)).toBe(false);
+    expect(envelopeWickBlocksEntry(after.fourHourly, side)).toBe(true);
+    expect(envelopeCandleAllowsEntry(after, side, [100])).toBe(false);
+  });
   it('cannot block a fill using a wick that forms later in the current 15m candle', () => {
     const rows = history(); rows[192] = candle(97, 110, 96, 97, origin, 900);
     const snapshots = envelopeCandleContexts(rows);
@@ -160,21 +174,25 @@ describe('entry execution, independent SL and persisted filters', () => {
   const settings = currentEnvelopeSettings({ ...defaultSettings('ENVELOPE'), interval: '1h', envelopeMa20Enabled: false,
     envelopeMaPeriod: '3', side: 'LONG', envelopeCandleFilterEnabled: true });
   const parents = [...Array.from({ length: 3 }, (_, i) => candle(100, 100, 100, 100, origin - (3 - i) * 3600, 3600)), candle(97, 97, 97, 97, origin, 3600)];
-  it.each([false, true].flatMap(limited => ['BODY', 'CURRENT_WICK', 'PREVIOUS_WICK'].map(rule => [limited, rule] as const)))('blocks opening and crossing fills when enabled, allocation=%s exclusion=%s', (limited, rule) => {
+  it.each([false, true].flatMap(limited => ['BODY', 'CURRENT_WICK', 'PREVIOUS_WICK', 'CURRENT_4H_WICK', 'PREVIOUS_4H_WICK'].flatMap(rule => (['LONG', 'SHORT'] as const).map(side => [limited, rule, side] as const))))('blocks opening and crossing fills when enabled, allocation=%s exclusion=%s side=%s', (limited, rule, side) => {
     for (const enabled of [false, true]) for (const crossing of [false, true]) {
-      const parameters = { ...settings, envelopeCandleFilterEnabled: enabled, envelopeSideRatio50Enabled: limited };
-      const lower = history();
+      const parameters = { ...settings, side, envelopeCandleFilterEnabled: enabled, envelopeSideRatio50Enabled: limited };
+      let lower = history();
       if (crossing) for (let index = 192; index < lower.length; index += 1) {
         lower[index] = candle(100, 100, index === 192 ? 97 : 100, 100, origin + (index - 192) * 900, 900);
       }
-      const all = crossing ? [...parents.slice(0, -1), candle(100, 100, 97, 100, origin, 3600)] : parents;
+      let all = crossing ? [...parents.slice(0, -1), candle(100, 100, 97, 100, origin, 3600)] : parents;
+      if (side === 'SHORT') { lower = lower.map(reflected); all = all.map(reflected); }
       const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', origin, origin + 3600,
         undefined, undefined, undefined, undefined, undefined, undefined, lower);
       const denied = context();
       if (rule === 'BODY') denied.previousDaily = candle(105, 105, 100, 100, origin - 86400);
       else if (rule === 'CURRENT_WICK') denied.daily = candle(98, 104, 94, 97);
-      else denied.previousDaily = candle(101, 107, 97, 100, origin - 86400);
-      for (const bar of document.bars) bar.envelopeCandleContexts = new Map(lower.slice(192).map(row => [row.openTime, denied]));
+      else if (rule === 'PREVIOUS_WICK') denied.previousDaily = candle(101, 107, 97, 100, origin - 86400);
+      else if (rule === 'CURRENT_4H_WICK') denied.fourHourly = candle(98, 104, 94, 97, origin, 14400);
+      else denied.previousFourHourly = candle(101, 107, 97, 100, origin - 14400, 14400);
+      const entryContext = side === 'LONG' ? denied : Object.fromEntries(Object.entries(denied).map(([key, value]) => [key, reflected(value)])) as unknown as EnvelopeCandleContext;
+      for (const bar of document.bars) bar.envelopeCandleContexts = new Map(lower.slice(192).map(row => [row.openTime, entryContext]));
       const state = initialPortfolio(1000);
       replayPortfolioBlock(state, [document], parameters, origin, origin + 3600, 3600);
       expect(state.entries).toBe(enabled ? 0 : 1);
