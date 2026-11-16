@@ -48,6 +48,7 @@ describe('envelope input defaults and arrangement', () => {
     expect(defaultSettings()).toMatchObject({ interval: '15m', envelopeDeviationPercent: '0.5', envelopeMa20Enabled: false });
     const html = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
     expect(html).toMatch(/엔벨로프 이격 \(%\)[\s\S]*?<input[^>]*value="3"/);
+    expect(html).toContain('엔벨로프 개별 종목은 슬리피지 필터 없이 분석합니다.');
   });
 
   it('places the center-return exit immediately after the above-MA20 filter', () => {

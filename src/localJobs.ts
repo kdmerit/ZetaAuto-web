@@ -5,7 +5,7 @@ import { envelopeEntryMayTouch, prepareSymbolBlock, type PreparedSymbol, type Wa
 import { analysisWindow, completedCandleEnd, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
-import { currentEnvelopeSettings, currentPullbackSettings, envelopeModelVersion, envelopeParameters } from './envelope';
+import { currentEnvelopeSettings, currentPullbackSettings, envelopeLocalJobVersion, envelopeParameters } from './envelope';
 import { envelopeCandleDataStart } from './envelopeCandleFilter';
 import { currentNewHighSettings, newHighExecutionInterval, newHighWarmup } from './newHigh';
 import { currentReferenceSettings } from './reference';
@@ -22,7 +22,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.90' : strategy === 'ENVELOPE' ? envelopeModelVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
+  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.90' : strategy === 'ENVELOPE' ? envelopeLocalJobVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);
@@ -89,7 +89,7 @@ export function jobView(job: LocalJob): LocalJobView {
   return {
     ...view, candidateCount: candidates.length, universeCount: universe.length, result,
     completed: job.status === 'COMPLETED' ? total : current, total,
-    progressLabel: job.phase === 'UNIVERSE' ? '종목·슬리피지 확인'
+    progressLabel: job.phase === 'UNIVERSE' ? (skipsSingleEnvelopeSlippage(job) ? '종목 확인' : '종목·슬리피지 확인')
       : job.phase === 'REPLAY' ? '전체 종목 시간순 계산'
         : job.phase === 'DONE' ? '분석 완료' : `캔들 확인 ${universe[job.cursor]?.symbol ?? ''}`,
   };
@@ -97,6 +97,11 @@ export function jobView(job: LocalJob): LocalJobView {
 
 function blockSize(job: LocalJob): number {
   return Math.max(16, Math.min(128, Math.floor(64_000 / Math.max(1, job.universe.length))));
+}
+
+function skipsSingleEnvelopeSlippage(job: Pick<LocalJob, 'strategy' | 'settings' | 'version'>): boolean {
+  return job.strategy === 'ENVELOPE' && job.settings.mode === 'SINGLE'
+    && job.version === envelopeLocalJobVersion;
 }
 
 function applyInstrumentEligibility(prepared: PreparedSymbol, instrument: EligibleInstrument): void {
@@ -218,7 +223,9 @@ async function executeWithLease(
       while (job.cursor < job.candidates.length) {
         signal.throwIfAborted();
         const selected = job.candidates.slice(job.cursor, job.cursor + 4);
-        const checked = await Promise.all(selected.map(instrument => instrumentEligibility(instrument, signal)));
+        const checked: EligibleInstrument[] = skipsSingleEnvelopeSlippage(job)
+          ? selected.map(instrument => ({ ...instrument, LONG: true, SHORT: true }))
+          : await Promise.all(selected.map(instrument => instrumentEligibility(instrument, signal)));
         if (job.settings.mode === 'ALL') job.universeChecks!.push(...checked);
         for (const instrument of checked) {
           const eligible = job.settings.side === 'BOTH' ? instrument.LONG || instrument.SHORT : instrument[job.settings.side];
@@ -235,7 +242,7 @@ async function executeWithLease(
         publishUniverse?.(refreshed);
       }
       delete job.universeChecks;
-      if (!job.universe.length) throw new Error('현재 슬리피지 조건을 통과한 종목이 없습니다. 새 분석을 시작해 주세요.');
+      if (!job.universe.length) throw new Error(skipsSingleEnvelopeSlippage(job) ? '분석할 종목을 확인하지 못했습니다.' : '현재 슬리피지 조건을 통과한 종목이 없습니다. 새 분석을 시작해 주세요.');
       job.universe.sort((a, b) => a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0);
       job.cursor = 0;
       job.phase = 'DATA';

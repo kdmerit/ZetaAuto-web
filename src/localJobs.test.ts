@@ -117,7 +117,7 @@ describe('durable local analysis', () => {
     const whole = (await loadLocalJob('NEW_HIGH'))!;
     expect({ ...whole.result, localRunId: undefined }).toEqual({ ...saved.result, localRunId: undefined });
   });
-  it.each(['2.10.36', '2.10.94'])('preserves an old envelope checkpoint %s but requires a new analysis after the model change', async version => {
+  it.each(['2.10.36', '2.10.95'])('preserves an old envelope checkpoint %s but requires a new analysis after the model change', async version => {
     const controller = new AbortController();
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, view => { if (view.blockStart > origin) controller.abort(); }, controller.signal);
     const header = (await readValue<Record<string, unknown>>('jobs', 'ENVELOPE'))!;
@@ -127,7 +127,7 @@ describe('durable local analysis', () => {
     await expect(executeLocalJob({ strategy: 'ENVELOPE', resumeId: paused.id }, () => {}, new AbortController().signal)).rejects.toThrow('새 분석');
     expect((await loadLocalJob('ENVELOPE'))!.id).toBe(paused.id);
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, () => {}, new AbortController().signal);
-    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.95');
+    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.96');
   });
   it('preserves the selected envelope timeframe and drops the legacy daily filter', async () => {
     for (const mode of ['SINGLE', 'ALL'] as const) for (const envelopeDailyTrend of [true, false]) {
@@ -189,7 +189,7 @@ describe('durable local analysis', () => {
     expect((await readValue<WeeklyUniverseSnapshot>('publicData', weeklyUniverseDatabaseKey))!.checkedAt).toBeGreaterThan(checkedAt);
   });
 
-  it('keeps single-symbol checks separate and does not refilter a paused data-stage job after expiry', async () => {
+  it('keeps ALL slippage checks separate and skips them for a single envelope symbol', async () => {
     vi.mocked(listInstruments).mockClear(); vi.mocked(instrumentEligibility).mockClear();
     vi.mocked(ensureCandles).mockRejectedValueOnce(new Error('temporary candle failure'));
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, () => undefined, new AbortController().signal);
@@ -200,8 +200,9 @@ describe('durable local analysis', () => {
     expect(instrumentEligibility).toHaveBeenCalledTimes(initialCalls);
     vi.mocked(listInstruments).mockResolvedValueOnce([{ symbol: 'AAAUSDT', launchAt: origin - 200 * 3600 }]);
     await executeLocalJob({ strategy: 'ENVELOPE', settings: { ...settings, mode: 'SINGLE' } }, () => undefined, new AbortController().signal);
-    expect(instrumentEligibility).toHaveBeenCalledTimes(initialCalls + 1);
+    expect(instrumentEligibility).toHaveBeenCalledTimes(initialCalls);
     expect(listInstruments).toHaveBeenLastCalledWith('AAAUSDT', expect.any(AbortSignal));
+    expect((await loadLocalJob('ENVELOPE'))?.excludedCount).toBe(0);
   });
   it('resumes from a committed shared-account block with identical trades and totals', async () => {
     vi.mocked(ensureCandles).mockImplementation(async (_instrument, interval, from, end) => {

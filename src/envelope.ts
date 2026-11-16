@@ -5,6 +5,9 @@ export const envelopePeriod = 20;
 export const envelopePeriods = [3, 5, 20, 60, 120];
 export const legacyEnvelopePeriods = [5, 10, 20, 40, 60, 80, 100, 120];
 export const envelopeModelVersion = '2.10.95';
+// The ordinary resumable job has its own version because universe selection
+// changed without changing the shared statistics/replay model.
+export const envelopeLocalJobVersion = '2.10.96';
 export const envelopeExitModes: EnvelopeExitMode[] = ['MA20', 'CENTER', 'OPPOSITE', 'HALF'];
 export const envelopeExitLabels: Record<EnvelopeExitMode, string> = {
   CENTER: '중심선 전량 청산', OPPOSITE: '반대 밴드 전량 청산', HALF: '중심선 50% · 반대 밴드 나머지', MA20: 'MA20 이탈 종가 청산',

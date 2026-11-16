@@ -805,7 +805,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               </button>
             ))}
           </div></> : null}
-          <p className="muted small">저장된 캔들을 우선 사용하고 없는 구간만 조회합니다. 전체 종목은 현재 슬리피지 조건을 통과한 종목을 하나의 가상 계좌에서 분석합니다.</p>
+          <p className="muted small">저장된 캔들을 우선 사용하고 없는 구간만 조회합니다. {strategy === 'ENVELOPE' && settings.mode === 'SINGLE' ? '엔벨로프 개별 종목은 슬리피지 필터 없이 분석합니다.' : '전체 종목은 현재 슬리피지 조건을 통과한 종목을 하나의 가상 계좌에서 분석합니다.'}</p>
           {settings.mode === 'SINGLE' ? (
             <label className="field-label">종목명
               <span className="suffix-field"><input value={baseSymbol(settings.symbol)} onChange={(event) => update('symbol', baseSymbol(event.target.value))} placeholder="BTC" /><b>USDT</b></span>
@@ -931,7 +931,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           {notice && notice !== error ? <p className="notice">{notice}</p> : null}
           {error ? <p className="error" role="alert">{error}</p> : null}
           {running || localJob?.status === 'PAUSED' ? <ProgressBar completed={progress.completed} total={progress.total || Math.max(estimateBars(settings), 1)} label={progress.phase} /> : null}
-          {localJob ? <p className="muted small">분석 대상 {localJob.universeCount.toLocaleString()}종목 · 슬리피지 제외 {localJob.excludedCount.toLocaleString()}종목{localJob.failedSymbols.length ? ` · 캔들 누락 제외 ${localJob.failedSymbols.length}종목` : ''}{localJob.status === 'COMPLETED' ? ' · 완료' : localJob.status === 'PAUSED' ? ' · 일시정지' : ''}</p> : null}
+          {localJob ? <p className="muted small">분석 대상 {localJob.universeCount.toLocaleString()}종목{strategy === 'ENVELOPE' && localJob.settings.mode === 'SINGLE' && localJob.version === engineVersionFor(strategy) ? ' · 슬리피지 검사 안 함' : ` · 슬리피지 제외 ${localJob.excludedCount.toLocaleString()}종목`}{localJob.failedSymbols.length ? ` · 캔들 누락 제외 ${localJob.failedSymbols.length}종목` : ''}{localJob.status === 'COMPLETED' ? ' · 완료' : localJob.status === 'PAUSED' ? ' · 일시정지' : ''}</p> : null}
           {localJob?.settings.mode === 'ALL' && localJob.universeCheckedAt ? <p className="muted small">전체종목 필터: {new Date(localJob.universeCheckedAt).toLocaleString('ko-KR')} 검사 · 7일 공통 재사용</p> : null}
           {activeServer ? <ProgressBar completed={serverJob.completedBars} total={Math.max(serverJob.totalBars, 1)} label={`${serverJob.phase === 'UNIVERSE' ? '종목 확인' : serverJob.phase === 'DATA' ? '캔들 조회' : '전략 계산'} · ${serverJob.status === 'QUEUED' ? '대기 중' : '분석 중'}`} /> : null}
         </section>
