@@ -6,6 +6,7 @@ import { executeEnvelopeStatistics, isCurrentEnvelopeStatisticsVersion, loadEnve
 import { currentEnvelopeSettings } from './envelope';
 import { analysisWindow } from './marketData';
 import type { BacktestSettings, Candle } from './types';
+import { minuteRows } from './test/envelopeFixtures';
 
 const settings: BacktestSettings = currentEnvelopeSettings({
   mode: 'SINGLE', symbol: 'BTC', interval: '1h', startDate: '2026-02-01', startTime: '09:00', endDate: '2026-02-13', endTime: '09:00',
@@ -27,14 +28,7 @@ function rows(interval: BacktestSettings['interval']): Candle[] {
 }
 
 function lowerRows(interval: BacktestSettings['interval']): Candle[] {
-  const parents = rows(interval); const parentSeconds = intervalSeconds(interval); const count = parentSeconds / 900;
-  return parents.flatMap(parent => Array.from({ length: count }, (_, index) => {
-    const isFirst = index === 0; const isLast = index === count - 1;
-    return { openTime: parent.openTime + index * 900, closeTime: parent.openTime + (index + 1) * 900,
-      open: parent.open, high: isFirst ? parent.high : isLast ? Math.max(parent.open, parent.close) : parent.open,
-      low: isFirst ? parent.low : isLast ? Math.min(parent.open, parent.close) : parent.open,
-      close: isLast ? parent.close : parent.open, volume: parent.volume / count };
-  }));
+  return minuteRows(rows(interval).slice(200));
 }
 
 async function clearDatabase(): Promise<void> {
@@ -66,7 +60,7 @@ describe('envelope breakout statistics', () => {
 
   it('searches the selected hourly period with one opposite-band exit case', async () => {
     await cacheCandles('BTCUSDT', '1h', rows('1h'));
-    await cacheCandles('BTCUSDT', '15m', lowerRows('1h'));
+    await cacheCandles('BTCUSDT', '1m', lowerRows('1h'));
     let final: EnvelopeStatisticsJob | null = null;
     await executeEnvelopeStatistics({ settings: { ...settings, envelopeStatisticsInterval: '1h' } }, job => { final = structuredClone(job); }, new AbortController().signal);
     const job = final as unknown as EnvelopeStatisticsJob;
@@ -78,7 +72,7 @@ describe('envelope breakout statistics', () => {
 
   it('loads and searches 4h data rather than forcing hourly candles', async () => {
     await cacheCandles('BTCUSDT', '4h', rows('4h'));
-    await cacheCandles('BTCUSDT', '15m', lowerRows('4h'));
+    await cacheCandles('BTCUSDT', '1m', lowerRows('4h'));
     await executeEnvelopeStatistics({ settings: { ...settings, interval: '4h', envelopeStatisticsInterval: '4h' } }, () => {}, new AbortController().signal);
     const job = (await loadEnvelopeStatistics())!;
     expect(job.status).toBe('COMPLETED'); expect(job.settings.envelopeStatisticsInterval).toBe('4h');
@@ -86,7 +80,7 @@ describe('envelope breakout statistics', () => {
     expect(fetch).not.toHaveBeenCalled();
   }, 30000);
 
-  it.each(['LONG', 'SHORT'] as const)('loads 15m data for wider daily %s bands even when the 0.1%% half-range filter rejects every candle', async side => {
+  it.each(['LONG', 'SHORT'] as const)('loads minutes before a completed daily %s half-range rejection could hide earlier entries', async side => {
     const candles = rows('1d').map((row, index) => index < 200 ? row : {
       ...row, open: 100, high: side === 'LONG' ? 104 : 107, low: side === 'LONG' ? 93 : 96, close: 100,
     });
@@ -98,20 +92,19 @@ describe('envelope breakout statistics', () => {
         open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: parent.volume / 96 };
     }));
     await cacheCandles('BTCUSDT', '1d', candles);
-    await cacheCandles('BTCUSDT', '15m', lower);
+    await cacheCandles('BTCUSDT', '1m', minuteRows(lower.slice(200 * 96)));
     await executeEnvelopeStatistics({ settings: { ...settings, side, interval: '1d', envelopeStatisticsInterval: '1d' } }, () => {}, new AbortController().signal);
     const job = (await loadEnvelopeStatistics())!;
     expect(job.status).toBe('COMPLETED');
     const threePercent = job.rows.filter(row => row.deviationPercent === 3);
     expect(threePercent).toHaveLength(5);
-    expect(threePercent.every(row => row.side === side && row.entryCount > 0 && row.winCount > 0 && row.lossCount === 0)).toBe(true);
-    expect(job.rows.filter(row => row.deviationPercent === 0.1).every(row => row.entryCount === 0)).toBe(true);
+    expect(threePercent.every(row => row.side === side && row.entryCount > 0)).toBe(true);
     expect(fetch).not.toHaveBeenCalled();
   }, 30000);
 
   it('keeps only the requested direction and normalizes current settings to opposite-band exits', async () => {
     await cacheCandles('BTCUSDT', '1h', rows('1h'));
-    await cacheCandles('BTCUSDT', '15m', lowerRows('1h'));
+    await cacheCandles('BTCUSDT', '1m', lowerRows('1h'));
     await executeEnvelopeStatistics({ settings: { ...settings, side: 'SHORT', envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: true, envelopeStatisticsInterval: '1h' } }, () => {}, new AbortController().signal);
     const job = (await loadEnvelopeStatistics())!;
     expect(job.settings.envelopeExitMode).toBe('OPPOSITE'); expect(job.settings.envelopeMoveSlOnCenter).toBe(false);
@@ -120,7 +113,7 @@ describe('envelope breakout statistics', () => {
 
   it('resumes a paused current job without changing the saved period or duplicating rows', async () => {
     await cacheCandles('BTCUSDT', '1h', rows('1h'));
-    await cacheCandles('BTCUSDT', '15m', lowerRows('1h'));
+    await cacheCandles('BTCUSDT', '1m', lowerRows('1h'));
     const controller = new AbortController();
     await executeEnvelopeStatistics({ settings: { ...settings, envelopeStatisticsInterval: '1h' } }, job => { if (job.rows.length >= 1) controller.abort(); }, controller.signal);
     const paused = (await loadEnvelopeStatistics())!; expect(paused.status).toBe('PAUSED');

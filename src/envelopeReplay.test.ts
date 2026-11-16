@@ -7,10 +7,10 @@ import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portf
 import type { BacktestSettings, Candle, ContractRisk } from './types';
 
 const origin = Date.UTC(2026, 0, 1) / 1000;
-const settings: BacktestSettings = currentEnvelopeSettings({ mode: 'SINGLE', symbol: 'BTC', interval: '1h', side: 'LONG', startDate: '2026-01-01', startTime: '09:00', endDate: '2026-03-01', endTime: '09:00',
+const settings: BacktestSettings = { ...currentEnvelopeSettings({ mode: 'SINGLE', symbol: 'BTC', interval: '1h', side: 'LONG', startDate: '2026-01-01', startTime: '09:00', endDate: '2026-03-01', endTime: '09:00',
   initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '5', partialTpEnabled: false, fullTpWavePercent: '100', minDisparityPercent: '1', ma20HalfCloseEnabled: false,
   roiClosePercent: '100', minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1', volatilityTpEnabled: true, volatilityNextCloseEnabled: false,
-  envelopeMaPeriod: '20', envelopeDeviationPercent: '1.0' });
+  envelopeMaPeriod: '20', envelopeDeviationPercent: '1.0' }), envelopeExecutionModel: undefined };
 function candles(short = false): Candle[] {
   const tail = [[100.5, 102, 100, 102], [102, 103, 98, 101], [101, 102, 98, 99]];
   return [...Array.from({ length: 60 }, (_, index) => ({ openTime: origin + index * 3600, closeTime: origin + (index + 1) * 3600, open: 100, high: 100, low: 100, close: 100, volume: 10 })), ...tail.map((p, index) => {
@@ -20,7 +20,7 @@ function candles(short = false): Candle[] {
 }
 afterEach(() => vi.unstubAllGlobals());
 
-describe('fixed-leverage envelope account replay', () => {
+describe('archived fixed-leverage envelope account replay', () => {
   it('matches ordinary replay without any risk-data request', async () => {
     vi.stubGlobal('fetch', vi.fn(() => { throw new Error('fixed replay must not fetch risk'); }));
     const rows = candles(); const start = rows[60]!.openTime; const end = rows.at(-1)!.closeTime;

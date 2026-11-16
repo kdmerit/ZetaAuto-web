@@ -3,7 +3,7 @@ import { intervalSeconds } from './api';
 import { lease, maintainCache, readValue, retentionMs, writeValue } from './database';
 import { saveEnvelopeStatisticsHistory } from './envelopeStatisticsHistory';
 import { prepareSymbolBlock } from './engine';
-import { bandFor, currentEnvelopeSettings, envelopeHalfCandleAllowsEntry, envelopePeriods, legacyEnvelopePeriods, envelopeModelVersion } from './envelope';
+import { currentEnvelopeSettings, envelopePeriods, legacyEnvelopePeriods, envelopeModelVersion } from './envelope';
 import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument } from './marketData';
 import type { BacktestInterval, BacktestResult, BacktestSettings, ContractRisk, EnvelopeExitMode } from './types';
 import { fixedEnvelopeSettings, replayFixedEnvelope } from './envelopeReplay';
@@ -22,17 +22,18 @@ const previousCandleFilterVersion = '2.10.91';
 const previousBodyFilterVersion = '2.10.92';
 const previousWickFilterVersion = '2.10.93';
 const previousTrailingStopVersion = '2.10.94';
+const previousFourHourWickVersion = '2.10.95';
 
 export type StatisticsSide = 'LONG' | 'SHORT';
 export type DirectionalBests = Partial<Record<StatisticsSide, EnvelopeStatisticsRow | null>>;
 export const statisticsSideLabel = (side: StatisticsSide): string => side === 'LONG' ? '롱' : '숏';
 export const selectedStatisticsSides = (settings: Pick<BacktestSettings, 'side'>): StatisticsSide[] => settings.side === 'LONG' ? ['LONG'] : settings.side === 'SHORT' ? ['SHORT'] : ['LONG', 'SHORT'];
 export const isCurrentEnvelopeStatisticsVersion = (value: string | undefined): boolean => value === version;
-export const isFilteredEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion, previousSharedStopVersion, previousCandleFilterVersion, previousBodyFilterVersion, previousWickFilterVersion, previousTrailingStopVersion].includes(value ?? '') || isCurrentEnvelopeStatisticsVersion(value);
+export const isFilteredEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion, previousSharedStopVersion, previousCandleFilterVersion, previousBodyFilterVersion, previousWickFilterVersion, previousTrailingStopVersion, previousFourHourWickVersion].includes(value ?? '') || isCurrentEnvelopeStatisticsVersion(value);
 export const isReclaimStatisticsVersion = (value: string | undefined): boolean => value === '2.10.43' || isFilteredEnvelopeStatisticsVersion(value);
 export const isDirectionalStatisticsVersion = (value: string | undefined): boolean => value === '2.10.42' || isReclaimStatisticsVersion(value);
-export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.40', '2.10.41', '2.10.42', '2.10.43', '2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion, previousSharedStopVersion, previousCandleFilterVersion, previousBodyFilterVersion, previousWickFilterVersion, previousTrailingStopVersion, version].includes(value ?? '');
-export const usesFiveEnvelopePeriods = (value: string | undefined): boolean => value === previousHalfFilterVersion || value === previousSharedStopVersion || value === previousCandleFilterVersion || value === previousBodyFilterVersion || value === previousWickFilterVersion || value === previousTrailingStopVersion || isCurrentEnvelopeStatisticsVersion(value);
+export const isFixedEnvelopeStatisticsVersion = (value: string | undefined): boolean => ['2.10.40', '2.10.41', '2.10.42', '2.10.43', '2.10.44', previousFixedEntryVersion, '2.10.73', previousHalfFilterVersion, previousSharedStopVersion, previousCandleFilterVersion, previousBodyFilterVersion, previousWickFilterVersion, previousTrailingStopVersion, previousFourHourWickVersion, version].includes(value ?? '');
+export const usesFiveEnvelopePeriods = (value: string | undefined): boolean => value === previousHalfFilterVersion || value === previousSharedStopVersion || value === previousCandleFilterVersion || value === previousBodyFilterVersion || value === previousWickFilterVersion || value === previousTrailingStopVersion || value === previousFourHourWickVersion || isCurrentEnvelopeStatisticsVersion(value);
 export const optimalSettingCriteria = '진입 2회 이상 · 승률 60% 이상 · 수익률 2% 이상';
 export function qualifiesEnvelopeSetting(row: Pick<EnvelopeStatisticsRow, 'entryCount' | 'winRatePercent' | 'returnPercent'>): boolean {
   return row.entryCount >= 2 && row.winRatePercent !== null && Number.isFinite(row.winRatePercent) && row.winRatePercent >= 60
@@ -194,34 +195,27 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
           const band = bar.envelope;
           if (!band) return false;
           if (directional.side === 'LONG' && !band.long || directional.side === 'SHORT' && !band.short) return false;
-          if (directional.envelopeMa20Enabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
-            || !(directional.side === 'LONG' ? bar.candle.low > bar.ma20 : bar.candle.high < bar.ma20))) return false;
-          if (directional.envelopeMa20BelowEnabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
-            || !(directional.side === 'LONG' ? bar.candle.high < bar.ma20 : bar.candle.low > bar.ma20))) return false;
-          // A narrow band may fail the half-range filter while a wider one passes.
-          // Fetch from the earliest candidate that can pass any tested width;
-          // replay applies the actual width's filter separately to every case.
-          if (!envelopeHalfCandleAllowsEntry(bar.candle, bandFor(band.center, 20), directional.side, directional.interval)) return false;
+          // Fetch bounds only; current-candle filters are evaluated at minute polls.
           return directional.side === 'LONG' ? bar.candle.low <= band.lower : bar.candle.high >= band.upper;
         });
         if (firstEntryTouch) {
           const lowerFrom = envelopeCandleDataStart(directional, firstEntryTouch.candle.openTime);
-          let lowerCandles = await ensureCandles(job.instrument, '15m', lowerFrom, end, end, signal);
+          let lowerCandles = await ensureCandles(job.instrument, '1m', lowerFrom, end, end, signal);
           document = prepareSymbolBlock(job.instrument.symbol, candles, baseParameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, lowerCandles);
           for (const bar of document.bars) {
             if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }
           }
           const parents = document.bars.flatMap(bar => bar.envelopeIntrabarCandles ? [bar.candle] : []);
-          if (await refreshMismatchedLowerTimeframes(job.instrument, interval, parents, lowerCandles, signal)) {
+          if (await refreshMismatchedLowerTimeframes(job.instrument, interval, parents, lowerCandles, signal, '1m')) {
             candles = await ensureCandles(job.instrument, interval, start - 200 * seconds, end, end, signal);
-            lowerCandles = await ensureCandles(job.instrument, '15m', lowerFrom, end, end, signal);
+            lowerCandles = await ensureCandles(job.instrument, '1m', lowerFrom, end, end, signal);
             document = prepareSymbolBlock(job.instrument.symbol, candles, baseParameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, lowerCandles);
             for (const bar of document.bars) {
               if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }
             }
           }
           for (const bar of document.bars) {
-            if (bar.envelopeIntrabarCandles) validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles, 900, '15분봉');
+            if (bar.envelopeIntrabarCandles) validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles, 60, '1분봉');
           }
         }
         const key = `${interval}:${maPeriod}:${side}`;

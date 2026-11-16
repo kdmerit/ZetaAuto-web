@@ -170,9 +170,9 @@ describe('causal daily/four-hour snapshots', () => {
   });
 });
 
-describe('entry execution, independent SL and persisted filters', () => {
-  const settings = currentEnvelopeSettings({ ...defaultSettings('ENVELOPE'), interval: '1h', envelopeMa20Enabled: false,
-    envelopeMaPeriod: '3', side: 'LONG', envelopeCandleFilterEnabled: true });
+describe('archived 15m entry execution, independent SL and persisted filters', () => {
+  const settings = { ...currentEnvelopeSettings({ ...defaultSettings('ENVELOPE'), interval: '1h', envelopeMa20Enabled: false,
+    envelopeMaPeriod: '3', side: 'LONG', envelopeCandleFilterEnabled: true }), envelopeExecutionModel: undefined };
   const parents = [...Array.from({ length: 3 }, (_, i) => candle(100, 100, 100, 100, origin - (3 - i) * 3600, 3600)), candle(97, 97, 97, 97, origin, 3600)];
   it.each([false, true].flatMap(limited => ['BODY', 'CURRENT_WICK', 'PREVIOUS_WICK', 'CURRENT_4H_WICK', 'PREVIOUS_4H_WICK'].flatMap(rule => (['LONG', 'SHORT'] as const).map(side => [limited, rule, side] as const))))('blocks opening and crossing fills when enabled, allocation=%s exclusion=%s side=%s', (limited, rule, side) => {
     for (const enabled of [false, true]) for (const crossing of [false, true]) {

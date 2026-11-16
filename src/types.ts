@@ -63,6 +63,8 @@ export interface BacktestSettings {
   envelopeStatisticsInterval?: EnvelopeStatisticsInterval;
   envelopeMoveSlOnCenter?: boolean;
   envelopeEntryMode?: 'RECLAIM' | 'BAND_TOUCH';
+  /** New runs observe prices once per minute; absent on archived OHLC replays. */
+  envelopeExecutionModel?: 'MINUTE_POLL';
   envelopeMa20Enabled?: boolean;
   envelopeMa20BelowEnabled?: boolean;
   envelopeCloseOnConfirmedBreakout?: boolean;
@@ -278,6 +280,7 @@ export interface Signal {
   envelopeCenter?: number;
   envelopeMoveSlOnCenter?: boolean;
   envelopeEntryMode?: 'RECLAIM' | 'BAND_TOUCH';
+  envelopeExecutionModel?: 'MINUTE_POLL';
   envelopeCloseOnConfirmedBreakout?: boolean;
   envelopeCloseOnCenterReturn?: boolean;
   waves?: Wave[];

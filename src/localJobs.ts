@@ -96,7 +96,8 @@ export function jobView(job: LocalJob): LocalJobView {
 }
 
 function blockSize(job: LocalJob): number {
-  return Math.max(16, Math.min(128, Math.floor(64_000 / Math.max(1, job.universe.length))));
+  const size = Math.max(16, Math.min(128, Math.floor(64_000 / Math.max(1, job.universe.length))));
+  return job.settings.envelopeExecutionModel === 'MINUTE_POLL' ? Math.min(size, Math.max(1, Math.floor(86400 / intervalSeconds(job.settings.interval)))) : size;
 }
 
 function skipsSingleEnvelopeSlippage(job: Pick<LocalJob, 'strategy' | 'settings' | 'version'>): boolean {
@@ -290,18 +291,18 @@ async function executeWithLease(
             const first = job.state.positions[instrument.symbol] ? activeJob.blockStart : firstEntryTouch?.candle.openTime;
             const lowerFrom = first === undefined ? undefined : envelopeCandleDataStart(activeJob.settings, first);
             if (lowerFrom !== undefined && lowerFrom < blockEnd) {
-              let envelopeIntrabarCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
+              let envelopeIntrabarCandles = await ensureCandles(instrument, '1m', lowerFrom, blockEnd, blockEnd, signal);
               prepared = prepare(undefined, envelopeIntrabarCandles);
               applyInstrumentEligibility(prepared, instrument);
               const parents = prepared.bars.flatMap(bar => bar.envelopeIntrabarCandles ? [bar.candle] : []);
-              if (await refreshMismatchedLowerTimeframes(instrument, job.settings.interval, parents, envelopeIntrabarCandles, signal)) {
+              if (await refreshMismatchedLowerTimeframes(instrument, job.settings.interval, parents, envelopeIntrabarCandles, signal, '1m')) {
                 candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
-                envelopeIntrabarCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
+                envelopeIntrabarCandles = await ensureCandles(instrument, '1m', lowerFrom, blockEnd, blockEnd, signal);
                 prepared = prepare(undefined, envelopeIntrabarCandles);
                 applyInstrumentEligibility(prepared, instrument);
               }
               for (const bar of prepared.bars) {
-                if (bar.envelopeIntrabarCandles) validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles, 900, '15분봉');
+                if (bar.envelopeIntrabarCandles) validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles, 60, '1분봉');
               }
             }
           }

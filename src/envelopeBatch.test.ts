@@ -6,7 +6,7 @@ import { intervalSeconds } from './api';
 import { analysisWindow } from './marketData';
 import { currentEnvelopeSettings } from './envelope';
 import type { EnvelopeStatisticsRow } from './envelopeStatistics';
-import { dailyTrendRows } from './test/envelopeFixtures';
+import { dailyTrendRows, minuteRows } from './test/envelopeFixtures';
 import type { BacktestSettings, Candle } from './types';
 
 const settings: BacktestSettings = currentEnvelopeSettings({ mode: 'ALL', symbol: 'AAA', interval: '15m', side: 'BOTH', startDate: '2026-02-01', startTime: '09:00', endDate: '2026-02-11', endTime: '09:00', initialCapitalUsdt: '101', betAmountUsdt: '100', leverage: '5', partialTpEnabled: false, fullTpWavePercent: '100', minDisparityPercent: '1', ma20HalfCloseEnabled: false, roiClosePercent: '100', minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1', volatilityTpEnabled: true, volatilityNextCloseEnabled: false });
@@ -18,14 +18,7 @@ function candles(p: BacktestSettings, interval: BacktestSettings['interval'], sl
     open: i <= 200 ? 100 : price(i - 201), high: i < 200 ? 100 : 100.24, low: i < 200 ? 100 : 99.76, close: i < 200 ? 100 : price(i - 200), volume: 10 }));
 }
 function lowerCandles(parents: Candle[]): Candle[] {
-  const parentSeconds = parents[0]!.closeTime - parents[0]!.openTime; const count = parentSeconds / 900;
-  return parents.flatMap(parent => Array.from({ length: count }, (_, index) => {
-    const isFirst = index === 0; const isLast = index === count - 1;
-    return { openTime: parent.openTime + index * 900, closeTime: parent.openTime + (index + 1) * 900,
-      open: parent.open, high: isFirst ? parent.high : isLast ? Math.max(parent.open, parent.close) : parent.open,
-      low: isFirst ? parent.low : isLast ? Math.min(parent.open, parent.close) : parent.open,
-      close: isLast ? parent.close : parent.open, volume: parent.volume / count };
-  }));
+  return minuteRows(parents.slice(200));
 }
 beforeEach(async () => {
   const db = await openCacheDatabase();
@@ -38,8 +31,8 @@ beforeEach(async () => {
     await cacheCandles(instrument.symbol, interval, candles(settings, interval));
   }
   for (const instrument of instruments) {
-    await cacheCandles(instrument.symbol, '15m', lowerCandles(candles(evaluation, '1h')));
-    await cacheCandles(instrument.symbol, '15m', lowerCandles(candles(settings, '1h')));
+    await cacheCandles(instrument.symbol, '1m', lowerCandles(candles(evaluation, '1h')));
+    await cacheCandles(instrument.symbol, '1m', lowerCandles(candles(settings, '1h')));
   }
   for (const instrument of instruments) {
     await cacheCandles(instrument.symbol, '1d', dailyTrendRows(evaluation));
@@ -52,7 +45,7 @@ function best(side: 'LONG' | 'SHORT'): EnvelopeStatisticsRow {
     returnPercent: 3, profitUsdt: 3.03, realizedProfitUsdt: 3.03, feesUsdt: .5, entryCount: 3, closedTradeCount: 3, winCount: 2, lossCount: 1, winRatePercent: 66.67, maxDrawdownPercent: 1, openPositionCount: 0 };
 }
 async function sourceReport(): Promise<EnvelopeBatchJob> {
-  const source: EnvelopeBatchJob = { id: 'source', version: '2.10.95', kind: 'ALL_STATS', status: 'COMPLETED', updatedAt: Date.now(), message: 'complete', settings,
+  const source: EnvelopeBatchJob = { id: 'source', version: '2.10.97', kind: 'ALL_STATS', status: 'COMPLETED', updatedAt: Date.now(), message: 'complete', settings,
     universe: ['AAAUSDT', 'BBBUSDT'].map(symbol => ({ symbol, launchAt: 0 })), cursor: 2,
     rows: ['AAAUSDT', 'BBBUSDT'].map(symbol => ({ symbol, launchAt: 0, status: 'OK', best: best('LONG'), bestBySide: { LONG: best('LONG'), SHORT: best('SHORT') } })) };
   await writeValue('results', 'envelope-batch:source', source); return source;
@@ -64,7 +57,7 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     const first = (await loadEnvelopeBatch('ALL_STATS'))!; expect(first.status).toBe('PAUSED');
     await executeEnvelopeBatch({ kind: 'ALL_STATS', resumeId: first.id }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('ALL_STATS'))!;
-    expect(done.status).toBe('COMPLETED'); expect(done.rows).toHaveLength(2); expect(done.rows[0]).toEqual(first.rows[0]); expect(done.version).toBe('2.10.95');
+    expect(done.status).toBe('COMPLETED'); expect(done.rows).toHaveLength(2); expect(done.rows[0]).toEqual(first.rows[0]); expect(done.version).toBe('2.10.97');
     expect(done.rows.every(row => row.status === 'NO_TRADES' || row.status === 'NO_QUALIFYING' || row.status === 'OK')).toBe(true);
     expect((await loadEnvelopeBatchHistory('ALL_STATS'))[0]!.optimized).toBeGreaterThanOrEqual(0); expect(fetch).not.toHaveBeenCalled();
   }, 60000);
@@ -72,7 +65,7 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     const db = await openCacheDatabase();
     await new Promise<void>(resolve => { const tx = db.transaction(['pages', 'pageMetadata'], 'readwrite'); tx.objectStore('pages').clear(); tx.objectStore('pageMetadata').clear(); tx.oncomplete = () => resolve(); });
     for (const symbol of ['AAAUSDT', 'BBBUSDT']) {
-      await cacheCandles(symbol, '4h', candles(settings, '4h')); await cacheCandles(symbol, '15m', lowerCandles(candles(settings, '4h'))); await cacheCandles(symbol, '1d', dailyTrendRows(settings));
+      await cacheCandles(symbol, '4h', candles(settings, '4h')); await cacheCandles(symbol, '1m', lowerCandles(candles(settings, '4h'))); await cacheCandles(symbol, '1d', dailyTrendRows(settings));
     }
     await executeEnvelopeBatch({ kind: 'ALL_STATS', settings: { ...settings, envelopeStatisticsInterval: '4h' } }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('ALL_STATS'))!;
@@ -84,7 +77,7 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     const done = (await loadEnvelopeBatch('ALL_STATS'))!;
     expect(done.rows.every(row => !row.best && !row.bestBySide?.LONG && !row.bestBySide?.SHORT)).toBe(true);
   });
-  it.each(['2.10.42', '2.10.43', '2.10.44', '2.10.46', '2.10.73', '2.10.88'])('preserves %s completed reports but refuses to mix prior trading rules into a new or resumed job', async oldVersion => {
+  it.each(['2.10.42', '2.10.43', '2.10.44', '2.10.46', '2.10.73', '2.10.88', '2.10.95'])('preserves %s completed reports but refuses to mix prior trading rules into a new or resumed job', async oldVersion => {
     const old = await sourceReport(); old.version = oldVersion; await writeValue('results', 'envelope-batch:source', old);
     expect((await loadEnvelopeBatchReport(old.id))!.version).toBe(oldVersion);
     await expect(executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: old.id, settings: evaluation }, () => {}, new AbortController().signal)).rejects.toThrow('새 매매 조건');
@@ -136,7 +129,7 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
   it('uses the source period for the evaluation window', async () => {
     const source = await sourceReport(); source.settings = { ...source.settings, envelopeStatisticsInterval: '1h' }; await writeValue('results', 'envelope-batch:source', source);
     const p = { ...evaluation, startTime: '09:17', endTime: '09:17' };
-    for (const symbol of ['AAAUSDT', 'BBBUSDT']) { await cacheCandles(symbol, '1h', candles(p, '1h')); await cacheCandles(symbol, '15m', lowerCandles(candles(p, '1h'))); }
+    for (const symbol of ['AAAUSDT', 'BBBUSDT']) { await cacheCandles(symbol, '1h', candles(p, '1h')); await cacheCandles(symbol, '1m', lowerCandles(candles(p, '1h'))); }
     await executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: 'source', settings: p }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('VIRTUAL'))!;
     expect(done.status).toBe('COMPLETED'); expect(done.start).toBe(analysisWindow(p).start); expect(done.end).toBe(analysisWindow(p).end); expect(done.settings.interval).toBe('1h'); expect(fetch).not.toHaveBeenCalled();
@@ -151,11 +144,13 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
   it('retains losing out-of-sample results instead of filtering them or optimizing the evaluation period again', async () => {
     const source = await sourceReport(); source.rows = source.rows.slice(0, 1); source.universe = source.universe.slice(0, 1); source.rows[0]!.bestBySide = { LONG: best('LONG') };
     await writeValue('results', 'envelope-batch:source', source);
-    for (const interval of ['15m', '1h'] as const) {
+    for (const interval of ['1h'] as const) {
       const { start, end } = analysisWindow({ ...evaluation, interval }); const seconds = intervalSeconds(interval);
-      await cacheCandles('AAAUSDT', interval, Array.from({ length: (end - start) / seconds + 200 }, (_, i) => ({
+      const rows = Array.from({ length: (end - start) / seconds + 200 }, (_, i) => ({
         openTime: start + (i - 200) * seconds, closeTime: start + (i - 199) * seconds, open: i <= 200 ? 100 : 99.6,
-        high: i <= 200 ? 100 : 99.85, low: i < 200 ? 100 : 99.5, close: i < 200 ? 100 : 99.6, volume: 10 })));
+        high: i <= 200 ? 100 : 99.85, low: i < 200 ? 100 : 99.5, close: i < 200 ? 100 : 99.6, volume: 10 }));
+      await cacheCandles('AAAUSDT', interval, rows);
+      await cacheCandles('AAAUSDT', '1m', lowerCandles(rows));
     }
     await executeEnvelopeBatch({ kind: 'VIRTUAL', sourceId: source.id, settings: evaluation }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeBatch('VIRTUAL'))!;
@@ -200,7 +195,7 @@ describe('fixed-rule all statistics and separate-period virtual evaluation', () 
     await new Promise<void>(resolve => { const tx = db.transaction(['pages', 'pageMetadata'], 'readwrite'); tx.objectStore('pages').clear(); tx.objectStore('pageMetadata').clear(); tx.oncomplete = () => resolve(); });
     for (const symbol of ['AAAUSDT', 'BBBUSDT']) {
       await cacheCandles(symbol, '1h', candles(settings, '1h')); await cacheCandles(symbol, '1h', candles(evaluation, '1h'));
-      await cacheCandles(symbol, '15m', lowerCandles(candles(settings, '1h')));
+      await cacheCandles(symbol, '1m', lowerCandles(candles(settings, '1h')));
     }
     await executeEnvelopeBatch({ kind: 'ALL_STATS', settings: { ...settings, envelopeDailyTrend: false } }, () => {}, new AbortController().signal);
     const source = (await loadEnvelopeBatch('ALL_STATS'))!;

@@ -5,9 +5,9 @@ import { initialPortfolio, replayPortfolioBlock } from './portfolio';
 import type { BacktestSettings, Candle } from './types';
 
 const start = Date.UTC(2026, 10, 1) / 1000;
-const base = currentEnvelopeSettings({ side: 'LONG', interval: '1h', initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '7',
+const base = { ...currentEnvelopeSettings({ side: 'LONG', interval: '1h', initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '7',
   envelopeMaPeriod: '3', envelopeDeviationPercent: '3', envelopeStopLossPercent: '20',
-  envelopeTrailingStopEnabled: true } as BacktestSettings);
+  envelopeTrailingStopEnabled: true } as BacktestSettings), envelopeExecutionModel: undefined };
 
 function parent(index: number, prices: number[][], side: 'LONG' | 'SHORT' = 'LONG'): PreparedBar {
   const children = prices.map((values, i): Candle => {
@@ -32,7 +32,7 @@ function run(bars: PreparedBar[], settings = base) {
   return state;
 }
 
-describe('single-stage envelope trailing replay through 15m candles', () => {
+describe('archived single-stage envelope trailing replay through 15m candles', () => {
   it.each(['LONG', 'SHORT'] as const)('uses only post-entry extremes, a fixed 3-percent price distance, and survives resume: %s', side => {
     const settings = { ...base, side };
     const first = parent(0, entryPrices, side);

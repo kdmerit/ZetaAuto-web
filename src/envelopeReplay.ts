@@ -20,11 +20,12 @@ export async function replayFixedEnvelope(
 ): Promise<BacktestResult> {
   const parameters = fixedEnvelopeSettings(settings);
   const state = initialPortfolio(Number(parameters.initialCapitalUsdt));
-  for (let cursor = 0; cursor < document.bars.length; cursor += 512) {
+  const blockSize = settings.envelopeExecutionModel === 'MINUTE_POLL' ? Math.max(1, Math.floor(86400 / seconds)) : 512;
+  for (let cursor = 0; cursor < document.bars.length; cursor += blockSize) {
     signal.throwIfAborted();
-    const bars = document.bars.slice(cursor, cursor + 512);
+    const bars = document.bars.slice(cursor, cursor + blockSize);
     replayPortfolioBlock(state, [{ ...document, bars }], parameters, bars[0]!.candle.openTime, bars.at(-1)!.candle.closeTime, seconds);
-    await progress(`${parameters.leverage}배 고정 · ${Math.min(cursor + 512, document.bars.length)}/${document.bars.length}봉`);
+    await progress(`${parameters.leverage}배 고정 · ${Math.min(cursor + blockSize, document.bars.length)}/${document.bars.length}봉`);
     await yieldAnalysis();
   }
   return portfolioResult(state, parameters);

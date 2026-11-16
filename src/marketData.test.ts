@@ -17,6 +17,24 @@ beforeEach(async () => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('public market data and reuse', () => {
+  it('repairs a full daily candle and all 1440 minute candles using paginated requests', async () => {
+    const parent = { openTime: origin, closeTime: origin + 86400, open: 100, high: 102, low: 99, close: 100, volume: 1440 };
+    const minutes = Array.from({ length: 1440 }, (_, index) => ({ ...parent, openTime: origin + index * 60, closeTime: origin + (index + 1) * 60, volume: 1 }));
+    const fetcher = vi.fn(async (input: URL | RequestInfo) => {
+      const url = new URL(String(input));
+      const first = Number(url.searchParams.get('start')) / 1000;
+      const end = (Number(url.searchParams.get('end')) + 1) / 1000;
+      const rows = url.searchParams.get('interval') === 'D' ? [parent] : minutes.filter(candle => candle.openTime >= first && candle.openTime < end);
+      expect(rows.length).toBeLessThanOrEqual(1000);
+      return new Response(JSON.stringify({ retCode: 0, result: { list: rows.map(candle => [candle.openTime * 1000, candle.open, candle.high, candle.low, candle.close, candle.volume].map(String)) } }));
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const instrument = { symbol: 'MINREPAIRUSDT', launchAt: origin };
+    expect(await refreshMismatchedLowerTimeframes(instrument, '1d', [{ ...parent, high: 103 }], minutes, undefined, '1m')).toBe(1);
+    expect(await ensureCandles(instrument, '1m', origin, origin + 86400)).toEqual(minutes);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
   it.each<[CandleInterval, number, string]>([
     ['1m', 60, '2026-11-11T06:29:00Z'],
     ['15m', 900, '2026-11-11T06:15:00Z'],

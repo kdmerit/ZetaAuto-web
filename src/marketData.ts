@@ -200,20 +200,25 @@ export async function refreshCandleRange(instrument: Instrument, interval: Candl
   const start = Math.floor(from / seconds) * seconds;
   const stop = Math.ceil(end / seconds) * seconds;
   if (stop <= start) return [];
-  const fetched = await download(instrument.symbol, interval, start, stop, signal);
+  const fetched: Candle[] = [];
+  for (let cursor = start; cursor < stop; cursor += 1000 * seconds) {
+    signal?.throwIfAborted();
+    fetched.push(...await download(instrument.symbol, interval, cursor, Math.min(stop, cursor + 1000 * seconds), signal));
+  }
   await cacheCandles(instrument.symbol, interval, fetched);
   return fetched;
 }
 
-/** Re-fetch only parent bars whose complete 15-minute OHLC aggregation disagrees with the parent. */
+/** Re-fetch only parent bars whose complete execution-timeframe aggregation disagrees. */
 export async function refreshMismatchedLowerTimeframes(
   instrument: Instrument,
   parentInterval: BacktestInterval,
   parents: Candle[],
   lowerCandles: Candle[],
   signal?: AbortSignal,
+  childInterval: '15m' | '1m' = '15m',
 ): Promise<number> {
-  if (parentInterval === '15m') return 0;
+  if (parentInterval === childInterval) return 0;
   const parentSeconds = intervalSeconds(parentInterval);
   const grouped = new Map<number, Candle[]>();
   for (const child of lowerCandles) {
@@ -224,12 +229,12 @@ export async function refreshMismatchedLowerTimeframes(
   }
   const mismatched = parents.filter(parent => {
     const children = grouped.get(parent.openTime);
-    return children !== undefined && lowerTimeframePriceMismatch(parent, children, 900);
+    return children !== undefined && lowerTimeframePriceMismatch(parent, children, intervalSeconds(childInterval));
   });
   for (const parent of mismatched) {
     signal?.throwIfAborted();
     await refreshCandleRange(instrument, parentInterval, parent.openTime, parent.closeTime, signal);
-    await refreshCandleRange(instrument, '15m', parent.openTime, parent.closeTime, signal);
+    await refreshCandleRange(instrument, childInterval, parent.openTime, parent.closeTime, signal);
   }
   return mismatched.length;
 }

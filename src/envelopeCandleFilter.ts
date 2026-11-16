@@ -1,4 +1,4 @@
-/** Entry-time 1d/4h shapes built exclusively from already observed 15m prices. */
+/** Entry-time 1d/4h shapes built from observed 1m prices (15m for archived replays). */
 import type { BacktestSettings, Candle } from './types';
 
 export interface EnvelopeCandleContext {
@@ -17,8 +17,8 @@ export function envelopeCandleDataStart(settings: BacktestSettings, start: numbe
 
 interface Aggregate { candle: Candle; next: number; complete: boolean }
 
-/** Snapshots contain the current 15m OPEN only; its later extrema are not visible. */
-export function envelopeCandleContexts(rows: Candle[]): Map<number, EnvelopeCandleContext> {
+/** Snapshots contain the current execution bar's OPEN only, never its later extrema. */
+export function envelopeCandleContexts(rows: Candle[], snapshotTimes?: ReadonlySet<number>): Map<number, EnvelopeCandleContext> {
   const snapshots = new Map<number, EnvelopeCandleContext>();
   let daily: Aggregate | undefined;
   let fourHourly: Aggregate | undefined;
@@ -30,7 +30,8 @@ export function envelopeCandleContexts(rows: Candle[]): Map<number, EnvelopeCand
       next: row.openTime, complete: row.openTime === start };
   };
   const append = (aggregate: Aggregate, row: Candle): void => {
-    aggregate.complete &&= aggregate.next === row.openTime && row.closeTime === row.openTime + 900;
+    const seconds = row.closeTime - row.openTime;
+    aggregate.complete &&= aggregate.next === row.openTime && (seconds === 60 || seconds === 900);
     aggregate.next = row.closeTime;
     aggregate.candle.high = Math.max(aggregate.candle.high, row.high);
     aggregate.candle.low = Math.min(aggregate.candle.low, row.low);
@@ -54,7 +55,7 @@ export function envelopeCandleContexts(rows: Candle[]): Map<number, EnvelopeCand
     const beforePreviousDaily = closedDaily.at(-2);
     const previousFourHourly = closedFourHourly.at(-1);
     const beforePreviousFourHourly = closedFourHourly.at(-2);
-    if (daily.complete && fourHourly.complete && daily.next === row.openTime && fourHourly.next === row.openTime
+    if ((!snapshotTimes || snapshotTimes.has(row.openTime)) && daily.complete && fourHourly.complete && daily.next === row.openTime && fourHourly.next === row.openTime
       && previousDaily?.closeTime === daily.candle.openTime && beforePreviousDaily?.closeTime === previousDaily.openTime
       && previousFourHourly?.closeTime === fourHourly.candle.openTime
       && beforePreviousFourHourly?.closeTime === previousFourHourly.openTime) {

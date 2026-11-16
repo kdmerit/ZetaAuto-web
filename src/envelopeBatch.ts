@@ -221,7 +221,7 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
         }
       }
       const seconds = intervalSeconds(job.settings.interval);
-      const size = Math.max(1, Math.min(128, Math.floor(64000 / (job.rows.length * 2))));
+      const size = Math.max(1, Math.min(Math.floor(86400 / seconds), 128, Math.floor(64000 / (job.rows.length * 2))));
       while (job.blockStart! < job.end!) {
         signal.throwIfAborted(); const start = job.blockStart!; const end = Math.min(job.end!, start + size * seconds); const documents: PreparedSymbol[] = [];
         for (const row of job.rows) {
@@ -241,16 +241,16 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
           const first = job.state!.positions[row.symbol] ? start : firstEntryTouch?.candle.openTime;
           const lowerFrom = first === undefined ? undefined : envelopeCandleDataStart(job.settings, first);
           if (lowerFrom !== undefined && lowerFrom < end) {
-            let envelopeIntrabarCandles = await ensureCandles(row, '15m', lowerFrom, end, end, signal);
+            let envelopeIntrabarCandles = await ensureCandles(row, '1m', lowerFrom, end, end, signal);
             directional = prepareDirectional(envelopeIntrabarCandles);
             const parents = directional[0]?.document.bars.flatMap(bar => bar.envelopeIntrabarCandles ? [bar.candle] : []) ?? [];
-            if (await refreshMismatchedLowerTimeframes(row, job.settings.interval, parents, envelopeIntrabarCandles, signal)) {
+            if (await refreshMismatchedLowerTimeframes(row, job.settings.interval, parents, envelopeIntrabarCandles, signal, '1m')) {
               candles = await ensureCandles(row, job.settings.interval, start - 200 * seconds, end, job.end, signal);
-              envelopeIntrabarCandles = await ensureCandles(row, '15m', lowerFrom, end, end, signal);
+              envelopeIntrabarCandles = await ensureCandles(row, '1m', lowerFrom, end, end, signal);
               directional = prepareDirectional(envelopeIntrabarCandles);
             }
             for (const { document } of directional) for (const bar of document.bars) {
-              if (bar.envelopeIntrabarCandles) validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles, 900, '15분봉');
+              if (bar.envelopeIntrabarCandles) validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles, 60, '1분봉');
             }
           }
           const base = directional[0]?.document;

@@ -117,7 +117,7 @@ describe('durable local analysis', () => {
     const whole = (await loadLocalJob('NEW_HIGH'))!;
     expect({ ...whole.result, localRunId: undefined }).toEqual({ ...saved.result, localRunId: undefined });
   });
-  it.each(['2.10.36', '2.10.95'])('preserves an old envelope checkpoint %s but requires a new analysis after the model change', async version => {
+  it.each(['2.10.36', '2.10.95', '2.10.96'])('preserves an old envelope checkpoint %s but requires a new analysis after the model change', async version => {
     const controller = new AbortController();
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, view => { if (view.blockStart > origin) controller.abort(); }, controller.signal);
     const header = (await readValue<Record<string, unknown>>('jobs', 'ENVELOPE'))!;
@@ -127,7 +127,7 @@ describe('durable local analysis', () => {
     await expect(executeLocalJob({ strategy: 'ENVELOPE', resumeId: paused.id }, () => {}, new AbortController().signal)).rejects.toThrow('새 분석');
     expect((await loadLocalJob('ENVELOPE'))!.id).toBe(paused.id);
     await executeLocalJob({ strategy: 'ENVELOPE', settings }, () => {}, new AbortController().signal);
-    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.96');
+    expect((await loadLocalJob('ENVELOPE'))!.version).toBe('2.10.97');
   });
   it('preserves the selected envelope timeframe and drops the legacy daily filter', async () => {
     for (const mode of ['SINGLE', 'ALL'] as const) for (const envelopeDailyTrend of [true, false]) {
@@ -136,20 +136,20 @@ describe('durable local analysis', () => {
       const done = (await loadLocalJob('ENVELOPE'))!;
       expect(done.status).toBe('COMPLETED'); expect(done.settings.interval).toBe('4h'); expect(done.settings.envelopeDailyTrend).toBeUndefined();
       const intervals = new Set(vi.mocked(ensureCandles).mock.calls.map(call => call[1]));
-      expect(intervals).toEqual(new Set(['4h', '15m']));
+      expect(intervals).toEqual(new Set(['4h', '1m']));
     }
   });
-  it('restores independent SL and obtains candle-filter history from cached 15m data only', async () => {
+  it('restores independent SL and obtains candle-filter history from cached minute data', async () => {
     vi.mocked(ensureCandles).mockClear();
     await executeLocalJob({ strategy: 'ENVELOPE', settings: { ...settings, mode: 'SINGLE', envelopeCandleFilterEnabled: true, envelopeStopLossPercent: '1.5' } }, () => {}, new AbortController().signal);
     const done = (await loadLocalJob('ENVELOPE'))!;
     expect(done.status).toBe('COMPLETED');
     expect(done.settings).toMatchObject({ envelopeCandleFilterEnabled: true, envelopeStopLossPercent: '1.5' });
-    const lowerCalls = vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === '15m');
+    const lowerCalls = vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === '1m');
     expect(lowerCalls.length).toBeGreaterThan(0);
     expect(lowerCalls[0]![2] % 86400).toBe(0);
     expect(lowerCalls[0]![2]).toBeLessThan(origin);
-    expect(new Set(vi.mocked(ensureCandles).mock.calls.map(call => call[1]))).toEqual(new Set(['1h', '15m']));
+    expect(new Set(vi.mocked(ensureCandles).mock.calls.map(call => call[1]))).toEqual(new Set(['1h', '1m']));
   });
   it('reuses one direction-neutral weekly universe across all four strategies and refreshes after seven days', async () => {
     const candidates = ['AAAUSDT', 'ZZZUSDT', 'NONEUSDT'].map(symbol => ({ symbol, launchAt: origin - 200 * 3600 }));

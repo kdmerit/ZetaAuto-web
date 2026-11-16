@@ -5,9 +5,9 @@ import { initialPortfolio, replayPortfolioBlock } from './portfolio';
 import type { BacktestSettings } from './types';
 
 const at = Date.UTC(2026, 1, 1) / 1000;
-const base = currentEnvelopeSettings({ initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '1', envelopeMaPeriod: '5', envelopeDeviationPercent: '1' } as BacktestSettings);
+const base = { ...currentEnvelopeSettings({ initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '1', envelopeMaPeriod: '5', envelopeDeviationPercent: '1' } as BacktestSettings), envelopeExecutionModel: undefined };
 
-describe('whole-candle MA20 envelope entry filter', () => {
+describe('archived completed-candle MA20 envelope entry filter', () => {
   it.each(['LONG', 'SHORT'] as const)('requires the entire %s candle strictly beyond MA20', side => {
     const long = side === 'LONG';
     for (const enabled of [false, true]) for (const ma20 of [98, 99, 100, 101, 102]) {
@@ -45,7 +45,7 @@ describe('whole-candle MA20 envelope entry filter', () => {
   });
 });
 
-describe('daily entry-band half-candle envelope entry filter', () => {
+describe('archived daily entry-band half-candle envelope entry filter', () => {
   it.each([
     { side: 'LONG' as const, candle: { open: 100, high: 101, low: 97, close: 100 }, expected: 0 },
     { side: 'SHORT' as const, candle: { open: 100, high: 103, low: 99, close: 100 }, expected: 0 },
