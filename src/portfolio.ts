@@ -126,10 +126,10 @@ function priceLines(p: Holding): PriceLine[] {
   if (p.signal.strategy === 'NEW_HIGH') return [{ kind: 'ENTRY', price: p.first },
     ...(p.newHighTrailLevels ?? []).flatMap(level => level.reachedPrice === undefined ? [] : [{ kind: 'TRAILING_REACHED' as const, price: level.reachedPrice, stage: level.step }]),
     ...(p.newHighTrailLevels ?? []).map(level => ({ kind: 'TRAILING_SL' as const, price: level.price, stage: level.step })),
-    { kind: 'SL', price: p.stop },
+    ...(p.signal.newHighSlEnabled === false ? [] : [{ kind: 'SL' as const, price: p.stop }]),
     ...(p.newHighTrailingStop === undefined ? [] : [{ kind: 'TRAILING_SL' as const, price: p.newHighTrailingStop }]),
-    ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : []),
-    ...(p.signal.newHighTpMultiplier === undefined ? [] : [{ kind: 'TP' as const, price: p.target }])];
+    ...(p.signal.newHighSlEnabled === false || p.stop === p.signal.stop ? [] : [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }]),
+    ...(p.signal.newHighTpEnabled === false || p.signal.newHighTpMultiplier === undefined ? [] : [{ kind: 'TP' as const, price: p.target }])];
   if (p.signal.strategy === 'ENVELOPE') {
     if (p.signal.exitMode === 'ENVELOPE_MA20_CLOSE') return [{ kind: 'ENTRY', price: p.first }]
     const lines: PriceLine[] = [
@@ -220,7 +220,9 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
     signal: { ...p.signal, target: p.target, partial: p.partial ?? undefined,
       second: p.signal.strategy === 'ENVELOPE' && p.signal.envelopeEntryMode === 'BAND_TOUCH' ? undefined
         : p.signal.strategy === 'ENVELOPE' ? p.second : p.secondFill ?? p.second,
-      initialStop: p.signal.initialStop ?? p.signal.stop, activeStop: p.stop, averageEntry: p.entry },
+      initialStop: p.signal.strategy === 'NEW_HIGH' && p.signal.newHighSlEnabled === false ? undefined : p.signal.initialStop ?? p.signal.stop,
+      activeStop: p.signal.strategy === 'NEW_HIGH' && p.signal.newHighSlEnabled === false && p.newHighTrailingStop === undefined ? undefined : p.stop,
+      averageEntry: p.entry },
     executions: structuredClone(p.executions), priceLines: [...priceLines(p), { kind: 'EXIT', price: fill }],
   });
   state.trades = state.trades.slice(-100);
@@ -246,6 +248,7 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   let bet = Number(settings.betAmountUsdt);
   let riskSizedQuantity: number | null = null;
   if (signal.strategy === 'NEW_HIGH' && signal.riskAmount !== undefined) {
+    if (signal.newHighSlEnabled === false) return;
     const stopFill = signal.stop * (signal.side === 'LONG' ? 1 - slippage : 1 + slippage);
     const riskPerUnit = Math.abs(entry - stopFill) + entry * feeRate + stopFill * feeRate;
     if (!Number.isFinite(riskPerUnit) || riskPerUnit <= 0 || !Number.isFinite(signal.riskAmount) || signal.riskAmount <= 0) return;
@@ -258,7 +261,8 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   if (state.cash + 1e-10 < bet * (1 + leverage * feeRate)) { state.insufficientFunds += 1; return; }
   const target = signal.exitMode === 'VOLATILITY_TP' ? entry + direction * signal.breakoutRange! * signal.volatilityK1!
     : signal.exitMode === 'VOLATILITY_CLOSE' ? entry + direction * signal.breakoutRange! : signal.target;
-  if (signal.exitMode !== 'ENVELOPE_MA20_CLOSE'
+  const targetRequired = !(signal.strategy === 'NEW_HIGH' && signal.newHighTpEnabled === false);
+  if (targetRequired && signal.exitMode !== 'ENVELOPE_MA20_CLOSE'
     && signal.exitMode !== 'VOLATILITY_CANDLE_RULE'
     && signal.exitMode !== 'VOLATILITY_WICK_RULE'
     && (!Number.isFinite(target) || target <= 0 && (signal.exitMode !== 'VOLATILITY_TP' || signal.volatilityTpEnabled !== false))) return;
@@ -1165,9 +1169,11 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
   if (holding) state.positions[symbol] = structuredClone(holding);
   let spent = 0;
   const leverage = Number(settings.leverage);
-  const riskAmount = settings.newHighSizingMode === 'RISK' ? newHighRiskAmount(settings) : undefined;
-  const slMultiplier = newHighSlMultiplier(settings);
-  const tpMultiplier = newHighTpMultiplier(settings);
+  const slEnabled = settings.newHighSlEnabled !== false;
+  const tpEnabled = settings.newHighTpEnabled !== false;
+  const riskAmount = slEnabled && settings.newHighSizingMode === 'RISK' ? newHighRiskAmount(settings) : undefined;
+  const slMultiplier = slEnabled ? newHighSlMultiplier(settings) : null;
+  const tpMultiplier = tpEnabled ? newHighTpMultiplier(settings) : null;
   const trailingEnabled = settings.newHighTrailingStopEnabled === true;
   const trailingMultiplier = trailingEnabled ? newHighTrailingStopMultiplier(settings) : null;
 
@@ -1185,7 +1191,7 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
   const stopReason = (position: Holding): string => {
     const long = position.signal.side === 'LONG';
     const trailingIsActive = position.newHighTrailingStop !== undefined
-      && (long ? position.stop > position.signal.stop : position.stop < position.signal.stop);
+      && (position.signal.newHighSlEnabled === false || (long ? position.stop > position.signal.stop : position.stop < position.signal.stop));
     return trailingIsActive ? 'NEW_HIGH_TRAILING' : 'SL';
   };
 
@@ -1195,14 +1201,17 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     if (settings.newHighDailyMa20Enabled === true && !dailyMa20Allowed) return;
     if (!definition.atr || !Number.isFinite(definition.atr) || definition.atr <= 0) return;
     const fill = price * (1 + direction * slippage);
-    const stop = fill - direction * slMultiplier * definition.atr;
-    const target = fill + direction * tpMultiplier * definition.atr;
-    if (!(stop > 0) || !(target > 0) || (side === 'LONG' ? stop >= fill || target <= fill : stop <= fill || target >= fill)) return;
+    // Keep disabled levels finite so IndexedDB/JSON checkpoints do not turn them into null.
+    const stop = slEnabled ? fill - direction * slMultiplier! * definition.atr : direction === 1 ? 0 : Number.MAX_VALUE;
+    const target = tpEnabled ? fill + direction * tpMultiplier! * definition.atr : direction === 1 ? Number.MAX_VALUE : 0;
+    if (slEnabled && (!(stop > 0) || (side === 'LONG' ? stop >= fill : stop <= fill))) return;
+    if (tpEnabled && (!(target > 0) || (side === 'LONG' ? target <= fill : target >= fill))) return;
     enter(state, symbol, {
       strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime), entry: price,
       stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', newHighAtr: definition.atr,
+      newHighSlEnabled: slEnabled, newHighTpEnabled: tpEnabled,
       ...(trailingEnabled ? { newHighTrailingStopEnabled: true, newHighTrailingStopMultiplier: trailingMultiplier! } : {}),
-      newHighTpMultiplier: tpMultiplier, ...(riskAmount !== undefined ? { riskAmount } : {}),
+      ...(tpEnabled ? { newHighTpMultiplier: tpMultiplier! } : {}), ...(riskAmount !== undefined ? { riskAmount } : {}),
     }, candle, settings, true);
     const position = state.positions[symbol];
     if (position) {
@@ -1224,11 +1233,13 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
     if (!openingPosition) return;
     advanceTrailing(openingPosition, executionCandle.open);
     const long = openingPosition.signal.side === 'LONG';
-    if (long ? executionCandle.open >= openingPosition.target : executionCandle.open <= openingPosition.target) {
+    const tpActive = openingPosition.signal.newHighTpEnabled !== false;
+    const slActive = openingPosition.signal.newHighSlEnabled !== false;
+    if (tpActive && (long ? executionCandle.open >= openingPosition.target : executionCandle.open <= openingPosition.target)) {
       close(state, openingPosition, openingPosition.target, openingPosition.qty, 'NEW_HIGH_TP', executionCandle, true);
       return;
     }
-    if (long ? executionCandle.open <= openingPosition.stop : executionCandle.open >= openingPosition.stop) {
+    if (slActive && (long ? executionCandle.open <= openingPosition.stop : executionCandle.open >= openingPosition.stop)) {
       close(state, openingPosition, executionCandle.open, openingPosition.qty, stopReason(openingPosition), executionCandle, true);
       return;
     }
@@ -1241,10 +1252,10 @@ function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSetting
       advanceTrailing(position, before);
       advanceTrailing(position, after);
       const events: { price: number; kind: 'SL' | 'TP' }[] = [];
-      if (long ? before > position.stop && after <= position.stop : before < position.stop && after >= position.stop) {
+      if (slActive && (long ? before > position.stop && after <= position.stop : before < position.stop && after >= position.stop)) {
         events.push({ price: position.stop, kind: 'SL' });
       }
-      if (long ? before < position.target && after >= position.target : before > position.target && after <= position.target) {
+      if (tpActive && (long ? before < position.target && after >= position.target : before > position.target && after <= position.target)) {
         events.push({ price: position.target, kind: 'TP' });
       }
       events.sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before) || (a.kind === 'SL' ? -1 : 1));

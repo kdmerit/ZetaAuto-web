@@ -44,7 +44,7 @@ import { EnvelopeStopLossControl, EnvelopeTrailingStopControl } from './Envelope
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
-import { currentNewHighSettings, newHighPeriod, newHighRiskAmount, newHighRules, newHighSlMultiplier, newHighTpMultiplier, newHighTrailingStopMultiplier } from '../newHigh';
+import { currentNewHighSettings, newHighBreakoutCandleMaxMultiplier, newHighBreakoutCandleMinMultiplier, newHighPeriod, newHighRiskAmount, newHighRules, newHighSlMultiplier, newHighTpMultiplier, newHighTrailingStopMultiplier } from '../newHigh';
 import { currentReferenceSettings, referenceRules, referenceTpPercent } from '../reference';
 
 const strategySettings = (strategy: Strategy, value: BacktestSettings): BacktestSettings => strategy === 'NEW_HIGH'
@@ -109,7 +109,13 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     envelopeTrailingStopPercent: strategy === 'ENVELOPE' ? '3' : undefined,
     envelopeCandleFilterEnabled: false,
     newHighLookback: '20',
+    newHighBreakoutCandleMinEnabled: false,
+    newHighBreakoutCandleMinAtr: '1',
+    newHighBreakoutCandleMaxEnabled: false,
+    newHighBreakoutCandleMaxAtr: '2',
+    newHighSlEnabled: true,
     newHighSlMultiplier: '2',
+    newHighTpEnabled: true,
     newHighTpMultiplier: '2',
     newHighTrailingStopEnabled: false,
     newHighTrailingStopMultiplier: '3',
@@ -454,7 +460,12 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     if (strategy === 'ENVELOPE') envelopeParameters(settings);
     if (strategy === 'PULLBACK') pullbackEnvelopeParameters(settings);
     if (strategy === 'NEW_HIGH') {
-      newHighPeriod(settings); newHighSlMultiplier(settings); newHighTpMultiplier(settings);
+      newHighPeriod(settings);
+      const minBreakoutSize = settings.newHighBreakoutCandleMinEnabled === true ? newHighBreakoutCandleMinMultiplier(settings) : null;
+      const maxBreakoutSize = settings.newHighBreakoutCandleMaxEnabled === true ? newHighBreakoutCandleMaxMultiplier(settings) : null;
+      if (minBreakoutSize !== null && maxBreakoutSize !== null && minBreakoutSize > maxBreakoutSize) throw new Error('돌파봉 최소크기 배수는 최대크기 배수보다 클 수 없습니다.');
+      if (settings.newHighSlEnabled !== false) newHighSlMultiplier(settings);
+      if (settings.newHighTpEnabled !== false) newHighTpMultiplier(settings);
       if (settings.newHighTrailingStopEnabled === true) newHighTrailingStopMultiplier(settings);
       if (newHighRiskSizing) newHighRiskAmount(settings);
     }
@@ -844,22 +855,28 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
 
           {strategy === 'NEW_HIGH' ? <>
             <label className="field-label">신고가 기준 봉수<input type="number" inputMode="numeric" min="1" max="1000" step="1" value={settings.newHighLookback ?? '20'} onChange={event => update('newHighLookback', event.target.value)} /><small>1~1000 · 기본 20 · 현재 봉 종가가 이전 N봉을 처음 돌파할 때 적용</small></label>
-            <label className="field-label">SL 배수 (ATR)<input type="number" inputMode="decimal" min="0.1" max="10" step="0.1" value={settings.newHighSlMultiplier ?? '2'} onChange={event => update('newHighSlMultiplier', event.target.value)} /><small>0.1~10.0 · 기본 2.0 · 롱 매수가−ATR×배수 / 숏 매수가+ATR×배수</small></label>
-            <label className="field-label">TP 배수 (ATR)<input type="number" inputMode="decimal" min="0.1" max="10" step="0.1" value={settings.newHighTpMultiplier ?? '2'} onChange={event => update('newHighTpMultiplier', event.target.value)} /><small>0.1~10.0 · 기본 2.0 · 롱 매수가+ATR×배수 / 숏 매수가−ATR×배수</small></label>
+            <label className="checkbox-row"><input type="checkbox" checked={settings.newHighBreakoutCandleMinEnabled === true} onChange={event => update('newHighBreakoutCandleMinEnabled', event.target.checked)} /><span>돌파봉 최소크기 적용</span></label>
+            <label className="field-label">돌파봉 최소크기 (ATR)<input type="number" inputMode="decimal" min="0.1" max="10" step="0.1" disabled={settings.newHighBreakoutCandleMinEnabled !== true} value={settings.newHighBreakoutCandleMinAtr ?? '1'} onChange={event => update('newHighBreakoutCandleMinAtr', event.target.value)} /><small>0.1~10.0 · 돌파봉 고가−저가가 ATR×배수 이상</small></label>
+            <label className="checkbox-row"><input type="checkbox" checked={settings.newHighBreakoutCandleMaxEnabled === true} onChange={event => update('newHighBreakoutCandleMaxEnabled', event.target.checked)} /><span>돌파봉 최대크기 적용</span></label>
+            <label className="field-label">돌파봉 최대크기 (ATR)<input type="number" inputMode="decimal" min="0.1" max="10" step="0.1" disabled={settings.newHighBreakoutCandleMaxEnabled !== true} value={settings.newHighBreakoutCandleMaxAtr ?? '2'} onChange={event => update('newHighBreakoutCandleMaxAtr', event.target.value)} /><small>0.1~10.0 · 돌파봉 고가−저가가 ATR×배수 이하</small></label>
+            <label className="checkbox-row"><input type="checkbox" checked={settings.newHighSlEnabled !== false} onChange={event => update('newHighSlEnabled', event.target.checked)} /><span>SL 배수 적용</span></label>
+            <label className="field-label">SL 배수 (ATR)<input type="number" inputMode="decimal" min="0.1" max="10" step="0.1" disabled={settings.newHighSlEnabled === false} value={settings.newHighSlMultiplier ?? '2'} onChange={event => update('newHighSlMultiplier', event.target.value)} /><small>0.1~10.0 · 기본 2.0 · 롱 매수가−ATR×배수 / 숏 매수가+ATR×배수</small></label>
+            <label className="checkbox-row"><input type="checkbox" checked={settings.newHighTpEnabled !== false} onChange={event => update('newHighTpEnabled', event.target.checked)} /><span>TP 배수 적용</span></label>
+            <label className="field-label">TP 배수 (ATR)<input type="number" inputMode="decimal" min="0.1" max="10" step="0.1" disabled={settings.newHighTpEnabled === false} value={settings.newHighTpMultiplier ?? '2'} onChange={event => update('newHighTpMultiplier', event.target.value)} /><small>0.1~10.0 · 기본 2.0 · 롱 매수가+ATR×배수 / 숏 매수가−ATR×배수</small></label>
             <label className="checkbox-row"><input type="checkbox" checked={settings.newHighTrailingStopEnabled === true} onChange={event => update('newHighTrailingStopEnabled', event.target.checked)} /><span>트레일링 스탑 적용</span></label>
             <label className="field-label">트레일링 스탑 배수 (ATR)<input type="number" inputMode="decimal" min="0.1" max="10" step="0.1" disabled={settings.newHighTrailingStopEnabled !== true} value={settings.newHighTrailingStopMultiplier ?? '3'} onChange={event => update('newHighTrailingStopMultiplier', event.target.value)} /><small>0.1~10.0 · 기본 3.0 · ATR×입력 배수만큼 가격을 따라가는 손절선</small></label>
             <div className="sizing-choice" role="radiogroup" aria-label="신고가 포지션 금액 기준">
               <span className="sizing-choice-label">포지션 금액 기준</span>
               <label className={`radio-option${settings.newHighSizingMode !== 'RISK' ? ' selected' : ''}`}><input type="radio" name="newHighSizingMode" checked={settings.newHighSizingMode !== 'RISK'} onChange={() => update('newHighSizingMode', 'BET')} /><span>고정 베팅액</span></label>
-              <label className={`radio-option${settings.newHighSizingMode === 'RISK' ? ' selected' : ''}`}><input type="radio" name="newHighSizingMode" checked={settings.newHighSizingMode === 'RISK'} onChange={() => update('newHighSizingMode', 'RISK')} /><span>고정 손실액</span></label>
+              <label className={`radio-option${settings.newHighSizingMode === 'RISK' ? ' selected' : ''}`}><input type="radio" name="newHighSizingMode" disabled={settings.newHighSlEnabled === false} checked={settings.newHighSizingMode === 'RISK'} onChange={() => update('newHighSizingMode', 'RISK')} /><span>고정 손실액</span></label>
             </div>
             <div className="field-grid two sizing-inputs">
               <label className="field-label">고정 베팅액<input inputMode="decimal" disabled={settings.newHighSizingMode === 'RISK'} value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /><small>고정 베팅액 선택 시 활성화</small></label>
-              <label className="field-label">고정 손실액<input type="number" inputMode="decimal" min="0.01" step="0.01" disabled={settings.newHighSizingMode !== 'RISK'} value={settings.newHighRiskAmount ?? '100'} onChange={event => update('newHighRiskAmount', event.target.value)} /><small>고정 손실액 선택 시 활성화 · 초기 SL·수수료·슬리피지 기준 1회 허용 손실</small></label>
+              <label className="field-label">고정 손실액<input type="number" inputMode="decimal" min="0.01" step="0.01" disabled={settings.newHighSizingMode !== 'RISK' || settings.newHighSlEnabled === false} value={settings.newHighRiskAmount ?? '100'} onChange={event => update('newHighRiskAmount', event.target.value)} /><small>SL 적용 및 고정 손실액 선택 시 활성화 · 초기 SL·수수료·슬리피지 기준 1회 허용 손실</small></label>
             </div>
             <label className="checkbox-row"><input type="checkbox" checked={settings.newHighDailyMa20Enabled === true} onChange={event => update('newHighDailyMa20Enabled', event.target.checked)} /><span>1d MA20 위에서만 매수 (롱) / 1d MA20 아래에서만 매수 (숏)</span></label>
-            <p className="notice small">현재 봉 종가에서 이전 N봉을 처음 돌파할 때 1회 진입 · 다음 봉부터 15분봉으로 SL·TP 순서를 확인</p>
-            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 매수는 현재 선택 주기 봉이 완전히 끝난 종가에서만 하고, 매수한 봉 안에서는 SL·TP를 소급하지 않습니다. 1h·4h·1d 모두 다음 봉부터 15분봉을 함께 확인합니다. 1d MA20 필터를 켜면 선택 주기와 관계없이 진입 전에 확정된 1d 캔들의 전체 범위가 1d MA20 위인 경우에만 롱, 전체 범위가 아래인 경우에만 숏으로 진입합니다. MA20에 닿거나 걸친 캔들은 진입하지 않습니다. 종목당 한 번만 진입합니다. 단계형 트레일링, 다음 캔들 진입봉 이탈 청산, 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
+            <p className="notice small">현재 봉 종가에서 이전 N봉을 처음 돌파할 때 1회 진입 · 체크한 돌파봉 크기·SL·TP·트레일링 조건을 다음 봉부터 15분봉으로 확인</p>
+            <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 매수는 현재 선택 주기 봉이 완전히 끝난 종가에서만 하고, 매수한 봉 안에서는 체크한 청산 조건을 소급하지 않습니다. 돌파봉 크기 필터는 고가−저가를 현재 확정 ATR과 비교하며, 최소·최대 조건은 각각 독립적으로 적용됩니다. 1h·4h·1d 모두 다음 봉부터 15분봉을 함께 확인합니다. SL과 TP는 각각 체크된 경우에만 적용되며, 트레일링 스탑은 별도 선택 항목입니다. SL을 끄면 고정 손실액 기준을 사용할 수 없어 고정 베팅액으로 전환됩니다. 1d MA20 필터를 켜면 선택 주기와 관계없이 진입 전에 확정된 1d 캔들의 전체 범위가 1d MA20 위인 경우에만 롱, 전체 범위가 아래인 경우에만 숏으로 진입합니다. MA20에 닿거나 걸친 캔들은 진입하지 않습니다. 종목당 한 번만 진입합니다. 단계형 트레일링, 다음 캔들 진입봉 이탈 청산, 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
           </> : strategy === 'REFERENCE' ? (
             <>
               <label className="field-label">TP 비율 (%)<input type="number" inputMode="decimal" min="51" max="200" step="1" value={settings.referenceTpPercent ?? '80'} onChange={event => update('referenceTpPercent', event.target.value)} /><small>51~200 · 기본 80 · SL라인과 기준봉 고가/저가 사이 간격 기준</small></label>

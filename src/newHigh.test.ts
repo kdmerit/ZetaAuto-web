@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
 import { prepareSymbolBlock, runBacktest } from './engine';
-import { currentNewHighSettings, newHighExecutionInterval, newHighPeriod, newHighRiskAmount, newHighSlMultiplier, newHighTpMultiplier, newHighTrailingStopMultiplier, newHighWarmup, prepareNewHigh, type PreparedNewHigh } from './newHigh';
+import { currentNewHighSettings, newHighBreakoutCandleMaxMultiplier, newHighBreakoutCandleMinMultiplier, newHighExecutionInterval, newHighPeriod, newHighRiskAmount, newHighSlMultiplier, newHighTpMultiplier, newHighTrailingStopMultiplier, newHighWarmup, prepareNewHigh, type PreparedNewHigh } from './newHigh';
 import { engineVersionFor, canResumeLocalJob } from './localJobs';
 import type { PreparedBar } from './engine';
 import type { BacktestSettings, Candle } from './types';
@@ -10,7 +10,7 @@ const settings: BacktestSettings = { mode: 'SINGLE', symbol: 'BTC', interval: '1
   initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '1', side: 'LONG', partialTpEnabled: false,
   fullTpWavePercent: '100', minDisparityPercent: '1', ma20HalfCloseEnabled: false, roiClosePercent: '100',
   minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1', volatilityTpEnabled: true, volatilityNextCloseEnabled: false,
-  newHighLookback: '20', newHighSlMultiplier: '2', newHighTpMultiplier: '2', newHighSizingMode: 'BET', newHighRiskAmount: '100' };
+  newHighLookback: '20', newHighSlEnabled: true, newHighSlMultiplier: '2', newHighTpEnabled: true, newHighTpMultiplier: '2', newHighSizingMode: 'BET', newHighRiskAmount: '100' };
 const origin = Date.UTC(2026, 0, 1) / 1000;
 const definition: PreparedNewHigh = { atr: 2, sum4: 300, sum9: 900, sum19: 1900, sum59: 5900, high: 101, low: 99, long: true, short: false };
 
@@ -37,6 +37,8 @@ describe('new high/low close-breakout strategy', () => {
   it('validates N, SL, TP and the supported execution settings', () => {
     expect(newHighPeriod(settings)).toBe(20);
     expect(newHighPeriod({ ...settings, newHighLookback: '1' })).toBe(1);
+    expect(newHighBreakoutCandleMinMultiplier(settings)).toBe(1);
+    expect(newHighBreakoutCandleMaxMultiplier(settings)).toBe(2);
     expect(newHighSlMultiplier(settings)).toBe(2);
     expect(newHighTpMultiplier(settings)).toBe(2);
     expect(newHighTrailingStopMultiplier(settings)).toBe(3);
@@ -44,17 +46,20 @@ describe('new high/low close-breakout strategy', () => {
     for (const value of ['', '0', '0.05', '10.1', '1.234', 'NaN']) expect(() => newHighSlMultiplier({ ...settings, newHighSlMultiplier: value })).toThrow('SL 배수');
     for (const value of ['', '0', '0.05', '10.1', '1.234', 'NaN']) expect(() => newHighTpMultiplier({ ...settings, newHighTpMultiplier: value })).toThrow('TP 배수');
     for (const value of ['', '0', '0.05', '10.1', '1.234', 'NaN']) expect(() => newHighTrailingStopMultiplier({ ...settings, newHighTrailingStopMultiplier: value })).toThrow('트레일링');
+    for (const value of ['', '0', '0.05', '10.1', '1.234', 'NaN']) expect(() => newHighBreakoutCandleMinMultiplier({ ...settings, newHighBreakoutCandleMinAtr: value })).toThrow('최소크기');
+    for (const value of ['', '0', '0.05', '10.1', '1.234', 'NaN']) expect(() => newHighBreakoutCandleMaxMultiplier({ ...settings, newHighBreakoutCandleMaxAtr: value })).toThrow('최대크기');
     for (const value of ['', '0', '1001', '-5', '20.5', 'NaN']) expect(() => newHighPeriod({ ...settings, newHighLookback: value })).toThrow('봉수');
     for (const value of ['', '0', '-1', 'NaN']) expect(() => newHighRiskAmount({ ...settings, newHighRiskAmount: value })).toThrow('고정 손실액');
     expect(() => newHighPeriod({ ...settings, interval: '15m' })).toThrow('1h');
-    expect(currentNewHighSettings({ ...settings, interval: '15m', partialTpEnabled: true })).toMatchObject({ interval: '1h', partialTpEnabled: false, newHighTpMultiplier: '2', newHighTrailingStopEnabled: false, newHighTrailingStopMultiplier: '3' });
+    expect(currentNewHighSettings({ ...settings, interval: '15m', partialTpEnabled: true })).toMatchObject({ interval: '1h', partialTpEnabled: false, newHighBreakoutCandleMinEnabled: false, newHighBreakoutCandleMinAtr: '1', newHighBreakoutCandleMaxEnabled: false, newHighBreakoutCandleMaxAtr: '2', newHighSlEnabled: true, newHighTpEnabled: true, newHighTpMultiplier: '2', newHighTrailingStopEnabled: false, newHighTrailingStopMultiplier: '3' });
+    expect(currentNewHighSettings({ ...settings, newHighSlEnabled: false, newHighSizingMode: 'RISK' })).toMatchObject({ newHighSlEnabled: false, newHighSizingMode: 'BET' });
     expect(newHighExecutionInterval('1h')).toBe('15m'); expect(newHighExecutionInterval('4h')).toBe('15m'); expect(newHighExecutionInterval('1d')).toBe('15m');
     expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
     expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
     expect(newHighWarmup({ ...settings, interval: '1d' })).toBe(40 * 86400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.91'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.97');
-    expect(canResumeLocalJob({ version: '2.10.91', strategy: 'NEW_HIGH', settings })).toBe(true);
-    expect(canResumeLocalJob({ version: '2.10.90', strategy: 'NEW_HIGH', settings })).toBe(false);
+    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.93'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.97');
+    expect(canResumeLocalJob({ version: '2.10.93', strategy: 'NEW_HIGH', settings })).toBe(true);
+    expect(canResumeLocalJob({ version: '2.10.92', strategy: 'NEW_HIGH', settings })).toBe(false);
   });
 
   it('uses the first completed close beyond the previous N-bar extreme and the requested MA reversal zone', () => {
@@ -68,6 +73,21 @@ describe('new high/low close-breakout strategy', () => {
     expect(prepareNewHigh(wickOnly, { ...settings, interval: '1d' })[39]?.long).toBe(false);
     const mirrored = data.map(row => ({ ...row, open: 200 - row.open, high: 200 - row.low, low: 200 - row.high, close: 200 - row.close }));
     expect(prepareNewHigh(mirrored, { ...settings, interval: '1d', side: 'SHORT' })[39]?.short).toBe(true);
+  });
+
+  it('filters the breakout candle range by the completed ATR with inclusive bounds', () => {
+    const data = dailyHistory();
+    const base = prepareNewHigh(data, { ...settings, interval: '1d' })[39]!;
+    const atr = base.atr!;
+    const withRange = (range: number): Candle[] => [...data.slice(0, 39), {
+      ...data[39]!, open: 120, high: 120 + range / 2, low: 120 - range / 2, close: 120,
+    }];
+    const filtered = { ...settings, interval: '1d' as const, newHighBreakoutCandleMinEnabled: true, newHighBreakoutCandleMinAtr: '1', newHighBreakoutCandleMaxEnabled: true, newHighBreakoutCandleMaxAtr: '2' };
+    expect(prepareNewHigh(withRange(atr * 0.99), filtered)[39]?.long).toBe(false);
+    expect(prepareNewHigh(withRange(atr), filtered)[39]?.long).toBe(true);
+    expect(prepareNewHigh(withRange(atr * 2), filtered)[39]?.long).toBe(true);
+    expect(prepareNewHigh(withRange(atr * 2.01), filtered)[39]?.long).toBe(false);
+    expect(() => prepareNewHigh(data, { ...filtered, newHighBreakoutCandleMinAtr: '3', newHighBreakoutCandleMaxAtr: '2' })).toThrow('최소크기');
   });
 
   it('does not let future candles change a completed signal', () => {
@@ -132,6 +152,23 @@ describe('new high/low close-breakout strategy', () => {
     expect(state.positions.BTCUSDT!.newHighTrailStep).toBeUndefined();
     expect(state.exitReasons.NEW_HIGH_TRAILING).toBeUndefined();
     expect(state.exitReasons.NEW_HIGH_NEXT_CANDLE_BREAK).toBeUndefined();
+  });
+
+  it('applies fixed SL and TP only when their checkboxes are enabled', () => {
+    const noSl = simulate([bar(0, 100, 105, 95, 102), bar(1, 102, 103, 90, 100)], {
+      ...settings, newHighSlEnabled: false, newHighTpMultiplier: '10',
+    });
+    expect(noSl.closed).toBe(0); expect(noSl.positions.BTCUSDT).toBeDefined();
+
+    const noTp = simulate([bar(0, 100, 105, 95, 102), bar(1, 102, 110, 101, 109)], {
+      ...settings, newHighSlMultiplier: '1', newHighTpEnabled: false,
+    });
+    expect(noTp.closed).toBe(0); expect(noTp.positions.BTCUSDT).toBeDefined();
+
+    const noExits = simulate([bar(0, 100, 105, 95, 102), bar(1, 102, 110, 90, 100)], {
+      ...settings, newHighSlEnabled: false, newHighTpEnabled: false,
+    });
+    expect(noExits.closed).toBe(0); expect(noExits.positions.BTCUSDT).toBeDefined();
   });
 
   it('optionally follows the most favorable price by the configured ATR distance', () => {

@@ -1218,14 +1218,14 @@ export function buildLocalChart(
           price: trade.entryPrice + (trade.side === 'LONG' ? 1 : -1) * priceLine.stage! * signal.newHighAtr!,
           stage: priceLine.stage,
         })));
-      if (signal.newHighTpMultiplier !== undefined) lines.push(line('TP', signal.target));
+      if (signal.newHighTpEnabled !== false && signal.newHighTpMultiplier !== undefined) lines.push(line('TP', signal.target));
       }
     }
     if (signal.strategy !== 'ENVELOPE' || signal.exitMode !== 'ENVELOPE_MA20_CLOSE') {
-      lines.push(line('SL', signal.activeStop ?? signal.stop));
+      if (signal.strategy !== 'NEW_HIGH' || signal.newHighSlEnabled !== false) lines.push(line('SL', signal.activeStop ?? signal.stop));
       if (signal.strategy === 'ENVELOPE') lines.push(line('TP', signal.target));
     }
-    if (signal.strategy === 'NEW_HIGH' && signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
+    if (signal.strategy === 'NEW_HIGH' && signal.newHighSlEnabled !== false && signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
   } else if (signal.strategy === 'REFERENCE') {
     lines.push(line('ENTRY', trade.entryPrice));
     lines.push(line('SL', signal.activeStop ?? signal.stop));
@@ -1273,7 +1273,7 @@ export function buildLocalChart(
 
 export function strategyDescription(strategy: Strategy): string {
   if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';
-  if (strategy === 'NEW_HIGH') return '현재 봉 종가가 이전 N봉 신고가·신저가를 처음 돌파하고 MA10/20 전환을 확인해 진입합니다. 실제 체결가 기준 ATR 배수 고정 SL·TP를 적용하며, 선택 시 다음 15분봉부터 ATR 배수 연속 트레일링 스탑을 함께 적용합니다.';
+  if (strategy === 'NEW_HIGH') return '현재 봉 종가가 이전 N봉 신고가·신저가를 처음 돌파하고 MA10/20 전환을 확인해 진입합니다. 선택한 돌파봉 크기 필터와 SL·TP 항목을 적용하며, 트레일링 스탑 선택 시 다음 15분봉부터 ATR 배수 연속 추적을 함께 적용합니다.';
   if (strategy === 'ENVELOPE') return '1분 점검 가격으로 롱은 엔벨로프 하단 이하에서 매수하고 상단 이상에서 청산하며 숏은 반대로 적용합니다. MA20·일봉 절반·매수금지 캔들 필터는 당시까지의 고저가와 현재가만 사용하고 미래 일봉 값은 읽지 않습니다. 매수한 15분봉을 제외한 다음 봉부터 현재 15분봉의 관측된 반대 밴드 터치도 확인하며, 확인 시점 가격에 시장가 슬리피지를 반영해 청산합니다. SL은 실제 체결가에서 별도 입력한 SL 비율(기본 3%)로 설정하고 SL·트레일링 스탑은 1분봉 안의 보수적인 가격 순서로 확인합니다. 매수금지 캔들 필터를 켜면 1d·4h 현재/직전 캔들의 롱 음봉·숏 양봉 몸통 5배와 꼬리 3배·70% 조건을 적용합니다.';
   if (strategy === 'PULLBACK') {
     return 'MA20·MA60·MA120 5봉 정배열과 MA60·MA120·이격 증가, 직전 10봉 엔벨로프 접촉 이력을 확인한 뒤 MA20 눌림에서 진입하고, MA60·엔벨로프와 정배열 해제로 청산합니다.';
