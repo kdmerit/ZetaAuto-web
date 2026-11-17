@@ -55,7 +55,7 @@ export function candleBreakoutSignals(candles: Candle[], settings: BacktestSetti
     const side: Signal['side'] = long ? 'LONG' : 'SHORT';
     if (settings.side !== 'BOTH' && settings.side !== side) continue;
     const body = Math.abs(current.close - current.open);
-    const target = side === 'LONG' ? current.close + body : current.close - body;
+    const target = side === 'LONG' ? current.close + body * 2 : current.close - body * 2;
     const stop = side === 'LONG' ? current.low : current.high;
     if (!Number.isFinite(body) || body <= 0 || !Number.isFinite(target) || target <= 0 || !Number.isFinite(stop) || stop <= 0) continue;
     signals.push({

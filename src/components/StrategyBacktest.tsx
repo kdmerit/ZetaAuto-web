@@ -750,9 +750,9 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>5. 현재 캔들이 MA5를 아래에서 위로 돌파하고 종가가 MA5 위에서 마감합니다.</p>
                 <p>6. 현재 캔들의 종가에 롱으로 진입합니다.</p>
                 <p>7. SL은 현재 캔들의 저가입니다.</p>
-                <p>8. 진입 캔들의 몸통 폭만큼 상승한 가격에서 TP 청산합니다.</p>
+                <p>8. 진입 캔들의 몸통 폭의 2배만큼 상승한 가격에서 TP 청산합니다.</p>
                 <strong>숏 포지션</strong>
-                <p>위 조건을 반대로 적용합니다. 전전·전 캔들은 양봉, 종가는 전전 캔들이 더 낮고, 현재 캔들은 음봉으로 두 몸통 하단보다 낮게 마감해야 합니다. 두 이전 몸통은 MA5 위에 있고 현재 캔들은 MA5를 위에서 아래로 돌파합니다. 현재 캔들 종가에 숏 진입하며 SL은 현재 캔들 고가, TP는 진입 캔들 몸통 폭만큼 하락한 가격입니다.</p>
+                <p>위 조건을 반대로 적용합니다. 전전·전 캔들은 양봉, 종가는 전전 캔들이 더 낮고, 현재 캔들은 음봉으로 두 몸통 하단보다 낮게 마감해야 합니다. 두 이전 몸통은 MA5 위에 있고 현재 캔들은 MA5를 위에서 아래로 돌파합니다. 현재 캔들 종가에 숏 진입하며 SL은 현재 캔들 고가, TP는 진입 캔들 몸통 폭의 2배만큼 하락한 가격입니다.</p>
                 <p>진입 캔들의 고가·저가로는 청산하지 않고 다음 캔들부터 SL·TP를 확인합니다. 선택한 캔들 주기의 완성봉 기준으로 계산하며, ATR은 진입봉이 시작되기 전에 확정된 최근 20일 평균 진폭을 사용합니다.</p>
               </div>
             ) : strategy === 'REFERENCE' ? (
@@ -894,7 +894,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             <p className="notice small">현재 봉 종가에서 이전 N봉을 처음 돌파할 때 1회 진입 · 체크한 돌파봉 크기·SL·TP·트레일링 조건을 다음 봉부터 15분봉으로 확인</p>
             <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 매수는 현재 선택 주기 봉이 완전히 끝난 종가에서만 하고, 매수한 봉 안에서는 체크한 청산 조건을 소급하지 않습니다. 돌파봉 크기 필터는 고가−저가를 현재 확정 ATR과 비교하며, 최소·최대 조건은 각각 독립적으로 적용됩니다. 1h·4h·1d 모두 다음 봉부터 15분봉을 함께 확인합니다. SL과 TP는 각각 체크된 경우에만 적용되며, 트레일링 스탑은 별도 선택 항목입니다. SL을 끄면 고정 손실액 기준을 사용할 수 없어 고정 베팅액으로 전환됩니다. 1d MA20 필터를 켜면 선택 주기와 관계없이 진입 전에 확정된 1d 캔들의 전체 범위가 1d MA20 위인 경우에만 롱, 전체 범위가 아래인 경우에만 숏으로 진입합니다. MA20에 닿거나 걸친 캔들은 진입하지 않습니다. 종목당 한 번만 진입합니다. 단계형 트레일링, 다음 캔들 진입봉 이탈 청산, 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
           </> : strategy === 'CANDLE_BREAKOUT' ? (
-            <p className="notice small">전전·전 캔들의 작은 반대색 몸통과 종가 방향을 확인한 뒤 현재 캔들이 MA5를 돌파하면 종가 진입합니다. 현재 캔들 저가·고가를 SL로 사용하고 진입봉 몸통 폭을 TP로 사용합니다. 진입봉에서는 청산하지 않고 다음 캔들부터 확인합니다.</p>
+            <p className="notice small">전전·전 캔들의 작은 반대색 몸통과 종가 방향을 확인한 뒤 현재 캔들이 MA5를 돌파하면 종가 진입합니다. 현재 캔들 저가·고가를 SL로 사용하고 진입봉 몸통 폭의 2배를 TP로 사용합니다. 진입봉에서는 청산하지 않고 다음 캔들부터 확인합니다.</p>
           ) : strategy === 'REFERENCE' ? (
             <>
               <label className="field-label">TP 비율 (%)<input type="number" inputMode="decimal" min="51" max="200" step="1" value={settings.referenceTpPercent ?? '80'} onChange={event => update('referenceTpPercent', event.target.value)} /><small>51~200 · 기본 80 · SL라인과 기준봉 고가/저가 사이 간격 기준</small></label>
@@ -936,7 +936,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             <></>
           )}
           {strategy === 'CANDLE_BREAKOUT' ? (
-            <p className="muted small">롱은 전전·전 음봉이 ATR보다 작고 전전 종가가 더 높으며, 두 몸통이 MA5 아래에 있는 상태에서 현재 양봉이 MA5를 아래에서 위로 돌파할 때 매수합니다. 숏은 모든 방향을 반대로 적용합니다. 현재봉 종가 진입 후 다음 캔들부터 현재봉 저가·고가 SL과 진입봉 몸통 폭 TP를 확인합니다.</p>
+            <p className="muted small">롱은 전전·전 음봉이 ATR보다 작고 전전 종가가 더 높으며, 두 몸통이 MA5 아래에 있는 상태에서 현재 양봉이 MA5를 아래에서 위로 돌파할 때 매수합니다. 숏은 모든 방향을 반대로 적용합니다. 현재봉 종가 진입 후 다음 캔들부터 현재봉 저가·고가 SL과 진입봉 몸통 폭의 2배 TP를 확인합니다.</p>
           ) : strategy === 'REFERENCE' ? (
             <p className="muted small">롱은 거래량·몸통이 직전봉의 5배 이상인 양봉 기준봉에서 직전봉·기준봉 저가 중 더 낮은 SL라인과 기준봉 고가의 중간 매수라인을 사용합니다. MA10 조건을 켜면 기준봉 저가&lt;MA10·중간값≥MA10·종가&gt;MA10을 모두 확인하고, 숏은 반대로 적용합니다. 기준봉 고가가 15분봉에서 확정되기 전의 라인 터치는 무시하며, 확정 후 매수라인을 하락 재터치할 때만 매수합니다. TP는 SL라인과 기준봉 극값 사이 간격의 입력 비율이며 이후 캔들에서는 매수하지 않습니다.</p>
           ) : strategy === 'VOLATILITY' ? (
