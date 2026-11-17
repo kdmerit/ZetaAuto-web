@@ -9,6 +9,7 @@ import { currentEnvelopeSettings, currentPullbackSettings, envelopeLocalJobVersi
 import { envelopeCandleDataStart } from './envelopeCandleFilter';
 import { currentNewHighSettings, newHighExecutionInterval, newHighWarmup } from './newHigh';
 import { currentReferenceSettings } from './reference';
+import { candleBreakoutWarmup } from './candleBreakout';
 import type { BacktestResult, BacktestSettings, Candle, Strategy } from './types';
 import { loadWeeklyUniverse, saveWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
 
@@ -22,7 +23,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
-  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.93' : strategy === 'ENVELOPE' ? envelopeLocalJobVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
+  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.93' : strategy === 'CANDLE_BREAKOUT' ? '2.10.98' : strategy === 'ENVELOPE' ? envelopeLocalJobVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);
@@ -259,7 +260,9 @@ async function executeWithLease(
         signal.throwIfAborted();
         const instrument = job.universe[job.cursor]!;
         const activeJob = job;
-        const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings) : 200 * seconds;
+        const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings)
+          : job.strategy === 'CANDLE_BREAKOUT' ? candleBreakoutWarmup(job.settings)
+            : 200 * seconds;
         try {
           let candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
           const dailySeconds = intervalSeconds('1d');

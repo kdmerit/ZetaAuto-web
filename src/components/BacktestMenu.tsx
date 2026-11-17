@@ -15,6 +15,7 @@ export const backtestMenuOrderStorageKey = 'zetaauto.web.backtestMenu.order.v1';
 const menuItems: MenuItem[] = [
   { id: 'CHART', title: '종합차트' },
   { id: 'NEW_HIGH', title: '신고가 백테스트', strategy: 'NEW_HIGH' },
+  { id: 'CANDLE_BREAKOUT', title: '캔들돌파 백테스트', strategy: 'CANDLE_BREAKOUT' },
   { id: 'PULLBACK', title: '눌림목 백테스트', strategy: 'PULLBACK' },
   { id: 'DISPARITY', title: '이격매매 백테스트', strategy: 'DISPARITY' },
   { id: 'VOLATILITY', title: '변동성 돌파 백테스트', strategy: 'VOLATILITY' },

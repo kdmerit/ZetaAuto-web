@@ -161,6 +161,11 @@ function priceLines(p: Holding): PriceLine[] {
     { kind: 'SL', price: p.stop },
     { kind: 'TP', price: p.target },
   ];
+  if (p.signal.strategy === 'CANDLE_BREAKOUT') return [
+    { kind: 'ENTRY', price: p.first },
+    { kind: 'SL', price: p.stop },
+    { kind: 'TP', price: p.target },
+  ];
   if (p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE') return [{ kind: 'ENTRY', price: p.first }];
   const split = p.signal.strategy === 'PULLBACK';
   const lines: PriceLine[] = [{ kind: split ? 'FIRST_ENTRY' : 'ENTRY', price: p.first }];
@@ -289,7 +294,7 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     second: split ? signal.strategy === 'ENVELOPE' && signal.second !== undefined ? signal.second : (entry + signal.stop) / 2 : entry,
     ...(signal.strategy === 'ENVELOPE' && settings.envelopeRisk?.symbol === symbol ? { risk: settings.envelopeRisk } : {}),
     target,
-    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' && signal.strategy !== 'NEW_HIGH' && signal.strategy !== 'REFERENCE' && signal.exitMode !== 'PULLBACK_ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
+    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' && signal.strategy !== 'NEW_HIGH' && signal.strategy !== 'REFERENCE' && signal.strategy !== 'CANDLE_BREAKOUT' && signal.exitMode !== 'PULLBACK_ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
     partialDone: false, stop: envelopeStop, mark: signal.strategy === 'ENVELOPE' && settings.envelopeSideRatio50Enabled === true ? signal.entry : candle.close, net: -fee, executions: [],
     ...(signal.exitMode === 'VOLATILITY_CANDLE_RULE' ? {
       volatilityEntryOpen: candle.open,
@@ -452,6 +457,7 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
     const reason = p.signal.strategy === 'ENVELOPE' ? 'ENVELOPE_OPPOSITE'
       : p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE' ? 'PULLBACK_ENVELOPE'
       : p.signal.strategy === 'REFERENCE' ? 'REFERENCE_TP'
+        : p.signal.strategy === 'CANDLE_BREAKOUT' ? 'CANDLE_BREAKOUT_TP'
         : disparity ? 'MA60_TOUCH' : 'FULL_TP';
     close(state, p, disparity ? price : p.target, p.qty, reason, candle, opening);
   }

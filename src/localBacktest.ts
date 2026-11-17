@@ -6,6 +6,7 @@ import { ensureCandles, listInstruments } from './marketData';
 import { saveBacktestHistory, saveCachedResult } from './storage';
 import { projectEnvelopeBands } from './envelope';
 import { atrWindowSeconds } from './atr';
+import { candleBreakoutWarmup } from './candleBreakout';
 import { enrichMarketCandles } from './marketIndicators';
 import type { BacktestResult, BacktestSettings, BacktestTrade, ChartData, Strategy } from './types';
 import { loadLocalWeeklyUniverse, saveLocalWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
@@ -106,7 +107,8 @@ export async function chartForLocalTrade(
   const start = end - 300 * seconds;
   const symbol = trade.symbol === 'LOCAL' ? `${settings.symbol.replace(/USDT$/i, '').toUpperCase()}USDT` : trade.symbol;
   const instrument = (await listInstruments(symbol))[0] ?? { symbol, launchAt: 0 };
-  const warmup = trade.signal.strategy === 'NEW_HIGH' || trade.signal.strategy === 'VOLATILITY' ? Math.max(atrWindowSeconds + seconds, 200 * seconds) : 200 * seconds;
+  const warmup = trade.signal.strategy === 'CANDLE_BREAKOUT' ? candleBreakoutWarmup(settings)
+    : trade.signal.strategy === 'NEW_HIGH' || trade.signal.strategy === 'VOLATILITY' ? Math.max(atrWindowSeconds + seconds, 200 * seconds) : 200 * seconds;
   const rows = await ensureCandles(instrument, settings.interval, start - warmup, end);
   const candles = (trade.signal.strategy === 'NEW_HIGH' || trade.signal.strategy === 'VOLATILITY' ? enrichMarketCandles(rows, settings.interval) : enrichCandles(rows)).filter(candle => candle.openTime >= start);
   if (!candles.length) throw new Error('차트에 표시할 캔들이 없습니다.');
