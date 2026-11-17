@@ -95,7 +95,7 @@ export function ChartBrowser() {
   };
   const matches = useMemo(() => matchingChartInstruments(instruments, query), [instruments, query]);
   return <main className="screen"><div className="content strategy-content market-browser">
-    <header className="page-header"><div><p className="eyebrow">BYBIT · CHART</p><h1>차트 보기</h1></div></header>
+    <header className="page-header"><div><p className="eyebrow">BYBIT · CHART</p><h1>종합차트</h1></div></header>
     <section className="surface-card form-card"><label className="field-label">종목명 검색<input aria-label="종목명 검색" value={query} inputMode="text" autoCapitalize="characters" autoComplete="off" spellCheck={false} placeholder="BTC" onChange={event => {
       const value = normalizeChartQuery(event.target.value); setQuery(value); remember(queryKey, value);
       if (loadingSymbol) { cancel(); setLoadingSymbol(null); }

@@ -20,7 +20,7 @@ export interface PreparedNewHigh {
 
 export function newHighPeriod(settings: BacktestSettings): number {
   const text = settings.newHighLookback ?? '20';
-  if (!/^\d+$/.test(text) || Number(text) < 6 || Number(text) > 1000) throw new Error('신고가 기준 봉수는 최근 5봉 제외를 위해 6~1000 정수로 입력해 주세요.');
+  if (!/^\d+$/.test(text) || Number(text) < 1 || Number(text) > 1000) throw new Error('신고가 기준 봉수는 1~1000 정수로 입력해 주세요.');
   if (settings.interval !== '1h' && settings.interval !== '4h' && settings.interval !== '1d') throw new Error('신고가 백테스트는 1h·4h·1d만 사용할 수 있습니다.');
   return Number(text);
 }
@@ -35,6 +35,22 @@ export function newHighSlMultiplier(settings: BacktestSettings): number {
   }
   return value;
 }
+export function newHighTpMultiplier(settings: BacktestSettings): number {
+  const text = settings.newHighTpMultiplier ?? '2';
+  const value = Number(text);
+  if (!/^\d+(?:\.\d{1,2})?$/.test(text) || !Number.isFinite(value) || value < 0.1 || value > 10) {
+    throw new Error('신고가 TP 배수는 0.1~10.0으로 입력해 주세요.');
+  }
+  return value;
+}
+export function newHighTrailingStopMultiplier(settings: BacktestSettings): number {
+  const text = settings.newHighTrailingStopMultiplier ?? '3';
+  const value = Number(text);
+  if (!/^\d+(?:\.\d{1,2})?$/.test(text) || !Number.isFinite(value) || value < 0.1 || value > 10) {
+    throw new Error('신고가 트레일링 스탑 배수는 0.1~10.0으로 입력해 주세요.');
+  }
+  return value;
+}
 export function newHighRiskAmount(settings: BacktestSettings): number {
   const text = settings.newHighRiskAmount ?? settings.betAmountUsdt;
   const value = Number(text);
@@ -44,10 +60,10 @@ export function newHighRiskAmount(settings: BacktestSettings): number {
   return value;
 }
 export function newHighWarmup(settings: BacktestSettings): number {
-  return Math.max(atrWindowSeconds + intervalSeconds(settings.interval), (newHighPeriod(settings) + 40) * intervalSeconds(settings.interval));
+  return Math.max(atrWindowSeconds + intervalSeconds(settings.interval), (newHighPeriod(settings) + 20) * intervalSeconds(settings.interval));
 }
 export function currentNewHighSettings(settings: BacktestSettings): BacktestSettings {
-  return { ...settings, interval: settings.interval === '1d' ? '1d' : settings.interval === '4h' ? '4h' : '1h', newHighLookback: settings.newHighLookback ?? '20', newHighSlMultiplier: settings.newHighSlMultiplier ?? '2', newHighMa60Enabled: false, newHighMa10Enabled: false, newHighDailyMa20Enabled: settings.newHighDailyMa20Enabled === true, newHighSizingMode: settings.newHighSizingMode === 'RISK' ? 'RISK' : 'BET', newHighRiskAmount: settings.newHighRiskAmount ?? settings.betAmountUsdt, partialTpEnabled: false };
+  return { ...settings, interval: settings.interval === '1d' ? '1d' : settings.interval === '4h' ? '4h' : '1h', newHighLookback: settings.newHighLookback ?? '20', newHighSlMultiplier: settings.newHighSlMultiplier ?? '2', newHighTpMultiplier: settings.newHighTpMultiplier ?? '2', newHighTrailingStopEnabled: settings.newHighTrailingStopEnabled === true, newHighTrailingStopMultiplier: settings.newHighTrailingStopMultiplier ?? '3', newHighMa60Enabled: false, newHighMa10Enabled: false, newHighDailyMa20Enabled: settings.newHighDailyMa20Enabled === true, newHighSizingMode: settings.newHighSizingMode === 'RISK' ? 'RISK' : 'BET', newHighRiskAmount: settings.newHighRiskAmount ?? settings.betAmountUsdt, partialTpEnabled: false };
 }
 
 interface DailyMa20Filter {
@@ -70,7 +86,7 @@ function dailyMa20FiltersAt(parentCandles: Candle[], dailyCandles: Candle[]): (D
   });
 }
 
-/** Every field is fixed from candles strictly before the execution candle. */
+/** The signal is fixed at the completed current candle; its channel and prior MA zone use only earlier candles. */
 export function prepareNewHigh(candles: Candle[], settings: BacktestSettings, dailyCandles: Candle[] = []): (PreparedNewHigh | undefined)[] {
   const period = newHighPeriod(settings); const enriched = enrichCandles(candles); const atr = calendarAtr(candles, settings.interval);
   const sums = [0]; for (const row of candles) sums.push(sums.at(-1)! + row.close);
@@ -86,15 +102,24 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings, da
   };
   const highs = extremes('high', 1); const lows = extremes('low', -1);
   return candles.map((_candle, index) => {
-    if (index < Math.max(period, 40)) return undefined;
-    const recent = candles.slice(index - 5, index);
-    const cross = enriched.slice(index - 20, index);
+    if (index < Math.max(period, 20)) return undefined;
+    const current = enriched[index]!;
+    const previous = enriched[index - 1];
+    const prior = enriched.slice(index - period, index);
+    const previousHigh = highs[index - 1];
+    const previousLow = lows[index - 1];
+    const currentLongMa = current.ma10 !== null && current.ma20 !== null && current.ma10 > current.ma20;
+    const currentShortMa = current.ma10 !== null && current.ma20 !== null && current.ma10 < current.ma20;
+    const priorLongMa = prior.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 < row.ma20);
+    const priorShortMa = prior.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 > row.ma20);
+    const firstLongBreak = previous === undefined || previousHigh === undefined || !Number.isFinite(previousHigh) || previous.close <= previousHigh;
+    const firstShortBreak = previous === undefined || previousLow === undefined || !Number.isFinite(previousLow) || previous.close >= previousLow;
     return { atr: atr[index]!.complete ? atr[index]!.value : null,
       sum4: sums[index]! - sums[index - 4]!, sum9: sums[index]! - sums[index - 9]!, sum19: sums[index]! - sums[index - 19]!,
       ...(index >= 59 ? { sum59: sums[index]! - sums[index - 59]! } : {}),
       high: highs[index]!, low: lows[index]!,
-      long: settings.side !== 'SHORT' && recent.every(row => row.high < highs[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 < row.ma20),
-      short: settings.side !== 'LONG' && recent.every(row => row.low > lows[index]!) && cross.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 > row.ma20),
+      long: settings.side !== 'SHORT' && Number.isFinite(highs[index]!) && _candle.close > highs[index]! && firstLongBreak && currentLongMa && priorLongMa,
+      short: settings.side !== 'LONG' && Number.isFinite(lows[index]!) && _candle.close < lows[index]! && firstShortBreak && currentShortMa && priorShortMa,
       ...(dailyFilters[index] ?? {}),
     };
   });
@@ -102,16 +127,16 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings, da
 
 export const newHighRules = {
   long: [
-    '현재 봉을 제외한 이전 N봉 최고가를 돌파하는 중 MA10 > MA20 등 진입 조건이 충족되면 봉 중간에 매수합니다. N은 입력값(기본 20)이며 실제 체결가는 돌파선 +0.5~1.0ATR 사이로 고정됩니다.',
-    '진입 시점의 현재가를 반영한 MA10 > MA20이고, 이전 20봉 안에 MA10 < MA20인 봉이 하나 이상 있어야 합니다.',
-    '진입 시 현재 가격이 시가보다 높은 양봉 방향이어야 합니다. SL은 실제 매수가 − (입력 SL 배수×ATR)입니다.',
-    '수익이 +1ATR에 도달하면 SL을 매수가+0.5ATR, +2ATR에 도달하면 매수가+1.5ATR로 옮깁니다. +3ATR부터는 도달 배수−0.5만큼의 수익 구간에 SL을 계속 올립니다. 청산은 초기 SL 또는 단계형 트레일링 SL로만 합니다.',
+    '현재 봉 종가가 이전 N봉의 최고가를 처음으로 돌파하면 종가에서 매수합니다. N은 입력값입니다.',
+    '매수 봉의 MA10이 MA20보다 높아야 하고, 이전 N봉 안에 MA10이 MA20보다 낮았던 봉이 하나 이상 있어야 합니다.',
+    '손절가는 실제 매수가 − (입력한 손절 배수×ATR)입니다.',
+    '목표가는 실제 매수가 + (입력한 TP 배수×ATR)입니다. 목표가 또는 손절가에 닿으면 전량 청산합니다. 트레일링 스탑을 켜면 입력한 ATR 간격으로 손절선이 유리한 방향으로만 따라갑니다.',
   ],
   short: [
-    '현재 봉을 제외한 이전 N봉 최저가를 돌파하는 중 MA10 < MA20 등 진입 조건이 충족되면 봉 중간에 매수합니다. 실제 체결가는 돌파선 −0.5~1.0ATR 사이로 고정됩니다.',
-    '진입 시점의 현재가를 반영한 MA10 < MA20이고, 이전 20봉 안에 MA10 > MA20인 봉이 하나 이상 있어야 합니다.',
-    '진입 시 현재 가격이 시가보다 낮은 음봉 방향이어야 합니다. SL은 실제 매수가 + (입력 SL 배수×ATR)입니다.',
-    '수익이 +1ATR에 도달하면 SL을 매수가−0.5ATR, +2ATR에 도달하면 매수가−1.5ATR로 옮깁니다. +3ATR부터는 도달 배수−0.5만큼의 수익 구간에 SL을 계속 내립니다. 청산은 초기 SL 또는 단계형 트레일링 SL로만 합니다.',
+    '현재 봉 종가가 이전 N봉의 최저가를 처음으로 이탈하면 종가에서 매도합니다. N은 입력값입니다.',
+    '매도 봉의 MA10이 MA20보다 낮아야 하고, 이전 N봉 안에 MA10이 MA20보다 높았던 봉이 하나 이상 있어야 합니다.',
+    '손절가는 실제 매도가 + (입력한 손절 배수×ATR)입니다.',
+    '목표가는 실제 매도가 − (입력한 TP 배수×ATR)입니다. 목표가 또는 손절가에 닿으면 전량 청산합니다. 트레일링 스탑을 켜면 입력한 ATR 간격으로 손절선이 유리한 방향으로만 따라갑니다.',
   ],
-  common: 'ATR은 선택 주기 TR의 직전 20일 단순평균(1h 480봉·4h 120봉·1d 20봉)이며 매 봉 시작 전에 확정합니다. 1h·4h·1d 모두 15분봉을 보조 데이터로 사용해 봉 안의 진입·SL·단계형 트레일링 순서를 확인합니다. 자료가 부족하면 신규 진입하지 않습니다. 1d MA20 필터를 켜면 선택 주기와 관계없이 진입 시점 전에 확정된 1d 캔들의 저가가 1d MA20보다 높은 경우에만 롱, 고가가 1d MA20보다 낮은 경우에만 숏으로 진입합니다. 1d 캔들이 MA20에 닿거나 걸치면 진입하지 않습니다. 고정 베팅액 또는 고정 손실액 중 선택한 기준으로 종목당 한 번만 진입합니다. 고정 손실액을 선택하면 초기 SL 거리와 수수료·슬리피지를 기준으로 수량을 계산합니다. 자금이 부족하거나 SL 가격이 유효하지 않으면 진입하지 않습니다. 진입 캔들에서는 초기 SL·단계형 트레일링 SL을 발동하지 않고, 다음 선택 주기 캔들부터 단계형 트레일링 SL을 적용합니다. 바로 다음 선택 주기 캔들에서 진입봉 저가(롱)·고가(숏)를 15분봉 기준으로 이탈하면 즉시 청산합니다. ATR 단계에 처음 도달한 15분봉에서는 새로 이동한 트레일링 SL을 발동하지 않고, 다음 15분봉부터 그 SL 접촉을 청산으로 처리합니다. 별도 MA5·MA20 청산은 사용하지 않습니다. MA10·MA20·양봉/음봉 조건은 캔들 진행 중 체결 시점에 판단합니다. 매수는 돌파선 +0.5ATR에 도달한 순간부터 +1.0ATR 이내에서만 시도합니다. 진입/청산 0.02% 슬리피지·편도 0.055% 수수료를 반영합니다. 보조 봉 안의 OHLC 경로 중 낮은 계좌 평가액을 선택하고 동시 경계는 SL 우선입니다. 정확한 틱 재현은 아닙니다. 한 선택 주기에서 청산 후 재진입하지 않으며 전체종목은 한 계좌·종목명 순서·봉 시작 가용자금만 사용합니다.',
+  common: 'ATR은 선택 주기 TR의 직전 20일 단순평균(1h 480봉·4h 120봉·1d 20봉)이며 현재 봉이 시작할 때 확정합니다. 매수는 현재 선택 주기 봉이 완전히 끝난 종가에서만 합니다. 1h·4h·1d 모두 15분봉을 보조 데이터로 사용해 다음 봉부터 손절·목표가 도달 순서를 확인합니다. 매수한 봉 안에서는 손절·목표가를 소급하지 않습니다. 트레일링 스탑을 켜면 진입 후 가장 유리했던 가격에서 입력한 ATR×배수만큼 떨어진 손절선을 유지하며, 손절선은 불리한 방향으로 되돌리지 않습니다. 자료가 부족하면 신규 진입하지 않습니다. 1d MA20 필터를 켜면 선택 주기와 관계없이 진입 전에 확정된 1d 캔들의 저가가 1d MA20보다 높은 경우에만 롱, 고가가 1d MA20보다 낮은 경우에만 숏으로 진입합니다. 1d 캔들이 MA20에 닿거나 걸치면 진입하지 않습니다. 고정 베팅액 또는 고정 손실액 중 선택한 기준으로 종목당 한 번만 진입합니다. 고정 손실액을 선택하면 손절 거리와 수수료·슬리피지를 기준으로 수량을 계산합니다. 자금이 부족하거나 손절가가 유효하지 않으면 진입하지 않습니다. 단계형 트레일링, 다음 캔들 진입봉 이탈 청산, MA5·MA20 청산은 사용하지 않습니다. 진입·청산 0.02% 슬리피지·편도 0.055% 수수료를 반영합니다. 보조 봉 안의 OHLC 경로를 시간순으로 확인하고, 같은 봉에서 순서를 알 수 없으면 계좌에 더 불리한 경로를 선택합니다. 정확한 틱 재현은 아닙니다. 한 선택 주기에서 청산 후 재진입하지 않으며 전체종목은 한 계좌·종목명 순서·봉 시작 가용자금만 사용합니다.',
 };

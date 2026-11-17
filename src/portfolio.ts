@@ -4,7 +4,7 @@ import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, ContractR
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
 import { envelopeHalfCandleAllowsEntry, envelopeParameters, envelopeTrailingStopPercent } from './envelope';
 import { envelopeCandleAllowsEntry, type EnvelopeCandleContext } from './envelopeCandleFilter';
-import { newHighRiskAmount, newHighSlMultiplier } from './newHigh';
+import { newHighRiskAmount, newHighSlMultiplier, newHighTpMultiplier, newHighTrailingStopMultiplier } from './newHigh';
 import { estimatedLiquidation } from './contractRisk';
 
 const feeRate = 0.00055;
@@ -42,6 +42,9 @@ interface Holding {
   pullbackMa60Exit?: number;
   newHighTrailStep?: number;
   newHighTrailLevels?: { step: number; price: number; reachedPrice?: number }[];
+  newHighTrailingDistance?: number;
+  newHighTrailingExtreme?: number;
+  newHighTrailingStop?: number;
   newHighEntryParentOpenTime?: number;
   newHighEntryParentLow?: number;
   newHighEntryParentHigh?: number;
@@ -124,7 +127,9 @@ function priceLines(p: Holding): PriceLine[] {
     ...(p.newHighTrailLevels ?? []).flatMap(level => level.reachedPrice === undefined ? [] : [{ kind: 'TRAILING_REACHED' as const, price: level.reachedPrice, stage: level.step }]),
     ...(p.newHighTrailLevels ?? []).map(level => ({ kind: 'TRAILING_SL' as const, price: level.price, stage: level.step })),
     { kind: 'SL', price: p.stop },
-    ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : [])];
+    ...(p.newHighTrailingStop === undefined ? [] : [{ kind: 'TRAILING_SL' as const, price: p.newHighTrailingStop }]),
+    ...(p.stop !== p.signal.stop ? [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }] : []),
+    ...(p.signal.newHighTpMultiplier === undefined ? [] : [{ kind: 'TP' as const, price: p.target }])];
   if (p.signal.strategy === 'ENVELOPE') {
     if (p.signal.exitMode === 'ENVELOPE_MA20_CLOSE') return [{ kind: 'ENTRY', price: p.first }]
     const lines: PriceLine[] = [
@@ -208,7 +213,9 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
     symbol: p.symbol, side: p.signal.side, entryAt: p.opened,
     exitAt: p.executions.at(-1)!.at,
     entryPrice: p.entry, exitPrice: fill, quantity: qty, reason, netProfitUsdt: p.signal.strategy === 'NEW_HIGH' ? p.net : profit - fee, betAmountUsdt: p.betAmountUsdt,
-    ...(p.signal.strategy === 'NEW_HIGH' ? { newHighTrailStep: p.newHighTrailStep ?? 0, newHighTrailLevels: structuredClone(p.newHighTrailLevels ?? []) } : {}),
+    ...(p.signal.strategy === 'NEW_HIGH' && p.signal.newHighTpMultiplier === undefined
+      ? { newHighTrailStep: p.newHighTrailStep ?? 0, newHighTrailLevels: structuredClone(p.newHighTrailLevels ?? []) }
+      : {}),
     signalIndex: p.signal.index, entryIndex: p.signal.index, exitIndex: -1,
     signal: { ...p.signal, target: p.target, partial: p.partial ?? undefined,
       second: p.signal.strategy === 'ENVELOPE' && p.signal.envelopeEntryMode === 'BAND_TOUCH' ? undefined
@@ -1151,153 +1158,111 @@ function replayReferenceIntrabarHolding(position: Holding, bar: PreparedBar, set
 }
 
 interface NewHighPath { state: PortfolioState; spent: number }
-/** Causal price-dependent MA5/10/20 with optional 15m execution candles and post-entry candle confirmation. */
+/** Replay existing positions through 15m candles, then enter a new signal only at the parent close. */
 function newHighPath(symbol: string, bar: PreparedBar, settings: BacktestSettings, available: number, holding: Holding | undefined, lowFirst: boolean): NewHighPath {
   const state = initialPortfolio(available); const definition = bar.newHigh!; const candle = bar.candle;
+  const hadPosition = holding !== undefined;
   if (holding) state.positions[symbol] = structuredClone(holding);
-  let spent = 0; let attempted = holding !== undefined; let enteredThisCandle = false;
+  let spent = 0;
   const leverage = Number(settings.leverage);
   const riskAmount = settings.newHighSizingMode === 'RISK' ? newHighRiskAmount(settings) : undefined;
-  const ma10 = (price: number) => (definition.sum9 + price) / 10;
-  const ma20 = (price: number) => (definition.sum19 + price) / 20;
-  const ma60 = (price: number): number | null => definition.sum59 !== undefined && Number.isFinite(definition.sum59)
-    ? (definition.sum59 + price) / 60 : null;
   const slMultiplier = newHighSlMultiplier(settings);
-  const tolerance = (...values: number[]) => Math.max(Number.MIN_VALUE, ...values.map(value => Math.abs(value) * Number.EPSILON * 16));
-  const advanceTrail = (p: Holding, price: number): boolean => {
-    const atr = p.signal.newHighAtr ?? Math.abs(p.target - p.first) / 2;
-    if (!Number.isFinite(atr) || atr <= 0) return false;
-    const direction = p.signal.side === 'LONG' ? 1 : -1;
-    const progress = direction * (price - p.first) / atr;
-    const step = progress >= 1 ? Math.floor(progress + 1e-10) : 0;
-    const currentStep = p.newHighTrailStep ?? 0;
-    if (step <= currentStep) return false;
-    p.newHighTrailLevels ??= [];
-    for (let reached = currentStep + 1; reached <= step; reached += 1) {
-      const lockedAtr = reached === 1 ? 0.5 : reached - 0.5;
-      const nextStop = p.first + direction * lockedAtr * atr;
-      if (direction * (nextStop - p.stop) > 0) p.stop = nextStop;
-      if (!p.newHighTrailLevels.some(level => level.step === reached)) {
-        p.newHighTrailLevels.push({ step: reached, price: nextStop, reachedPrice: p.first + direction * reached * atr });
-      }
-    }
-    p.newHighTrailStep = step;
-    return true;
+  const tpMultiplier = newHighTpMultiplier(settings);
+  const trailingEnabled = settings.newHighTrailingStopEnabled === true;
+  const trailingMultiplier = trailingEnabled ? newHighTrailingStopMultiplier(settings) : null;
+
+  const advanceTrailing = (position: Holding, price: number): void => {
+    if (!trailingEnabled || trailingMultiplier === null || !position.newHighTrailingDistance || !Number.isFinite(price)) return;
+    const long = position.signal.side === 'LONG';
+    position.newHighTrailingExtreme = long
+      ? Math.max(position.newHighTrailingExtreme ?? position.first, price)
+      : Math.min(position.newHighTrailingExtreme ?? position.first, price);
+    const candidate = position.newHighTrailingExtreme + (long ? -1 : 1) * position.newHighTrailingDistance;
+    position.newHighTrailingStop = candidate;
+    position.stop = long ? Math.max(position.stop, candidate) : Math.min(position.stop, candidate);
   };
-  const stopReason = (p: Holding): string => (p.newHighTrailStep ?? 0) > 0 ? 'NEW_HIGH_TRAILING' : 'SL';
-  const attempt = (side: 'LONG' | 'SHORT', price: number, executionCandle: Candle = candle): void => {
-    attempted = true;
+
+  const stopReason = (position: Holding): string => {
+    const long = position.signal.side === 'LONG';
+    const trailingIsActive = position.newHighTrailingStop !== undefined
+      && (long ? position.stop > position.signal.stop : position.stop < position.signal.stop);
+    return trailingIsActive ? 'NEW_HIGH_TRAILING' : 'SL';
+  };
+
+  const attempt = (side: 'LONG' | 'SHORT', price: number): void => {
     const direction = side === 'LONG' ? 1 : -1;
-    if (direction * (price - candle.open) < 0) return;
-    const fill = price * (1 + direction * slippage);
-    const boundary = side === 'LONG' ? definition.high : definition.low;
-    const currentMa60 = ma60(price);
     const dailyMa20Allowed = side === 'LONG' ? definition.dailyLongAllowed === true : definition.dailyShortAllowed === true;
-    if (direction * (ma10(price) - ma20(price)) <= 0
-      || settings.newHighMa60Enabled === true && (currentMa60 === null || direction * (price - currentMa60) <= 0)
-      || settings.newHighMa10Enabled === true && direction * (price - ma10(price)) >= 0
-      || settings.newHighDailyMa20Enabled === true && !dailyMa20Allowed
-      || direction * (fill - boundary) < 0.5 * definition.atr! - tolerance(fill, boundary, definition.atr!)
-      || direction * (fill - boundary) > definition.atr! + tolerance(fill, boundary, definition.atr!)) return;
-    const stop = fill - direction * slMultiplier * definition.atr!;
-    if (!(stop > 0) || (side === 'LONG' ? stop >= price : stop <= price)) return;
-    const target = fill + direction * 2 * definition.atr!;
-    enter(state, symbol, { strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime),
-      entry: price, stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', newHighAtr: definition.atr!, ...(riskAmount !== undefined ? { riskAmount } : {}) }, executionCandle, settings);
-    const p = state.positions[symbol];
-    if (p) {
-      p.newHighTrailStep = 0;
-      p.newHighEntryParentOpenTime = candle.openTime;
-      p.newHighEntryParentLow = candle.low;
-      p.newHighEntryParentHigh = candle.high;
-      enteredThisCandle = true;
-      spent += p.margin + p.margin * leverage * feeRate;
+    if (settings.newHighDailyMa20Enabled === true && !dailyMa20Allowed) return;
+    if (!definition.atr || !Number.isFinite(definition.atr) || definition.atr <= 0) return;
+    const fill = price * (1 + direction * slippage);
+    const stop = fill - direction * slMultiplier * definition.atr;
+    const target = fill + direction * tpMultiplier * definition.atr;
+    if (!(stop > 0) || !(target > 0) || (side === 'LONG' ? stop >= fill || target <= fill : stop <= fill || target >= fill)) return;
+    enter(state, symbol, {
+      strategy: 'NEW_HIGH', side, index: candle.openTime / (candle.closeTime - candle.openTime), entry: price,
+      stop, target, initialTarget: target, exitMode: 'NEW_HIGH_TOUCH', newHighAtr: definition.atr,
+      ...(trailingEnabled ? { newHighTrailingStopEnabled: true, newHighTrailingStopMultiplier: trailingMultiplier! } : {}),
+      newHighTpMultiplier: tpMultiplier, ...(riskAmount !== undefined ? { riskAmount } : {}),
+    }, candle, settings, true);
+    const position = state.positions[symbol];
+    if (position) {
+      if (trailingEnabled && trailingMultiplier !== null) {
+        const direction = side === 'LONG' ? 1 : -1;
+        position.newHighTrailingDistance = definition.atr * trailingMultiplier;
+        position.newHighTrailingExtreme = position.first;
+        position.newHighTrailingStop = position.first - direction * position.newHighTrailingDistance;
+        position.stop = side === 'LONG'
+          ? Math.max(position.stop, position.newHighTrailingStop)
+          : Math.min(position.stop, position.newHighTrailingStop);
+      }
+      spent += position.margin + position.margin * leverage * feeRate;
     }
   };
-  const eligible = (side: 'LONG' | 'SHORT'): boolean => definition.atr !== null && definition.atr > 0 && (side === 'LONG' ? definition.long : definition.short);
-  const longEntry = definition.high + 0.5 * definition.atr!; const shortEntry = definition.low - 0.5 * definition.atr!;
-  const parentSeconds = candle.closeTime - candle.openTime;
-  const isNextEntryParent = (p: Holding): boolean => p.newHighEntryParentOpenTime !== undefined
-    && candle.openTime === p.newHighEntryParentOpenTime + parentSeconds;
-  const nextEntryBreakPrice = (p: Holding): number | null => {
-    if (!isNextEntryParent(p)) return null;
-    return p.signal.side === 'LONG' ? p.newHighEntryParentLow ?? null : p.newHighEntryParentHigh ?? null;
-  };
-  const atOpen = state.positions[symbol];
-  let trailReachedAtParentOpen = false;
-  if (atOpen) {
-    trailReachedAtParentOpen = advanceTrail(atOpen, candle.open);
-    const long = atOpen.signal.side === 'LONG';
-    const breakPrice = nextEntryBreakPrice(atOpen);
-    if (breakPrice !== null && (long ? candle.open < breakPrice : candle.open > breakPrice)) {
-      close(state, atOpen, candle.open, atOpen.qty, 'NEW_HIGH_NEXT_CANDLE_BREAK', candle, true);
-    } else if (long ? candle.open <= atOpen.stop : candle.open >= atOpen.stop) {
-      close(state, atOpen, candle.open, atOpen.qty, stopReason(atOpen), candle, true);
-    }
-  }
+
   const processExecutionCandle = (executionCandle: Candle): void => {
-    // A 15m candle that first reaches an ATR stage cannot also close through
-    // the newly moved stop. The stop becomes active from the next 15m candle.
-    let trailReachedThisCandle = trailReachedAtParentOpen;
-    trailReachedAtParentOpen = false;
-    const noteTrailAdvance = (p: Holding, price: number): void => {
-      const advanced = advanceTrail(p, price);
-      trailReachedThisCandle ||= advanced;
-    };
     const openingPosition = state.positions[symbol];
-    if (openingPosition && !enteredThisCandle) {
-      noteTrailAdvance(openingPosition, executionCandle.open);
-      const long = openingPosition.signal.side === 'LONG';
-      const breakPrice = nextEntryBreakPrice(openingPosition);
-      if (breakPrice !== null && (long ? executionCandle.open < breakPrice : executionCandle.open > breakPrice)) {
-        close(state, openingPosition, executionCandle.open, openingPosition.qty, 'NEW_HIGH_NEXT_CANDLE_BREAK', executionCandle, true);
-        return;
-      }
-      if (long ? executionCandle.open <= openingPosition.stop : executionCandle.open >= openingPosition.stop) {
-        close(state, openingPosition, executionCandle.open, openingPosition.qty, stopReason(openingPosition), executionCandle, true);
-        return;
-      }
-    } else if (!openingPosition && !attempted) {
-      if (eligible('LONG') && executionCandle.open >= longEntry) attempt('LONG', executionCandle.open, executionCandle);
-      else if (eligible('SHORT') && executionCandle.open <= shortEntry) attempt('SHORT', executionCandle.open, executionCandle);
+    if (!openingPosition) return;
+    advanceTrailing(openingPosition, executionCandle.open);
+    const long = openingPosition.signal.side === 'LONG';
+    if (long ? executionCandle.open >= openingPosition.target : executionCandle.open <= openingPosition.target) {
+      close(state, openingPosition, openingPosition.target, openingPosition.qty, 'NEW_HIGH_TP', executionCandle, true);
+      return;
+    }
+    if (long ? executionCandle.open <= openingPosition.stop : executionCandle.open >= openingPosition.stop) {
+      close(state, openingPosition, executionCandle.open, openingPosition.qty, stopReason(openingPosition), executionCandle, true);
+      return;
     }
     const path = lowFirst
       ? [executionCandle.open, executionCandle.low, executionCandle.high, executionCandle.close]
       : [executionCandle.open, executionCandle.high, executionCandle.low, executionCandle.close];
     for (let i = 1; i < path.length; i += 1) {
-      let before = path[i - 1]!; const after = path[i]!;
-      for (let count = 0; count < 3; count += 1) {
-        const p = state.positions[symbol];
-        const events: { price: number; kind: 'SL' | 'NEXT_CANDLE_BREAK' | 'LONG' | 'SHORT' }[] = [];
-        if (p && !enteredThisCandle) {
-          noteTrailAdvance(p, before);
-          noteTrailAdvance(p, after);
-          const long = p.signal.side === 'LONG';
-          const breakPrice = nextEntryBreakPrice(p);
-          if (breakPrice !== null && (long ? before >= breakPrice && after < breakPrice : before <= breakPrice && after > breakPrice)) {
-            events.push({ price: breakPrice, kind: 'NEXT_CANDLE_BREAK' });
-          }
-          if (!trailReachedThisCandle && (long ? before >= p.stop && after <= p.stop : before <= p.stop && after >= p.stop)) {
-            events.push({ price: p.stop, kind: 'SL' });
-          }
-        } else if (!p && !attempted) {
-          if (eligible('LONG') && before < longEntry && after >= longEntry) events.push({ price: longEntry, kind: 'LONG' });
-          if (eligible('SHORT') && before > shortEntry && after <= shortEntry) events.push({ price: shortEntry, kind: 'SHORT' });
-        }
-        events.sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
-        const event = events[0]; if (!event) break;
-        if (event.kind === 'SL' || event.kind === 'NEXT_CANDLE_BREAK') {
-          close(state, p!, event.price, p!.qty, event.kind === 'NEXT_CANDLE_BREAK' ? 'NEW_HIGH_NEXT_CANDLE_BREAK' : stopReason(p!), executionCandle);
-          return;
-        }
-        const direction = event.kind === 'LONG' ? 1 : -1;
-        attempt(event.kind, event.price + direction * tolerance(event.price), executionCandle);
-        before = event.price;
+      const before = path[i - 1]!; const after = path[i]!; const position = state.positions[symbol];
+      if (!position) return;
+      advanceTrailing(position, before);
+      advanceTrailing(position, after);
+      const events: { price: number; kind: 'SL' | 'TP' }[] = [];
+      if (long ? before > position.stop && after <= position.stop : before < position.stop && after >= position.stop) {
+        events.push({ price: position.stop, kind: 'SL' });
       }
+      if (long ? before < position.target && after >= position.target : before > position.target && after <= position.target) {
+        events.push({ price: position.target, kind: 'TP' });
+      }
+      events.sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before) || (a.kind === 'SL' ? -1 : 1));
+      const event = events[0];
+      if (!event) continue;
+      close(state, position, event.price, position.qty, event.kind === 'SL' ? stopReason(position) : 'NEW_HIGH_TP', executionCandle);
+      return;
     }
   };
+
   const executionCandles = bar.newHighIntrabarCandles?.length ? bar.newHighIntrabarCandles : [candle];
   for (const executionCandle of executionCandles) processExecutionCandle(executionCandle);
+
+  // A position that existed at the parent open cannot be replaced in the same parent candle.
+  if (!hadPosition && !state.positions[symbol]) {
+    if (definition.long) attempt('LONG', candle.close);
+    else if (definition.short) attempt('SHORT', candle.close);
+  }
   const remaining = state.positions[symbol];
   if (remaining) remaining.mark = candle.close;
   return { state, spent };

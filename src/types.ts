@@ -74,6 +74,9 @@ export interface BacktestSettings {
   envelopeResultOptions?: EnvelopeResultOptions;
   newHighLookback?: string;
   newHighSlMultiplier?: string;
+  newHighTpMultiplier?: string;
+  newHighTrailingStopEnabled?: boolean;
+  newHighTrailingStopMultiplier?: string;
   newHighMa60Enabled?: boolean;
   newHighMa10Enabled?: boolean;
   newHighDailyMa20Enabled?: boolean;
@@ -260,8 +263,13 @@ export interface Signal {
   volatilityEntryLimit?: number;
   /** Maximum net loss budget used to size a NEW_HIGH position. */
   riskAmount?: number;
-  /** ATR fixed at the NEW_HIGH entry, used by the stepped trailing stop. */
+  /** ATR fixed at the NEW_HIGH entry, used by the fixed SL/TP and optional trailing stop. */
   newHighAtr?: number;
+  /** ATR multiplier used by the NEW_HIGH fixed take-profit target. */
+  newHighTpMultiplier?: number;
+  /** Optional continuous ATR trailing stop for NEW_HIGH positions. */
+  newHighTrailingStopEnabled?: boolean;
+  newHighTrailingStopMultiplier?: number;
   volatilityTpEnabled?: boolean;
   volatilityNextCloseEnabled?: boolean;
   breakoutRangePercent?: number;
