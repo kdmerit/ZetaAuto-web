@@ -68,13 +68,17 @@ describe('envelope input defaults and arrangement', () => {
     expect(html).toMatch(/aria-label="ATR 중심 EMA"[^>]*min="0" max="120" step="1"[^>]*value="20"/);
     expect(html).toMatch(/aria-label="ATR 기간"[^>]*min="0" max="120" step="1"[^>]*value="14"/);
     expect(html).toMatch(/aria-label="ATR 승수"[^>]*min="0" max="20" step="0\.1"[^>]*value="2\.0"/);
+    expect(html).toMatch(/SL 배수 \(ATR\)\s*<input[^>]*min="0" max="20" step="0\.1"[^>]*value="0\.5"/);
+    expect(html.indexOf('SL 배수 (ATR)')).toBeGreaterThan(html.indexOf('× N'));
+    expect(html.indexOf('SL 배수 (ATR)')).toBeLessThan(html.indexOf('트레일링 스탑 적용'));
     expect(html).toContain('BTC 이력보기');
     values.set('zetaauto.web.atrEnvelope.view', 'ALL');
-    saveSettings('ATR_ENVELOPE', { ...defaultSettings('ATR_ENVELOPE'), atrEnvelope: { emaPeriod: '3', atrPeriod: '3', atrMultiplier: '0.5' } });
+    saveSettings('ATR_ENVELOPE', { ...defaultSettings('ATR_ENVELOPE'), atrEnvelope: { emaPeriod: '3', atrPeriod: '3', atrMultiplier: '0.5' }, atrEnvelopeStopMultiplier: '1.2' });
     const all = renderToStaticMarkup(<EnvelopeWorkspace strategy="ATR_ENVELOPE" context={context} />);
     expect(all).not.toContain('placeholder="BTC"');
     expect(all).toContain('전체종목 이력보기');
     expect(all).toMatch(/aria-label="ATR 승수"[^>]*value="0\.5"/);
+    expect(all).toMatch(/SL 배수 \(ATR\)\s*<input[^>]*value="1\.2"/);
   });
 
   it('places the center-return exit immediately after the above-MA20 filter', () => {

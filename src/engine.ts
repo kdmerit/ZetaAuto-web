@@ -538,6 +538,7 @@ export interface PreparedEnvelope extends EnvelopeBand {
   long: boolean;
   short: boolean;
   atrEnvelope?: AtrEnvelopeParameters;
+  atrEnvelopeStopDistance?: number;
   priorUpperTouch?: boolean;
   priorLowerTouch?: boolean;
   previousClose?: number;
@@ -620,7 +621,7 @@ export function prepareSymbolBlock(
     const sma = strategy === 'ENVELOPE' ? envelopeParameters(settings) : undefined;
     const atr = strategy === 'ATR_ENVELOPE' ? atrEnvelopeBacktestParameters(settings) : undefined;
     const centers = sma ? priorMovingAverages(candles, sma.period) : [];
-    const useAtr = atr !== undefined && atrEnvelopeEnabled(atr);
+    const useAtr = atr !== undefined && atrEnvelopeEnabled(atr.band);
     let atrState = useAtr ? previousAtrEnvelope : undefined;
     const priorMa20 = priorMovingAverages(candles, 19);
     const seconds = intervalSeconds(settings.interval);
@@ -635,11 +636,14 @@ export function prepareSymbolBlock(
       envelopeGroups.set(parentOpenTime, rows);
     }
     const bars = enrichCandles(candles).flatMap((candle, index) => {
-      let band: EnvelopeBand | undefined;
-      if (useAtr && atr && candle.closeTime <= end && candle.openTime >= (atrState?.closeTime ?? -Infinity)) {
+      let band: Omit<PreparedEnvelope, 'long' | 'short'> | undefined;
+      if (useAtr && candle.closeTime <= end && candle.openTime >= (atrState?.closeTime ?? -Infinity)) {
         // The retained state already includes the warm-up rows before its close time.
-        if (atrState) band = atrEnvelopeBand(atrState, atr);
-        atrState = advanceAtrEnvelope(atrState, candle, atr);
+        if (atrState) {
+          band = { ...atrEnvelopeBand(atrState, atr.band), atrEnvelope: atr.band };
+          if (atr.stopMultiplier > 0) band.atrEnvelopeStopDistance = atrState.atr * atr.stopMultiplier;
+        }
+        atrState = advanceAtrEnvelope(atrState, candle, atr.band);
       } else if (sma && centers[index] != null) {
         band = bandFor(centers[index]!, sma.percent);
       }
@@ -653,7 +657,7 @@ export function prepareSymbolBlock(
           : candleContexts ? { envelopeCandleContexts: candleContexts } : {}),
         ...(children && !partialFirstBar ? { envelopeIntrabarCandles: children } : {}),
         ...(band ? { envelope: {
-          ...band, long: settings.side !== 'SHORT', short: settings.side !== 'LONG', ...(atr ? { atrEnvelope: atr } : {}),
+          ...band, long: settings.side !== 'SHORT', short: settings.side !== 'LONG',
         } } : {}),
       }];
     });
@@ -1242,6 +1246,7 @@ export function buildLocalChart(
       }
     }
     if (signal.strategy === 'ATR_ENVELOPE') {
+      if (signal.atrEnvelopeStopDistance !== undefined) lines.push(line('SL', signal.activeStop ?? signal.stop));
       lines.push(line('TP', signal.target));
       lines.push(...(trade.priceLines ?? []).filter(value => value.kind === 'TRAILING_SL'));
     } else if (signal.strategy !== 'ENVELOPE' || signal.exitMode !== 'ENVELOPE_MA20_CLOSE') {
@@ -1302,7 +1307,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
-  if (strategy === 'ATR_ENVELOPE') return '직전 완성봉까지의 EMA ± ATR × 배수로 밴드를 정합니다. 롱은 하단에서 진입해 상단에서 청산하고 숏은 반대로 적용합니다. 선택한 매수 필터, 중심선 이탈과 트레일링 스탑을 1분봉 순서로 확인합니다.';
+  if (strategy === 'ATR_ENVELOPE') return '직전 완성봉까지의 EMA ± ATR × 배수로 밴드를 정합니다. 롱은 하단에서 진입해 상단에서 청산하고 숏은 반대로 적용합니다. SL 배수가 0보다 크면 같은 ATR × SL 배수만큼 실제 체결가 아래(롱) 또는 위(숏)에 손절가를 고정합니다. 매수 필터와 청산 조건은 1분봉 순서로 확인합니다.';
   if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return '현재 봉 종가가 이전 N봉 신고가·신저가를 처음 돌파하고 MA10/20 전환을 확인해 진입합니다. 선택한 돌파봉 크기 필터와 SL·TP 항목을 적용하며, 트레일링 스탑 선택 시 다음 15분봉부터 ATR 배수 연속 추적을 함께 적용합니다.';
   if (strategy === 'CANDLE_BREAKOUT') return '전전·전 캔들의 작은 반대색 몸통과 종가 하락·상승을 확인한 뒤 현재 캔들이 MA5를 돌파하면 현재 종가에 진입합니다. 현재 캔들 저가·고가를 SL로 사용하고 진입 캔들 몸통 폭의 2배만큼 움직이면 TP 청산합니다.';

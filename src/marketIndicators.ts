@@ -15,11 +15,11 @@ export const defaultMarketIndicators: MarketIndicatorSettings = { smaPeriod: '20
 export const volumeWindowSeconds = 120 * 86400;
 
 const maximumPeriod = 120;
-const maximumAtrMultiplier = 20;
+export const atrEnvelopeMultiplierInput = { max: 20, step: 0.1 } as const;
 export const atrEnvelopeFields = [
   { key: 'emaPeriod', label: 'EMA', name: 'ATR 중심 EMA', max: maximumPeriod, step: 1 },
   { key: 'atrPeriod', label: 'ATR', name: 'ATR 기간', max: maximumPeriod, step: 1 },
-  { key: 'atrMultiplier', label: '×', name: 'ATR 승수', max: maximumAtrMultiplier, step: 0.1 },
+  { key: 'atrMultiplier', label: '×', name: 'ATR 승수', ...atrEnvelopeMultiplierInput },
 ] as const;
 
 function period(value: string, label: string): number {
@@ -30,11 +30,14 @@ function decimal(value: string, label: string, maximum = 20): number {
   if (!/^\d+(\.\d)?$/.test(value) || !Number.isFinite(Number(value)) || Number(value) > maximum) throw new Error(`${label}은 0.0~${maximum.toFixed(1)}으로 입력해 주세요. (소수 한 자리)`);
   return Number(value);
 }
+export function parseAtrEnvelopeMultiplier(value: string, label: string): number {
+  return decimal(value, label, atrEnvelopeMultiplierInput.max);
+}
 export function atrEnvelopeParameters(settings: AtrEnvelopeInputs): AtrEnvelopeParameters {
   return {
     emaPeriod: period(settings.emaPeriod, 'EMA'),
     atrPeriod: period(settings.atrPeriod, 'ATR 기간'),
-    multiplier: decimal(settings.atrMultiplier, 'ATR 승수', maximumAtrMultiplier),
+    multiplier: parseAtrEnvelopeMultiplier(settings.atrMultiplier, 'ATR 승수'),
   };
 }
 

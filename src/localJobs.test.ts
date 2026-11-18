@@ -140,14 +140,20 @@ describe('durable local analysis', () => {
       expect(intervals).toEqual(new Set(['4h', '1m']));
     }
   });
-  it.each(['SINGLE', 'ALL'] as const)('checkpoints and resumes %s ATR envelope across daily blocks with its original seed', async mode => {
+  it.each([
+    { mode: 'SINGLE', stopEnabled: true },
+    { mode: 'ALL', stopEnabled: true },
+    { mode: 'SINGLE', stopEnabled: false },
+  ] as const)('resumes $mode ATR envelope with its original seed and stop setting ($stopEnabled)', async ({ mode, stopEnabled }) => {
     const day = 86400;
     const atrEnvelope = { emaPeriod: '120', atrPeriod: '120', atrMultiplier: '1' };
     const input: BacktestSettings = { ...settings, mode, symbol: 'BTC', interval: '1d', side: 'LONG',
-      endDate: '2026-01-13', endTime: '09:00', envelopeHalfCandleEnabled: false, atrEnvelope };
+      endDate: '2026-01-13', endTime: '09:00', envelopeHalfCandleEnabled: false, atrEnvelope,
+      atrEnvelopeStopMultiplier: stopEnabled ? '0.5' : '0' };
+    const exitOpen = stopEnabled ? 50 : 140;
     const rows: Candle[] = Array.from({ length: 212 }, (_, index) => {
       const openTime = origin + (index - 200) * day;
-      const open = index === 200 ? 70 : index === 201 ? 140 : 100;
+      const open = index === 200 ? 70 : index === 201 ? exitOpen : 100;
       return { openTime, closeTime: openTime + day, open, close: open,
         high: index === 0 ? 154 : index >= 200 ? open : 102,
         low: index === 0 ? 84 : index >= 200 ? open : 98, volume: 1440 };
@@ -163,14 +169,23 @@ describe('durable local analysis', () => {
     await executeLocalJob({ strategy: 'ATR_ENVELOPE', settings: input }, view => {
       if (view.phase === 'DATA' && view.blockStart === origin + day) pause.abort();
     }, pause.signal);
+    if (!stopEnabled) {
+      const legacy = (await readValue<{ settings: BacktestSettings }>('jobs', 'ATR_ENVELOPE'))!;
+      delete legacy.settings.atrEnvelopeStopMultiplier;
+      await writeValue('jobs', 'ATR_ENVELOPE', legacy);
+    }
     const paused = (await loadLocalJob('ATR_ENVELOPE'))!;
-    expect(paused).toMatchObject({ status: 'PAUSED', completed: 1, result: { openPositionCount: 1 } });
+    expect(paused).toMatchObject({ status: 'PAUSED', completed: 1, result: { openPositionCount: 1 },
+      settings: { atrEnvelopeStopMultiplier: input.atrEnvelopeStopMultiplier } });
     await executeLocalJob({ strategy: 'ATR_ENVELOPE', resumeId: paused.id }, () => {}, new AbortController().signal);
     const resumed = (await loadLocalJob('ATR_ENVELOPE'))!;
     expect(resumed).toMatchObject({ id: paused.id, status: 'COMPLETED', completed: 12, result: {
       entryCount: 1, closedTradeCount: 1, atrEnvelopeSeedFrom: rows[0]!.openTime,
     } });
-    expect(resumed.result!.recentTrades[0]!.exitAt).toBe(origin + day);
+    const trade = resumed.result!.recentTrades[0]!;
+    expect(trade.exitAt).toBe(origin + day);
+    expect(trade.reason).toBe(stopEnabled ? 'SL' : 'ENVELOPE_OPPOSITE');
+    expect(trade.exitPrice).toBeCloseTo(exitOpen * 0.9998, 10);
     const header = (await readValue<{ snapshotKey: string }>('jobs', 'ATR_ENVELOPE'))!;
     const checkpoint = await readValue<{ atrEnvelopeStates: Record<string, AtrEnvelopeState> }>('results', header.snapshotKey);
     const parameters = atrEnvelopeParameters(atrEnvelope);

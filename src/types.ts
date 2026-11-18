@@ -64,6 +64,7 @@ export interface BacktestSettings {
   volatilityMa60BelowEnabled?: boolean;
   envelopeDeviationPercent?: string;
   atrEnvelope?: AtrEnvelopeInputs;
+  atrEnvelopeStopMultiplier?: string;
   envelopeStopLossPercent?: string;
   envelopeTrailingStopEnabled?: boolean;
   envelopeTrailingStopPercent?: string;
@@ -304,6 +305,8 @@ export interface Signal {
   exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'VOLATILITY_MA5' | 'VOLATILITY_CANDLE_RULE' | 'VOLATILITY_WICK_RULE' | 'ENVELOPE_TOUCH' | 'ENVELOPE_MA20_CLOSE' | 'PULLBACK_ENVELOPE' | 'NEW_HIGH_TOUCH' | 'REFERENCE_TOUCH' | 'CANDLE_BREAKOUT_TP';
   envelopeDeviationPercent?: number;
   atrEnvelope?: AtrEnvelopeParameters;
+  /** Fixed price distance at entry. Absent when the ATR stop is disabled or predates this setting. */
+  atrEnvelopeStopDistance?: number;
   envelopeStopLossPercent?: number;
   envelopeTrailingStopPercent?: number;
   envelopeExitMode?: EnvelopeExitMode;

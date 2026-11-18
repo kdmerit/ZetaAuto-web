@@ -75,6 +75,7 @@ async function readJob(strategy: Strategy): Promise<LocalJob | null> {
   const snapshot = await readValue<AccountSnapshot>('results', header.snapshotKey);
   if (!snapshot) throw new Error('저장된 분석 진행 상태가 없습니다. 새 분석을 시작해 주세요.');
   const { snapshotKey: _key, ...job } = header;
+  if (job.strategy === 'ATR_ENVELOPE') job.settings.atrEnvelopeStopMultiplier ??= '0';
   return { ...job, ...snapshot, failedSymbols: job.failedSymbols ?? [] };
 }
 

@@ -1,5 +1,5 @@
 /** Frozen, prior-completed SMA bands: the current candle never defines its own orders. */
-import { atrEnvelopeParameters, defaultAtrEnvelopeInputs } from './marketIndicators';
+import { atrEnvelopeParameters, defaultAtrEnvelopeInputs, parseAtrEnvelopeMultiplier } from './marketIndicators';
 import type { AtrEnvelopeParameters, BacktestInterval, BacktestSettings, Candle, ChartData, EnvelopeBand, EnvelopeExitMode, Strategy } from './types';
 
 export const envelopePeriod = 20;
@@ -9,6 +9,7 @@ export const envelopeModelVersion = '2.10.97';
 // All new envelope jobs share the causal minute execution model.
 export const envelopeLocalJobVersion = envelopeModelVersion;
 export const envelopeWarmupBars = 200;
+export const defaultAtrEnvelopeStopMultiplier = '0.5';
 export const isEnvelopeStrategy = (strategy: Strategy | undefined): strategy is 'ENVELOPE' | 'ATR_ENVELOPE' =>
   strategy === 'ENVELOPE' || strategy === 'ATR_ENVELOPE';
 export const envelopeExitModes: EnvelopeExitMode[] = ['MA20', 'CENTER', 'OPPOSITE', 'HALF'];
@@ -61,12 +62,17 @@ export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSet
 export function currentAtrEnvelopeSettings(settings: BacktestSettings): BacktestSettings {
   const { envelopeMaPeriod: _sma, envelopeDeviationPercent: _percent, envelopeStopLossPercent: _stop,
     envelopeStatisticsInterval: _statistics, ...shared } = currentEnvelopeSettings(settings);
-  return { ...shared, atrEnvelope: { ...defaultAtrEnvelopeInputs, ...settings.atrEnvelope } };
+  return { ...shared, atrEnvelope: { ...defaultAtrEnvelopeInputs, ...settings.atrEnvelope },
+    atrEnvelopeStopMultiplier: settings.atrEnvelopeStopMultiplier ?? defaultAtrEnvelopeStopMultiplier };
 }
 
-export function atrEnvelopeBacktestParameters(settings: BacktestSettings): AtrEnvelopeParameters {
+export function atrEnvelopeBacktestParameters(settings: BacktestSettings): { band: AtrEnvelopeParameters; stopMultiplier: number } {
   if (settings.envelopeTrailingStopEnabled === true) envelopeTrailingStopPercent(settings);
-  return atrEnvelopeParameters(settings.atrEnvelope ?? defaultAtrEnvelopeInputs);
+  return {
+    band: atrEnvelopeParameters(settings.atrEnvelope ?? defaultAtrEnvelopeInputs),
+    // Resumed jobs use their saved settings. Missing SL means the old no-stop behavior.
+    stopMultiplier: parseAtrEnvelopeMultiplier(settings.atrEnvelopeStopMultiplier ?? '0', 'SL 배수'),
+  };
 }
 
 export function envelopeMa20FilterLabel(settings: Pick<BacktestSettings, 'envelopeMa20Enabled' | 'envelopeMa20BelowEnabled'>): string {
