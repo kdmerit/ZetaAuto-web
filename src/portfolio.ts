@@ -2,7 +2,7 @@
 import type { PreparedBar, PreparedSymbol } from './engine';
 import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, ContractRisk, Execution, PriceLine, Signal } from './types';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
-import { envelopeHalfCandleAllowsEntry, envelopeParameters, envelopeTrailingStopPercent } from './envelope';
+import { envelopeEntryBandReached, envelopeHalfCandleAllowsEntry, envelopeParameters, envelopeTrailingStopPercent } from './envelope';
 import { envelopeCandleAllowsEntry, type EnvelopeCandleContext } from './envelopeCandleFilter';
 import { newHighRiskAmount, newHighSlMultiplier, newHighTpMultiplier, newHighTrailingStopMultiplier } from './newHigh';
 import { estimatedLiquidation } from './contractRisk';
@@ -692,16 +692,12 @@ function envelopeEntryDefinitions(bar: PreparedBar, settings: BacktestSettings,
     if (parameters.envelopeMa20BelowEnabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
       || !(side === 'LONG' ? candle.high < bar.ma20 : candle.low > bar.ma20))) return [];
     if (parameters.envelopeHalfCandleEnabled === true && !envelopeHalfCandleAllowsEntry(candle, band, side, parameters.interval)) return [];
-    if (closeOnly && !envelopeCloseOnlyCondition(side, band, candle.close)) return [];
+    if (closeOnly && !envelopeEntryBandReached(candle, band, side, true)) return [];
     return [{ side, band, parameters, closeOnly, price: closeOnly ? candle.close : side === 'LONG' ? band.lower : band.upper }];
   });
 }
 
 type EnvelopeEntryDefinition = ReturnType<typeof envelopeEntryDefinitions>[number];
-
-function envelopeCloseOnlyCondition(side: 'LONG' | 'SHORT', band: { lower: number; upper: number }, price: number): boolean {
-  return Number.isFinite(price) && (side === 'LONG' ? price <= band.lower : price >= band.upper);
-}
 
 function envelopeEntrySignal(definition: EnvelopeEntryDefinition, price: number, parent: Candle): Signal {
   const { side, band, parameters } = definition;
@@ -767,7 +763,7 @@ function minuteEnvelopeAllowsEntry(definition: EnvelopeEntryDefinition, bar: Pre
   const candle = observation.candle;
   const ma20 = bar.envelopeMa20PreviousSum == null ? null : (bar.envelopeMa20PreviousSum + candle.close) / 20;
   if (parameters.envelopeMa20Enabled && (ma20 === null || !(side === 'LONG' ? candle.low > ma20 : candle.high < ma20))) return false;
-  if (parameters.envelopeCloseOnlyEntryEnabled === true && !envelopeCloseOnlyCondition(side, band, candle.close)) return false;
+  if (definition.closeOnly && !envelopeEntryBandReached(candle, band, side, true)) return false;
   if (parameters.envelopeHalfCandleEnabled === true && !envelopeHalfCandleAllowsEntry(candle, band, side, parameters.interval)) return false;
   return parameters.envelopeCandleFilterEnabled !== true || envelopeCandleAllowsEntry(observation.context, side, [candle.close]);
 }
@@ -781,8 +777,8 @@ function replayEnvelopeMinutes(state: PortfolioState, rows: { symbol: string; ba
     const parameters = options.settingsForSymbol?.[symbol] ?? settings;
     const definitions = envelopeEntryDefinitions(bar, parameters, options.settingsForSymbolSide?.[symbol]);
     const children = bar.envelopeIntrabarCandles ?? [];
-    if (!children.length && !state.positions[symbol] && !definitions.some(definition => definition.side === 'LONG'
-      ? bar.candle.low <= definition.price : bar.candle.high >= definition.price)) continue;
+    if (!children.length && !state.positions[symbol] && !definitions.some(({ side, band, closeOnly }) =>
+      envelopeEntryBandReached(bar.candle, band, side, closeOnly))) continue;
     validateLowerTimeframeCandles(bar.candle, children, 60, '1분봉');
     const initial = { ...bar.candle, high: bar.candle.open, low: bar.candle.open, close: bar.candle.open };
     const observation: EnvelopeMinuteObservation = { candle: initial, quarter: { ...initial, closeTime: initial.openTime + 900 },
@@ -928,7 +924,7 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
         }
         if (!attempted) {
           const atClose = definitions.find(definition => definition.closeOnly
-            && envelopeCloseOnlyCondition(definition.side, definition.band, candle.close)
+            && envelopeEntryBandReached(candle, definition.band, definition.side, true)
             && envelopeShapeAllows(definition, bar, candle, [candle.close]));
           if (atClose) fill(atClose, candle.close, candle);
         }
@@ -971,7 +967,7 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
     }
     if (!attempted) {
       const atClose = definitions.find(definition => definition.closeOnly
-        && envelopeCloseOnlyCondition(definition.side, definition.band, candle.close)
+        && envelopeEntryBandReached(candle, definition.band, definition.side, true)
         && envelopeShapeAllows(definition, bar, candle, [candle.close]));
       if (atClose) fill(atClose, candle.close);
     }
@@ -1455,7 +1451,7 @@ function replayEnvelopeSideLimitedRows(state: PortfolioState, rows: { symbol: st
       for (const row of entries) {
         if (row.candle.closeTime !== row.bar.candle.closeTime || blocked.has(row.symbol) || account.positions[row.symbol]) continue;
         const definition = row.definitions.find(candidate => candidate.closeOnly
-          && envelopeCloseOnlyCondition(candidate.side, candidate.band, row.bar.candle.close)
+          && envelopeEntryBandReached(row.bar.candle, candidate.band, candidate.side, true)
           && envelopeShapeAllows(candidate, row.bar, row.candle, [row.bar.candle.close]));
         if (definition) fill(row, definition, row.bar.candle.close);
       }

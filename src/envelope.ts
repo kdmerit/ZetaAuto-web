@@ -116,6 +116,17 @@ export function bandFor(center: number, percent: number): EnvelopeBand {
   return { center, upper: center * (1 + percent / 100), lower: center * (1 - percent / 100) };
 }
 
+/** Use the close for close-only entries and the relevant extreme for touch entries. */
+export function envelopeEntryBandReached(
+  candle: Candle,
+  band: Pick<EnvelopeBand, 'lower' | 'upper'>,
+  side: 'LONG' | 'SHORT',
+  closeOnly: boolean,
+): boolean {
+  const price = closeOnly ? candle.close : side === 'LONG' ? candle.low : candle.high;
+  return Number.isFinite(price) && (side === 'LONG' ? price <= band.lower : price >= band.upper);
+}
+
 /**
  * When enabled for daily envelope entries, reject a candle with at least
  * half of its full range beyond the entry band.  The midpoint is used so

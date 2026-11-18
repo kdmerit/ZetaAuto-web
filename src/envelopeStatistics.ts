@@ -2,7 +2,7 @@
 import { intervalSeconds } from './api';
 import { lease, maintainCache, readValue, retentionMs, writeValue } from './database';
 import { saveEnvelopeStatisticsHistory } from './envelopeStatisticsHistory';
-import { prepareSymbolBlock } from './engine';
+import { envelopeEntryMayTouch, prepareSymbolBlock } from './engine';
 import { currentEnvelopeSettings, envelopePeriods, legacyEnvelopePeriods, envelopeModelVersion } from './envelope';
 import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument } from './marketData';
 import type { BacktestInterval, BacktestResult, BacktestSettings, ContractRisk, EnvelopeExitMode } from './types';
@@ -144,13 +144,13 @@ function resultRow(result: BacktestResult, interval: BacktestInterval, maPeriod:
 }
 
 /** First untouchable offset implies every wider offset is also untouchable; money/position state is irrelevant. */
-export function maximumTouchedStep(document: ReturnType<typeof prepareSymbolBlock>): number {
+export function maximumTouchedStep(document: ReturnType<typeof prepareSymbolBlock>, closeOnly = false): number {
   let maximum = 0;
   for (const bar of document.bars) {
     const band = bar.envelope;
     if (!band) continue;
-    if (band.long) maximum = Math.max(maximum, (band.center - bar.candle.low) / band.center * 100);
-    if (band.short) maximum = Math.max(maximum, (bar.candle.high - band.center) / band.center * 100);
+    if (band.long) maximum = Math.max(maximum, (band.center - (closeOnly ? bar.candle.close : bar.candle.low)) / band.center * 100);
+    if (band.short) maximum = Math.max(maximum, ((closeOnly ? bar.candle.close : bar.candle.high) - band.center) / band.center * 100);
   }
   return Math.max(0, Math.min(200, Math.floor(maximum * 10 + 1e-8)));
 }
@@ -191,13 +191,7 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
         const baseParameters = { ...directional, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: '0.1' };
         let document = prepareSymbolBlock(job.instrument.symbol, candles, baseParameters, 'ENVELOPE', start, end);
         for (const bar of document.bars) if (bar.envelope) { bar.envelope.long &&= job.instrument.LONG; bar.envelope.short &&= job.instrument.SHORT; }
-        const firstEntryTouch = document.bars.find(bar => {
-          const band = bar.envelope;
-          if (!band) return false;
-          if (directional.side === 'LONG' && !band.long || directional.side === 'SHORT' && !band.short) return false;
-          // Fetch bounds only; current-candle filters are evaluated at minute polls.
-          return directional.side === 'LONG' ? bar.candle.low <= band.lower : bar.candle.high >= band.upper;
-        });
+        const firstEntryTouch = document.bars.find(bar => envelopeEntryMayTouch(bar, baseParameters));
         if (firstEntryTouch) {
           const lowerFrom = envelopeCandleDataStart(directional, firstEntryTouch.candle.openTime);
           let lowerCandles = await ensureCandles(job.instrument, '1m', lowerFrom, end, end, signal);
@@ -219,7 +213,7 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
           }
         }
         const key = `${interval}:${maPeriod}:${side}`;
-        const maximum = job.maxSteps[key] ?? maximumTouchedStep(document); job.maxSteps[key] = maximum;
+        const maximum = job.maxSteps[key] ?? maximumTouchedStep(document, baseParameters.envelopeCloseOnlyEntryEnabled); job.maxSteps[key] = maximum;
         while (job.step <= maximum) {
           for (const bar of document.bars) if (bar.envelope) {
             bar.envelope.upper = bar.envelope.center * (1 + job.step / 1000);

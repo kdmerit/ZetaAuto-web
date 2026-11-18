@@ -13,7 +13,7 @@ const settings = currentEnvelopeSettings({ interval: '1d', side: 'LONG', initial
   envelopeMaPeriod: '3', envelopeDeviationPercent: '3', envelopeStopLossPercent: '3' } as BacktestSettings);
 type Prices = [number, number, number, number];
 
-function fixture(overrides: Record<number, Prices>, parameters = settings, days = 1): PreparedSymbol {
+function fixture(overrides: Record<number, Prices>, parameters = settings, days = 1, missingMinute?: number): PreparedSymbol {
   const seconds = intervalSeconds(parameters.interval);
   const count = seconds / 60;
   let price = 100;
@@ -34,8 +34,9 @@ function fixture(overrides: Record<number, Prices>, parameters = settings, days 
     return { ...rows[0]!, closeTime: rows.at(-1)!.closeTime, high: Math.max(...rows.map(row => row.high)),
       low: Math.min(...rows.map(row => row.low)), close: rows.at(-1)!.close, volume: rows.length };
   });
+  const executionMinutes = missingMinute === undefined ? minutes : minutes.filter((_, index) => index !== missingMinute);
   return prepareSymbolBlock('BTCUSDT', [...warmup, ...parents], parameters, 'ENVELOPE', start, start + days * seconds,
-    undefined, undefined, undefined, undefined, undefined, undefined, minutes);
+    undefined, undefined, undefined, undefined, undefined, undefined, executionMinutes);
 }
 
 function replay(document: PreparedSymbol, parameters = settings, state = initialPortfolio(1000), from = start, end = document.bars.at(-1)!.candle.closeTime): PortfolioState {
@@ -123,10 +124,11 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
     expect(resumed).toEqual(whole);
   });
 
-  it('requires real minute data instead of guessing from completed 15m/daily candles', () => {
-    const document = fixture(entry, parameters);
-    document.bars[0]!.envelopeIntrabarCandles!.splice(10, 1);
-    expect(() => replay(document, parameters)).toThrow('1분봉');
+  it.each([false, true])('rejects a real gap in the required minute data (closeOnly=%s)', closeOnly => {
+    const input = { ...parameters, envelopeCloseOnlyEntryEnabled: closeOnly };
+    const document = fixture(entry, input, 1, 10);
+    expect(document.bars[0]!.envelopeIntrabarCandles).toHaveLength(1439);
+    expect(() => replay(document, input)).toThrow('1분봉');
   });
 
   it('skips a partially listed parent candle instead of treating its pre-listing minutes as missing', () => {
@@ -136,13 +138,9 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
       openTime: parentStart + (index + 1) * 60, closeTime: parentStart + (index + 2) * 60,
       open: 100, high: 100, low: 100, close: 100, volume: 1,
     }));
-    const history = Array.from({ length: 3 }, (_, index) => ({
-      openTime: parentStart - (3 - index) * 3600, closeTime: parentStart - (2 - index) * 3600,
-      open: 100, high: 100, low: 100, close: 100, volume: 60,
-    }));
     const parent = { ...parentMinutes[0]!, openTime: parentStart, closeTime: parentStart + 3600,
       high: 100, low: 100, close: 100, volume: 59 };
-    const document = prepareSymbolBlock('NEWUSDT', [...history, parent], input, 'ENVELOPE', parentStart, parentStart + 3600,
+    const document = prepareSymbolBlock('NEWUSDT', [parent], input, 'ENVELOPE', parentStart, parentStart + 3600,
       undefined, undefined, undefined, undefined, undefined, undefined, parentMinutes);
     expect(document.bars).toHaveLength(1);
     expect(document.bars[0]!.envelopeIntrabarCandles).toBeUndefined();

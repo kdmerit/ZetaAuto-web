@@ -5,7 +5,7 @@ import { canResumeLocalJob, engineVersionFor, executeLocalJob, loadLocalJob, loa
 import { ensureCandles, instrumentEligibility, listInstruments, MissingCandleError } from './marketData';
 import type { BacktestSettings, Candle } from './types';
 import { universeRetentionMs, weeklyUniverseDatabaseKey, type WeeklyUniverseSnapshot } from './universeCache';
-import { dailyTrendRows } from './test/envelopeFixtures';
+import { dailyTrendRows, minuteRows } from './test/envelopeFixtures';
 
 vi.mock('./marketData', async importOriginal => {
   const actual = await importOriginal<typeof import('./marketData')>();
@@ -138,6 +138,51 @@ describe('durable local analysis', () => {
       const intervals = new Set(vi.mocked(ensureCandles).mock.calls.map(call => call[1]));
       expect(intervals).toEqual(new Set(['4h', '1m']));
     }
+  });
+  it.each(['LONG', 'SHORT'] as const)('replays a wick-only BTC day with close-only %s entry, including saved progress', async side => {
+    const day = 86400;
+    const wickAt = origin + day;
+    const entryBarAt = wickAt + day;
+    const exitBarAt = entryBarAt + day;
+    const input: BacktestSettings = { ...settings, mode: 'SINGLE', symbol: 'BTC', interval: '1d', side,
+      endDate: '2026-01-13', endTime: '09:00', envelopeMaPeriod: '3', envelopeDeviationPercent: '3',
+      envelopeCloseOnlyEntryEnabled: true, envelopeTrailingStopEnabled: true, envelopeTrailingStopPercent: '4' };
+    const activeDays = new Map([
+      [wickAt, { open: 100, high: 100, low: 96, close: 100 }],
+      [entryBarAt, { open: 100, high: 100, low: 97, close: 97 }],
+      [exitBarAt, { open: 97, high: 104, low: 97, close: 100 }],
+    ]);
+    const parents: Candle[] = Array.from({ length: 212 }, (_, index) => {
+      const openTime = origin + (index - 200) * day;
+      const long = activeDays.get(openTime) ?? { open: 100, high: 100, low: 100, close: 100 };
+      const prices = side === 'LONG' ? long : { open: 200 - long.open, high: 200 - long.low, low: 200 - long.high, close: 200 - long.close };
+      return { openTime, closeTime: openTime + day, volume: 1440, ...prices };
+    });
+    vi.mocked(listInstruments).mockResolvedValue([{ symbol: 'BTCUSDT', launchAt: 0 }]);
+    const actual = await vi.importActual<typeof import('./marketData')>('./marketData');
+    vi.mocked(ensureCandles).mockImplementation(actual.ensureCandles);
+    await cacheCandles('BTCUSDT', '1d', parents);
+    await cacheCandles('BTCUSDT', '1m', minuteRows(parents.filter(bar => bar.openTime === entryBarAt || bar.openTime === exitBarAt)));
+    const fetcher = vi.fn(() => { throw new Error('All required candle data is already cached'); });
+    vi.stubGlobal('fetch', fetcher);
+
+    const pause = new AbortController();
+    await executeLocalJob({ strategy: 'ENVELOPE', settings: input }, view => {
+      if (view.phase === 'REPLAY' && view.blockStart === wickAt) pause.abort();
+    }, pause.signal);
+    const paused = (await loadLocalJob('ENVELOPE'))!;
+    expect(paused).toMatchObject({ status: 'PAUSED', blockStart: wickAt, cursor: 1, completed: 2 });
+    await executeLocalJob({ strategy: 'ENVELOPE', resumeId: paused.id }, () => {}, new AbortController().signal);
+    const resumed = (await loadLocalJob('ENVELOPE'))!;
+    expect(resumed).toMatchObject({ id: paused.id, status: 'COMPLETED', completed: 12, message: '분석이 완료되었습니다.' });
+    expect(resumed.result?.recentTrades).toMatchObject([{ side, entryAt: exitBarAt, reason: 'TRAILING_STOP' }]);
+    expect(vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === '1m').map(call => call[2])).toEqual([entryBarAt, exitBarAt]);
+
+    await executeLocalJob({ strategy: 'ENVELOPE', settings: input }, () => {}, new AbortController().signal);
+    const fresh = (await loadLocalJob('ENVELOPE'))!;
+    expect(fresh).toMatchObject({ status: 'COMPLETED', completed: 12 });
+    expect(fresh.result?.recentTrades).toEqual(resumed.result?.recentTrades);
+    expect(fetcher).not.toHaveBeenCalled();
   });
   it('restores independent SL and obtains candle-filter history from cached minute data', async () => {
     vi.mocked(ensureCandles).mockClear();
