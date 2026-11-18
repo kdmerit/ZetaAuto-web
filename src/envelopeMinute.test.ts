@@ -68,6 +68,17 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
     expect(state.entries).toBe(0);
   });
 
+  it('waits for the selected candle close when close-only entry is enabled', () => {
+    const input = { ...parameters, envelopeCloseOnlyEntryEnabled: true };
+    const state = replay(fixture({ 0: [100, 100, 97, 100], 1439: [100, 100, 97, 97] }, input), input);
+    expect(state.entries).toBe(1);
+    expect(state.positions.BTCUSDT!.opened).toBe(start + day);
+    const finalClose = parameters.side === 'LONG' ? 97 : 103;
+    expect(state.positions.BTCUSDT!.first).toBeCloseTo(finalClose * (parameters.side === 'LONG' ? 1.0002 : .9998), 10);
+    const inside = replay(fixture({ 0: [100, 100, 97, 100], 1439: [100, 100, 100, 100] }, input), input);
+    expect(inside.entries).toBe(0);
+  });
+
   it('does not credit target wicks in the entry 15m candle or carry them into the next quarter', () => {
     const state = replay(fixture({ ...entry, 14: [97, 104, 97, 100] }, parameters), parameters);
     expect(state.entries).toBe(1); expect(state.closed).toBe(0);

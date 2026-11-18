@@ -44,6 +44,7 @@ export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSet
     envelopeStopLossPercent: settings.envelopeStopLossPercent ?? '3',
     envelopeTrailingStopEnabled: settings.envelopeTrailingStopEnabled === true,
     envelopeTrailingStopPercent: settings.envelopeTrailingStopPercent ?? '3',
+    envelopeCloseOnlyEntryEnabled: settings.envelopeCloseOnlyEntryEnabled === true,
     envelopeHalfCandleEnabled: settings.envelopeHalfCandleEnabled !== false,
     envelopeCandleFilterEnabled: settings.envelopeCandleFilterEnabled === true,
     // Retain these legacy fields for archived results, but never enable the

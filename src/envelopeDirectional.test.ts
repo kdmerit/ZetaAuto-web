@@ -78,6 +78,32 @@ describe('optional archived daily entry-band half-candle envelope entry filter',
     expect(state.entries).toBe(1);
   });
 
+  it.each(['LONG', 'SHORT'] as const)('enters only at the %s candle close when the option is enabled', side => {
+    const long = side === 'LONG';
+    const close = long ? 98 : 102;
+    const settings = { ...base, interval: '1d' as const, side, envelopeCloseOnlyEntryEnabled: true };
+    const document: PreparedSymbol = { symbol: 'BTCUSDT', bars: [{ candle: { openTime: at, closeTime: at + 86400,
+      open: 100, high: 103, low: 97, close, volume: 1 }, signal: null, ma20: null, ma60Exit: null,
+      envelope: { center: 100, lower: 99, upper: 101, long, short: !long } }] };
+    const state = initialPortfolio(1000);
+    expect(envelopeEntryMayTouch(document.bars[0]!, settings)).toBe(true);
+    replayPortfolioBlock(state, [document], settings, at, at + 86400, 86400);
+    expect(state.entries).toBe(1);
+    expect(state.positions.BTCUSDT!.first).toBeCloseTo(close * (long ? 1.0002 : 0.9998), 10);
+  });
+
+  it.each(['LONG', 'SHORT'] as const)('ignores a %s intrabar touch when the candle closes inside the band', side => {
+    const long = side === 'LONG';
+    const settings = { ...base, interval: '1d' as const, side, envelopeCloseOnlyEntryEnabled: true };
+    const document: PreparedSymbol = { symbol: 'BTCUSDT', bars: [{ candle: { openTime: at, closeTime: at + 86400,
+      open: 100, high: 103, low: 97, close: 100, volume: 1 }, signal: null, ma20: null, ma60Exit: null,
+      envelope: { center: 100, lower: 99, upper: 101, long, short: !long } }] };
+    const state = initialPortfolio(1000);
+    expect(envelopeEntryMayTouch(document.bars[0]!, settings)).toBe(false);
+    replayPortfolioBlock(state, [document], settings, at, at + 86400, 86400);
+    expect(state.entries).toBe(0);
+  });
+
   it.each([
     { side: 'LONG' as const, interval: '1h' as const, seconds: 3600 },
     { side: 'SHORT' as const, interval: '1h' as const, seconds: 3600 },

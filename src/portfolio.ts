@@ -685,17 +685,23 @@ function envelopeEntryDefinitions(bar: PreparedBar, settings: BacktestSettings,
     const band = bar.envelopeBySide ? bar.envelopeBySide[side] : bar.envelope;
     const parameters = settingsBySide?.[side] ?? settings;
     if (!band || !(side === 'LONG' ? band.long : band.short) || parameters.side !== 'BOTH' && parameters.side !== side) return [];
-    if (parameters.envelopeExecutionModel === 'MINUTE_POLL') return [{ side, band, parameters, price: side === 'LONG' ? band.lower : band.upper }];
+    const closeOnly = parameters.envelopeCloseOnlyEntryEnabled === true;
+    if (parameters.envelopeExecutionModel === 'MINUTE_POLL') return [{ side, band, parameters, closeOnly, price: side === 'LONG' ? band.lower : band.upper }];
     if (parameters.envelopeMa20Enabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
       || !(side === 'LONG' ? candle.low > bar.ma20 : candle.high < bar.ma20))) return [];
     if (parameters.envelopeMa20BelowEnabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
       || !(side === 'LONG' ? candle.high < bar.ma20 : candle.low > bar.ma20))) return [];
     if (parameters.envelopeHalfCandleEnabled === true && !envelopeHalfCandleAllowsEntry(candle, band, side, parameters.interval)) return [];
-    return [{ side, band, parameters, price: side === 'LONG' ? band.lower : band.upper }];
+    if (closeOnly && !envelopeCloseOnlyCondition(side, band, candle.close)) return [];
+    return [{ side, band, parameters, closeOnly, price: closeOnly ? candle.close : side === 'LONG' ? band.lower : band.upper }];
   });
 }
 
 type EnvelopeEntryDefinition = ReturnType<typeof envelopeEntryDefinitions>[number];
+
+function envelopeCloseOnlyCondition(side: 'LONG' | 'SHORT', band: { lower: number; upper: number }, price: number): boolean {
+  return Number.isFinite(price) && (side === 'LONG' ? price <= band.lower : price >= band.upper);
+}
 
 function envelopeEntrySignal(definition: EnvelopeEntryDefinition, price: number, parent: Candle): Signal {
   const { side, band, parameters } = definition;
@@ -761,6 +767,7 @@ function minuteEnvelopeAllowsEntry(definition: EnvelopeEntryDefinition, bar: Pre
   const candle = observation.candle;
   const ma20 = bar.envelopeMa20PreviousSum == null ? null : (bar.envelopeMa20PreviousSum + candle.close) / 20;
   if (parameters.envelopeMa20Enabled && (ma20 === null || !(side === 'LONG' ? candle.low > ma20 : candle.high < ma20))) return false;
+  if (parameters.envelopeCloseOnlyEntryEnabled === true && !envelopeCloseOnlyCondition(side, band, candle.close)) return false;
   if (parameters.envelopeHalfCandleEnabled === true && !envelopeHalfCandleAllowsEntry(candle, band, side, parameters.interval)) return false;
   return parameters.envelopeCandleFilterEnabled !== true || envelopeCandleAllowsEntry(observation.context, side, [candle.close]);
 }
@@ -817,7 +824,8 @@ function replayEnvelopeMinutes(state: PortfolioState, rows: { symbol: string; ba
     }
     for (const row of entries) {
       if (occupied.has(row.symbol) || state.positions[row.symbol]) continue;
-      const definition = row.definitions.find(candidate => (candidate.side === 'LONG' ? row.minute.open <= candidate.price : row.minute.open >= candidate.price)
+      const definition = row.definitions.find(candidate => !candidate.closeOnly
+        && (candidate.side === 'LONG' ? row.minute.open <= candidate.price : row.minute.open >= candidate.price)
         && minuteEnvelopeAllowsEntry(candidate, row.bar, row.observation));
       if (!definition) continue;
       const parameters = definition.parameters;
@@ -846,6 +854,19 @@ function replayEnvelopeMinutes(state: PortfolioState, rows: { symbol: string; ba
         }
       }
       observeEnvelopeMinute(row.observation, row.minute, true);
+      if (row.minute.closeTime === row.bar.candle.closeTime && !occupied.has(row.symbol) && !state.positions[row.symbol]) {
+        const definition = row.definitions.find(candidate => candidate.closeOnly
+          && minuteEnvelopeAllowsEntry(candidate, row.bar, row.observation));
+        if (definition) {
+          const parameters = definition.parameters;
+          const cost = Number(parameters.betAmountUsdt) * (1 + Number(parameters.leverage) * feeRate);
+          if (cost <= budget + 1e-10) {
+            const count = state.entries;
+            enter(state, row.symbol, envelopeEntrySignal(definition, row.observation.candle.close, row.bar.candle), row.minute, parameters, true);
+            if (state.entries > count) { occupied.add(row.symbol); budget = Math.max(0, budget - cost); }
+          }
+        }
+      }
     }
     const equity = portfolioEquity(state);
     state.peak = Math.max(state.peak, equity);
@@ -872,7 +893,7 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
         attempted = true;
         const { parameters } = definition;
         enteredSettings = parameters;
-        enter(state, symbol, envelopeEntrySignal(definition, price, candle), executionCandle, parameters);
+        enter(state, symbol, envelopeEntrySignal(definition, price, candle), executionCandle, parameters, definition.closeOnly);
       };
       for (const rawCandle of [...(bar.envelopeIntrabarCandles ?? [])].sort((a, b) => a.openTime - b.openTime)) {
         if (attempted && !state.positions[symbol]) break;
@@ -885,7 +906,7 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
           atPrice(state, symbol, executionCandle.open, executionCandle, enteredSettings, true);
         }
         if (!attempted) {
-          const atOpen = definitions.find(definition => (definition.side === 'LONG'
+          const atOpen = definitions.find(definition => !definition.closeOnly && (definition.side === 'LONG'
             ? executionCandle.open <= definition.price : executionCandle.open >= definition.price)
             && envelopeShapeAllows(definition, bar, executionCandle, [executionCandle.open]));
           if (atOpen) fill(atOpen, executionCandle.open, executionCandle);
@@ -893,7 +914,9 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
         for (let index = 1; index < path.length && (!attempted || state.positions[symbol]); index += 1) {
           const after = path[index]!;
           if (!attempted) {
-            const crossed = definitions.filter(definition => definition.price >= Math.min(before, after) && definition.price <= Math.max(before, after)
+            const finalClose = executionCandle.closeTime === candle.closeTime && index === path.length - 1;
+            const crossed = definitions.filter(definition => (!definition.closeOnly || finalClose)
+              && definition.price >= Math.min(before, after) && definition.price <= Math.max(before, after)
               && envelopeShapeAllows(definition, bar, executionCandle, [...path.slice(0, index), definition.price]))
               .sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
             const first = crossed[0];
@@ -902,6 +925,12 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
           const position = state.positions[symbol];
           if (position) replaySegment(state, position, before, after, executionCandle, enteredSettings);
           before = after;
+        }
+        if (!attempted) {
+          const atClose = definitions.find(definition => definition.closeOnly
+            && envelopeCloseOnlyCondition(definition.side, definition.band, candle.close)
+            && envelopeShapeAllows(definition, bar, candle, [candle.close]));
+          if (atClose) fill(atClose, candle.close, candle);
         }
       }
       return state;
@@ -919,16 +948,19 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
       attempted = true;
       const { parameters } = definition;
       enteredSettings = parameters;
-      enter(state, symbol, envelopeEntrySignal(definition, price, candle), candle, parameters);
+      enter(state, symbol, envelopeEntrySignal(definition, price, candle), candle, parameters, definition.closeOnly);
     };
-    const atOpen = definitions.find(definition => (definition.side === 'LONG' ? candle.open <= definition.price : candle.open >= definition.price)
+    const atOpen = definitions.find(definition => !definition.closeOnly
+      && (definition.side === 'LONG' ? candle.open <= definition.price : candle.open >= definition.price)
       && envelopeShapeAllows(definition, bar, candle, [candle.open]));
     if (atOpen) fill(atOpen, candle.open);
     for (let index = 1; index < path.length; index += 1) {
       let before = path[index - 1]!;
       const after = path[index]!;
       if (!attempted) {
-        const crossed = definitions.filter(definition => definition.price >= Math.min(before, after) && definition.price <= Math.max(before, after)
+        const finalClose = index === path.length - 1;
+        const crossed = definitions.filter(definition => (!definition.closeOnly || finalClose)
+          && definition.price >= Math.min(before, after) && definition.price <= Math.max(before, after)
           && envelopeShapeAllows(definition, bar, candle, [...path.slice(0, index), definition.price]))
           .sort((a, b) => Math.abs(a.price - before) - Math.abs(b.price - before));
         const first = crossed[0];
@@ -936,6 +968,12 @@ function envelopeEntryPath(symbol: string, bar: PreparedBar, settings: BacktestS
       }
       const position = state.positions[symbol];
       if (position) replaySegment(state, position, before, after, candle, enteredSettings);
+    }
+    if (!attempted) {
+      const atClose = definitions.find(definition => definition.closeOnly
+        && envelopeCloseOnlyCondition(definition.side, definition.band, candle.close)
+        && envelopeShapeAllows(definition, bar, candle, [candle.close]));
+      if (atClose) fill(atClose, candle.close);
     }
     return state;
   };
@@ -1362,7 +1400,7 @@ function replayEnvelopeSideLimitedRows(state: PortfolioState, rows: { symbol: st
         const cost = Number(parameters.betAmountUsdt) * (1 + Number(parameters.leverage) * feeRate);
         if (cost > available + 1e-10) return;
         const previousEntries = account.entries;
-        enter(account, row.symbol, envelopeEntrySignal(definition, price, row.bar.candle), row.candle, parameters);
+        enter(account, row.symbol, envelopeEntrySignal(definition, price, row.bar.candle), row.candle, parameters, definition.closeOnly);
         if (account.entries > previousEntries) {
           blocked.add(row.symbol);
           available = Math.max(0, available - cost);
@@ -1370,7 +1408,7 @@ function replayEnvelopeSideLimitedRows(state: PortfolioState, rows: { symbol: st
       };
       for (const row of entries) {
         if (blocked.has(row.symbol)) continue;
-        const definition = row.definitions.find(candidate => (candidate.side === 'LONG'
+        const definition = row.definitions.find(candidate => !candidate.closeOnly && (candidate.side === 'LONG'
           ? row.candle.open <= candidate.price : row.candle.open >= candidate.price)
           && envelopeShapeAllows(candidate, row.bar, row.candle, [row.candle.open]));
         if (definition) fill(row, definition, row.candle.open);
@@ -1392,7 +1430,7 @@ function replayEnvelopeSideLimitedRows(state: PortfolioState, rows: { symbol: st
             if (after === before) return [];
             const position = account.positions[row.symbol];
             const candidates = position ? holdingPriceLevels(position, parametersFor(row)).map(price => ({ price, definition: undefined as EnvelopeEntryDefinition | undefined }))
-              : blocked.has(row.symbol) || attempted.has(row.symbol) ? [] : row.definitions.map(definition => ({ price: definition.price, definition }));
+              : blocked.has(row.symbol) || attempted.has(row.symbol) ? [] : row.definitions.filter(definition => !definition.closeOnly || segment === 3).map(definition => ({ price: definition.price, definition }));
             return candidates.flatMap(candidate => {
               const progress = (candidate.price - before) / (after - before);
               return progress > cursors[index]! + 1e-12 && progress <= 1 + 1e-12
@@ -1413,6 +1451,13 @@ function replayEnvelopeSideLimitedRows(state: PortfolioState, rows: { symbol: st
             atPrice(account, row.symbol, paths[index]![segment]!, row.candle, parametersFor(row));
           }
         });
+      }
+      for (const row of entries) {
+        if (row.candle.closeTime !== row.bar.candle.closeTime || blocked.has(row.symbol) || account.positions[row.symbol]) continue;
+        const definition = row.definitions.find(candidate => candidate.closeOnly
+          && envelopeCloseOnlyCondition(candidate.side, candidate.band, row.bar.candle.close)
+          && envelopeShapeAllows(candidate, row.bar, row.candle, [row.bar.candle.close]));
+        if (definition) fill(row, definition, row.bar.candle.close);
       }
       for (const row of entries) if (row.candle.closeTime === row.bar.candle.closeTime) closeEnvelopeOnConfirmedClose(account, row.symbol, row.bar.candle);
       return { account, blocked, available };

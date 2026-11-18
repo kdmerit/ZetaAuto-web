@@ -56,6 +56,7 @@ export interface BacktestSettings {
   envelopeStopLossPercent?: string;
   envelopeTrailingStopEnabled?: boolean;
   envelopeTrailingStopPercent?: string;
+  envelopeCloseOnlyEntryEnabled?: boolean;
   envelopeHalfCandleEnabled?: boolean;
   envelopeCandleFilterEnabled?: boolean;
   envelopeExitMode?: EnvelopeExitMode;
