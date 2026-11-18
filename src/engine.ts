@@ -563,7 +563,7 @@ export interface PreparedBar {
   referenceIntrabarCandles?: Candle[];
   /** 15-minute candles used to replay volatility exits inside 1h/4h/1d bars. */
   volatilityIntrabarCandles?: Candle[];
-  /** 1m execution data for current envelope runs, 15m for archived OHLC replays. */
+  /** Lower-timeframe data: complete 1-minute for current runs, 15-minute for archived replays. */
   envelopeIntrabarCandles?: Candle[];
   /** Sum of the 19 source closes known before this parent candle opened. */
   envelopeMa20PreviousSum?: number | null;
@@ -578,6 +578,24 @@ export interface PreparedSymbol {
   symbol: string;
   bars: PreparedBar[];
   waveState?: WaveState;
+}
+
+/**
+ * A newly listed symbol can have its first parent candle only partially
+ * covered by lower-timeframe data.  That bar cannot be replayed causally:
+ * the missing prefix is before the symbol traded.  Keep only complete parent
+ * ranges here; an internal gap is still rejected by the data validator.
+ */
+function completeEnvelopeIntrabarRows(parent: Candle, rows: Candle[] | undefined): Candle[] | undefined {
+  if (!rows?.length) return undefined;
+  const childSeconds = 60;
+  const expected = (parent.closeTime - parent.openTime) / childSeconds;
+  if (!Number.isInteger(expected) || rows.length !== expected) return undefined;
+  const ordered = [...rows].sort((a, b) => a.openTime - b.openTime);
+  if (ordered[0]!.openTime !== parent.openTime || ordered.at(-1)!.closeTime !== parent.closeTime) return undefined;
+  if (ordered.some((row, index) => row.openTime !== parent.openTime + index * childSeconds
+    || row.closeTime !== row.openTime + childSeconds)) return undefined;
+  return ordered;
 }
 
 /** Prepare a bounded time block; warm-up bars inform indicators but never place orders. */
@@ -634,7 +652,11 @@ export function prepareSymbolBlock(
         ...(minutePoll ? { envelopeMa20PreviousSum: priorMa20[index] == null ? null : priorMa20[index]! * 19,
           ...(candleContexts?.get(candle.openTime) ? { envelopeCandleContext: candleContexts.get(candle.openTime) } : {}) }
           : candleContexts ? { envelopeCandleContexts: candleContexts } : {}),
-        ...(envelopeGroups.has(candle.openTime) ? { envelopeIntrabarCandles: envelopeGroups.get(candle.openTime)!.sort((a, b) => a.openTime - b.openTime) } : {}),
+        ...(() => {
+          const grouped = envelopeGroups.get(candle.openTime);
+          const rows = minutePoll ? completeEnvelopeIntrabarRows(candle, grouped) : grouped?.sort((a, b) => a.openTime - b.openTime);
+          return rows ? { envelopeIntrabarCandles: rows } : {};
+        })(),
         ...(center === null || center === undefined ? {} : { envelope: {
           ...bandFor(center, percent), long: settings.side !== 'SHORT', short: settings.side !== 'LONG',
         } }),

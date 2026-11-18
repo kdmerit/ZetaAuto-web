@@ -128,6 +128,26 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
     document.bars[0]!.envelopeIntrabarCandles!.splice(10, 1);
     expect(() => replay(document, parameters)).toThrow('1분봉');
   });
+
+  it('skips a partially listed parent candle instead of treating its pre-listing minutes as missing', () => {
+    const input = { ...parameters, interval: '1h' as const };
+    const parentStart = start;
+    const parentMinutes = Array.from({ length: 59 }, (_, index) => ({
+      openTime: parentStart + (index + 1) * 60, closeTime: parentStart + (index + 2) * 60,
+      open: 100, high: 100, low: 100, close: 100, volume: 1,
+    }));
+    const history = Array.from({ length: 3 }, (_, index) => ({
+      openTime: parentStart - (3 - index) * 3600, closeTime: parentStart - (2 - index) * 3600,
+      open: 100, high: 100, low: 100, close: 100, volume: 60,
+    }));
+    const parent = { ...parentMinutes[0]!, openTime: parentStart, closeTime: parentStart + 3600,
+      high: 100, low: 100, close: 100, volume: 59 };
+    const document = prepareSymbolBlock('NEWUSDT', [...history, parent], input, 'ENVELOPE', parentStart, parentStart + 3600,
+      undefined, undefined, undefined, undefined, undefined, undefined, parentMinutes);
+    expect(document.bars).toHaveLength(1);
+    expect(document.bars[0]!.envelopeIntrabarCandles).toBeUndefined();
+    expect(() => replay(document, input)).not.toThrow();
+  });
 });
 
 describe('shared minute execution and entry filters', () => {
