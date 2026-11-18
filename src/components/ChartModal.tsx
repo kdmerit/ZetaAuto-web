@@ -594,6 +594,7 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
         </div>
         {chart.market ? <MarketIndicatorControls value={indicatorSettings} onApply={value => { saveMarketIndicators(value); setIndicatorSettings(value); }} /> : null}
         {chart.envelope && !chart.market ? <p className="envelope-chart-caption">엔벨로프 {chart.envelope.interval} · SMA{chart.envelope.period} · ±{chart.envelope.deviationPercent}%</p> : null}
+        {chart.atrEnvelope?.interval && !chart.market ? <p className="envelope-chart-caption atr-envelope-caption">ATR 엔벨로프 {chart.atrEnvelope.interval} · EMA{chart.atrEnvelope.emaPeriod} · ATR{chart.atrEnvelope.atrPeriod} × {chart.atrEnvelope.multiplier}</p> : null}
         <ChartSvg chart={chartWithExit} visibleMas={visibleMas} selection={selection} onSelect={setSelection} onClear={() => setSelection(null)} focusRequest={focusRequest} onLoadOlder={onLoadOlder} loadingOlder={loadingOlder || focusing || switching !== null} onViewTime={rememberViewTime} />
         <div className="chart-readout">
           <div className="candle-info-heading">

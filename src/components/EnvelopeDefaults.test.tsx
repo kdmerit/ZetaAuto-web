@@ -55,6 +55,28 @@ describe('envelope input defaults and arrangement', () => {
     expect(html).toContain('엔벨로프 개별 종목은 슬리피지 필터 없이 분석합니다.');
   });
 
+  it('offers only ATR individual/all analysis with the chart inputs and the shared entry filters', () => {
+    values.set('zetaauto.web.envelope.view', 'ALL_STATS');
+    const html = renderToStaticMarkup(<EnvelopeWorkspace strategy="ATR_ENVELOPE" context={context} />);
+    expect(html).toContain('<h1>ATR 엔벨로프 백테스트</h1>');
+    expect(html).toContain('>개별분석</button>');
+    expect(html).toContain('>전체분석</button>');
+    for (const label of ['개별통계', '전체통계', '가상매매', '엔벨로프 중심선 봉수', '엔벨로프 이격 (%)', 'SL (%)']) expect(html).not.toContain(label);
+    for (const label of ['MA20 위에서만 매수 (롱)', '중심선 터치후 이탈시 매도', '롱/숏 비율 50%', '종가에서만 매수', '캔들 절반 엔벨 이내', '매수금지 캔들 필터 적용', '트레일링 스탑 적용']) {
+      expect(html).toContain(label);
+    }
+    expect(html).toMatch(/aria-label="ATR 중심 EMA"[^>]*min="0" max="120" step="1"[^>]*value="20"/);
+    expect(html).toMatch(/aria-label="ATR 기간"[^>]*min="0" max="120" step="1"[^>]*value="14"/);
+    expect(html).toMatch(/aria-label="ATR 승수"[^>]*min="0" max="20" step="0\.1"[^>]*value="2\.0"/);
+    expect(html).toContain('BTC 이력보기');
+    values.set('zetaauto.web.atrEnvelope.view', 'ALL');
+    saveSettings('ATR_ENVELOPE', { ...defaultSettings('ATR_ENVELOPE'), atrEnvelope: { emaPeriod: '3', atrPeriod: '3', atrMultiplier: '0.5' } });
+    const all = renderToStaticMarkup(<EnvelopeWorkspace strategy="ATR_ENVELOPE" context={context} />);
+    expect(all).not.toContain('placeholder="BTC"');
+    expect(all).toContain('전체종목 이력보기');
+    expect(all).toMatch(/aria-label="ATR 승수"[^>]*value="0\.5"/);
+  });
+
   it('places the center-return exit immediately after the above-MA20 filter', () => {
     const html = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
     const above = html.indexOf('MA20 위에서만 매수 (롱)');

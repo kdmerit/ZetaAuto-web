@@ -1,4 +1,4 @@
-export type Strategy = 'PULLBACK' | 'DISPARITY' | 'VOLATILITY' | 'ENVELOPE' | 'NEW_HIGH' | 'REFERENCE' | 'CANDLE_BREAKOUT';
+export type Strategy = 'PULLBACK' | 'DISPARITY' | 'VOLATILITY' | 'ENVELOPE' | 'ATR_ENVELOPE' | 'NEW_HIGH' | 'REFERENCE' | 'CANDLE_BREAKOUT';
 export type EnvelopeExitMode = 'CENTER' | 'OPPOSITE' | 'HALF' | 'MA20';
 
 export interface ContractRisk {
@@ -13,6 +13,16 @@ export interface EnvelopeBand {
   center: number;
   upper: number;
   lower: number;
+}
+export interface AtrEnvelopeInputs {
+  emaPeriod: string;
+  atrPeriod: string;
+  atrMultiplier: string;
+}
+export interface AtrEnvelopeParameters {
+  emaPeriod: number;
+  atrPeriod: number;
+  multiplier: number;
 }
 export type BacktestInterval = '15m' | '1h' | '4h' | '1d';
 export type EnvelopeStatisticsInterval = BacktestInterval | 'ALL';
@@ -53,6 +63,7 @@ export interface BacktestSettings {
   volatilityMa60Enabled?: boolean;
   volatilityMa60BelowEnabled?: boolean;
   envelopeDeviationPercent?: string;
+  atrEnvelope?: AtrEnvelopeInputs;
   envelopeStopLossPercent?: string;
   envelopeTrailingStopEnabled?: boolean;
   envelopeTrailingStopPercent?: string;
@@ -193,10 +204,10 @@ export interface ChartData {
   };
   /** Standalone public-market chart, never a trade or simulated account. */
   market?: { sourceCandles: Candle[] };
-  atrEnvelope?: {
-    emaPeriod: number;
-    atrPeriod: number;
-    multiplier: number;
+  atrEnvelope?: AtrEnvelopeParameters & {
+    /** Trade overlays retain the strategy's timeframe and first requested EMA/ATR candle. */
+    interval?: BacktestInterval;
+    seedFrom?: number;
     bands: { openTime: number; center: number; upper: number; lower: number }[];
   };
   bollinger?: {
@@ -292,6 +303,7 @@ export interface Signal {
   referenceRole?: 'REFERENCE' | 'NEXT';
   exitMode?: 'BAR_CLOSE' | 'VOLATILITY_CLOSE' | 'VOLATILITY_TP' | 'VOLATILITY_MA5' | 'VOLATILITY_CANDLE_RULE' | 'VOLATILITY_WICK_RULE' | 'ENVELOPE_TOUCH' | 'ENVELOPE_MA20_CLOSE' | 'PULLBACK_ENVELOPE' | 'NEW_HIGH_TOUCH' | 'REFERENCE_TOUCH' | 'CANDLE_BREAKOUT_TP';
   envelopeDeviationPercent?: number;
+  atrEnvelope?: AtrEnvelopeParameters;
   envelopeStopLossPercent?: number;
   envelopeTrailingStopPercent?: number;
   envelopeExitMode?: EnvelopeExitMode;
@@ -335,6 +347,7 @@ export interface BacktestResult {
   equityCurve: { at: number; equityUsdt: number }[];
   candles: Candle[];
   localRunId?: string;
+  atrEnvelopeSeedFrom?: number;
   universeCount?: number;
   excludedCount?: number;
   failedSymbols?: string[];

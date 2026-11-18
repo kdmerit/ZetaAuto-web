@@ -1,12 +1,13 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
-import { bandFor, envelopeEntryBandReached, envelopeHalfCandleAllowsEntry, envelopeParameters, priorMovingAverages, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
+import { atrEnvelopeBacktestParameters, bandFor, currentAtrEnvelopeSettings, envelopeEntryBandReached, envelopeHalfCandleAllowsEntry, envelopeParameters, isEnvelopeStrategy, priorMovingAverages, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
 import { envelopeCandleContexts, type EnvelopeCandleContext } from './envelopeCandleFilter';
 import { prepareNewHigh, type PreparedNewHigh } from './newHigh';
 import { referenceTpPercent } from './reference';
-import { enrichMarketCandles } from './marketIndicators';
+import { advanceAtrEnvelope, atrEnvelopeBand, atrEnvelopeEnabled, enrichMarketCandles, projectAtrEnvelopeBands, type AtrEnvelopeState } from './marketIndicators';
 import { candleBreakoutSignals } from './candleBreakout';
 import type {
+  AtrEnvelopeParameters,
   BacktestResult,
   BacktestSettings,
   BacktestTrade,
@@ -536,6 +537,7 @@ function referenceSignals(
 export interface PreparedEnvelope extends EnvelopeBand {
   long: boolean;
   short: boolean;
+  atrEnvelope?: AtrEnvelopeParameters;
   priorUpperTouch?: boolean;
   priorLowerTouch?: boolean;
   previousClose?: number;
@@ -578,6 +580,7 @@ export interface PreparedSymbol {
   symbol: string;
   bars: PreparedBar[];
   waveState?: WaveState;
+  atrEnvelopeState?: AtrEnvelopeState;
 }
 
 /** Prepare a bounded time block; warm-up bars inform indicators but never place orders. */
@@ -595,6 +598,7 @@ export function prepareSymbolBlock(
   referenceIntrabarCandles?: Candle[],
   volatilityIntrabarCandles?: Candle[],
   envelopeIntrabarCandles?: Candle[],
+  previousAtrEnvelope?: AtrEnvelopeState,
 ): PreparedSymbol {
   if (strategy === 'NEW_HIGH') {
     const definitions = prepareNewHigh(candles, settings, dailyCandles);
@@ -612,9 +616,12 @@ export function prepareSymbolBlock(
       ...(intrabarGroups.has(candle.openTime) ? { newHighIntrabarCandles: intrabarGroups.get(candle.openTime)!.sort((a, b) => a.openTime - b.openTime) } : {}),
     }]) };
   }
-  if (strategy === 'ENVELOPE') {
-    const { percent, period } = envelopeParameters(settings);
-    const centers = priorMovingAverages(candles, period);
+  if (isEnvelopeStrategy(strategy)) {
+    const sma = strategy === 'ENVELOPE' ? envelopeParameters(settings) : undefined;
+    const atr = strategy === 'ATR_ENVELOPE' ? atrEnvelopeBacktestParameters(settings) : undefined;
+    const centers = sma ? priorMovingAverages(candles, sma.period) : [];
+    const useAtr = atr !== undefined && atrEnvelopeEnabled(atr);
+    let atrState = useAtr ? previousAtrEnvelope : undefined;
     const priorMa20 = priorMovingAverages(candles, 19);
     const seconds = intervalSeconds(settings.interval);
     const envelopeGroups = new Map<number, Candle[]>();
@@ -627,22 +634,30 @@ export function prepareSymbolBlock(
       rows.push(intrabar);
       envelopeGroups.set(parentOpenTime, rows);
     }
-    return { symbol, bars: enrichCandles(candles).flatMap((candle, index) => {
+    const bars = enrichCandles(candles).flatMap((candle, index) => {
+      let band: EnvelopeBand | undefined;
+      if (useAtr && atr && candle.closeTime <= end && candle.openTime >= (atrState?.closeTime ?? -Infinity)) {
+        // The retained state already includes the warm-up rows before its close time.
+        if (atrState) band = atrEnvelopeBand(atrState, atr);
+        atrState = advanceAtrEnvelope(atrState, candle, atr);
+      } else if (sma && centers[index] != null) {
+        band = bandFor(centers[index]!, sma.percent);
+      }
       if (candle.openTime < start || candle.openTime >= end) return [];
-      const center = centers[index];
       const children = envelopeGroups.get(candle.openTime)?.sort((a, b) => a.openTime - b.openTime);
       // A partial first candle has no earlier closes for a band. Its minutes only inform candle shape history.
-      const partialFirstBar = minutePoll && index === 0 && children !== undefined && children[0]!.openTime > candle.openTime;
+      const partialFirstBar = minutePoll && !band && index === 0 && children !== undefined && children[0]!.openTime > candle.openTime;
       return [{ candle, signal: null, ma20: candle.ma20, ma60Exit: null,
         ...(minutePoll ? { envelopeMa20PreviousSum: priorMa20[index] == null ? null : priorMa20[index]! * 19,
           ...(candleContexts?.get(candle.openTime) ? { envelopeCandleContext: candleContexts.get(candle.openTime) } : {}) }
           : candleContexts ? { envelopeCandleContexts: candleContexts } : {}),
         ...(children && !partialFirstBar ? { envelopeIntrabarCandles: children } : {}),
-        ...(center === null || center === undefined ? {} : { envelope: {
-          ...bandFor(center, percent), long: settings.side !== 'SHORT', short: settings.side !== 'LONG',
-        } }),
+        ...(band ? { envelope: {
+          ...band, long: settings.side !== 'SHORT', short: settings.side !== 'LONG', ...(atr ? { atrEnvelope: atr } : {}),
+        } } : {}),
       }];
-    }) };
+    });
+    return { symbol, bars, ...(atrState ? { atrEnvelopeState: atrState } : {}) };
   }
   const currentPullback = strategy === 'PULLBACK' && (settings.envelopeMaPeriod !== undefined || settings.envelopeDeviationPercent !== undefined);
   const waveState = strategy === 'PULLBACK' && !currentPullback ? structuredClone(previousWaveState ?? initialWaveState()) : undefined;
@@ -1088,7 +1103,8 @@ export function runBacktest(
   dailyCandles?: Candle[],
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
-  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK' || strategy === 'REFERENCE' || strategy === 'CANDLE_BREAKOUT') {
+  if (strategy === 'VOLATILITY' || isEnvelopeStrategy(strategy) || strategy === 'NEW_HIGH' || strategy === 'PULLBACK' || strategy === 'REFERENCE' || strategy === 'CANDLE_BREAKOUT') {
+    if (strategy === 'ATR_ENVELOPE') settings = currentAtrEnvelopeSettings(settings);
     const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
     const start = candles[0]!.openTime;
     const end = candles.at(-1)!.closeTime;
@@ -1206,7 +1222,7 @@ export function buildLocalChart(
     if (signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
     lines.push(line('TP', signal.target));
     if (signal.partial) lines.push(line('PARTIAL_TP', signal.partial));
-  } else if (signal.strategy === 'ENVELOPE' || signal.strategy === 'NEW_HIGH') {
+  } else if (isEnvelopeStrategy(signal.strategy) || signal.strategy === 'NEW_HIGH') {
     lines.push(line('ENTRY', trade.executions.find(fill => fill.kind === 'ENTRY')?.price ?? trade.entryPrice));
     if (signal.strategy === 'ENVELOPE' && signal.second !== undefined && signal.exitMode !== 'ENVELOPE_MA20_CLOSE') {
       lines.push(line('SECOND_ENTRY', signal.second));
@@ -1225,7 +1241,10 @@ export function buildLocalChart(
       if (signal.newHighTpEnabled !== false && signal.newHighTpMultiplier !== undefined) lines.push(line('TP', signal.target));
       }
     }
-    if (signal.strategy !== 'ENVELOPE' || signal.exitMode !== 'ENVELOPE_MA20_CLOSE') {
+    if (signal.strategy === 'ATR_ENVELOPE') {
+      lines.push(line('TP', signal.target));
+      lines.push(...(trade.priceLines ?? []).filter(value => value.kind === 'TRAILING_SL'));
+    } else if (signal.strategy !== 'ENVELOPE' || signal.exitMode !== 'ENVELOPE_MA20_CLOSE') {
       if (signal.strategy !== 'NEW_HIGH' || signal.newHighSlEnabled !== false) lines.push(line('SL', signal.activeStop ?? signal.stop));
       if (signal.strategy === 'ENVELOPE') lines.push(line('TP', signal.target));
     }
@@ -1276,10 +1295,14 @@ export function buildLocalChart(
       interval, period: signal.envelopeMaPeriod ?? Number(settings.envelopeMaPeriod ?? '20'),
       deviationPercent: signal.envelopeDeviationPercent ?? Number(settings.envelopeDeviationPercent ?? '5.0'),
     }) } : {}),
+    ...(signal.atrEnvelope ? { atrEnvelope: projectAtrEnvelopeBands(result.candles, candles, {
+      ...signal.atrEnvelope, interval, seedFrom: result.atrEnvelopeSeedFrom ?? result.candles[0]?.openTime ?? 0,
+    }) } : {}),
   };
 }
 
 export function strategyDescription(strategy: Strategy): string {
+  if (strategy === 'ATR_ENVELOPE') return '직전 완성봉까지의 EMA ± ATR × 배수로 밴드를 정합니다. 롱은 하단에서 진입해 상단에서 청산하고 숏은 반대로 적용합니다. 선택한 매수 필터, 중심선 이탈과 트레일링 스탑을 1분봉 순서로 확인합니다.';
   if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return '현재 봉 종가가 이전 N봉 신고가·신저가를 처음 돌파하고 MA10/20 전환을 확인해 진입합니다. 선택한 돌파봉 크기 필터와 SL·TP 항목을 적용하며, 트레일링 스탑 선택 시 다음 15분봉부터 ATR 배수 연속 추적을 함께 적용합니다.';
   if (strategy === 'CANDLE_BREAKOUT') return '전전·전 캔들의 작은 반대색 몸통과 종가 하락·상승을 확인한 뒤 현재 캔들이 MA5를 돌파하면 현재 종가에 진입합니다. 현재 캔들 저가·고가를 SL로 사용하고 진입 캔들 몸통 폭의 2배만큼 움직이면 TP 청산합니다.';

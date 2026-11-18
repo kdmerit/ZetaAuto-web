@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cacheCandles, lease, openCacheDatabase, readValue, writeValue } from './database';
 import { canResumeLocalJob, engineVersionFor, executeLocalJob, loadLocalJob, loadLocalResult, type LocalJobView } from './localJobs';
 import { ensureCandles, instrumentEligibility, listInstruments, MissingCandleError } from './marketData';
+import { advanceAtrEnvelope, atrEnvelopeParameters, type AtrEnvelopeState } from './marketIndicators';
 import type { BacktestSettings, Candle } from './types';
 import { universeRetentionMs, weeklyUniverseDatabaseKey, type WeeklyUniverseSnapshot } from './universeCache';
 import { dailyTrendRows, minuteRows } from './test/envelopeFixtures';
@@ -138,6 +139,50 @@ describe('durable local analysis', () => {
       const intervals = new Set(vi.mocked(ensureCandles).mock.calls.map(call => call[1]));
       expect(intervals).toEqual(new Set(['4h', '1m']));
     }
+  });
+  it.each(['SINGLE', 'ALL'] as const)('checkpoints and resumes %s ATR envelope across daily blocks with its original seed', async mode => {
+    const day = 86400;
+    const atrEnvelope = { emaPeriod: '120', atrPeriod: '120', atrMultiplier: '1' };
+    const input: BacktestSettings = { ...settings, mode, symbol: 'BTC', interval: '1d', side: 'LONG',
+      endDate: '2026-01-13', endTime: '09:00', envelopeHalfCandleEnabled: false, atrEnvelope };
+    const rows: Candle[] = Array.from({ length: 212 }, (_, index) => {
+      const openTime = origin + (index - 200) * day;
+      const open = index === 200 ? 70 : index === 201 ? 140 : 100;
+      return { openTime, closeTime: openTime + day, open, close: open,
+        high: index === 0 ? 154 : index >= 200 ? open : 102,
+        low: index === 0 ? 84 : index >= 200 ? open : 98, volume: 1440 };
+    });
+    vi.mocked(listInstruments).mockResolvedValue([{ symbol: 'BTCUSDT', launchAt: 0 }]);
+    vi.mocked(ensureCandles).mockImplementation((await vi.importActual<typeof import('./marketData')>('./marketData')).ensureCandles);
+    await cacheCandles('BTCUSDT', '1d', rows);
+    await cacheCandles('BTCUSDT', '1m', minuteRows(rows.slice(200, 202)));
+    const fetcher = vi.fn(() => { throw new Error('All required candle data is already cached'); });
+    vi.stubGlobal('fetch', fetcher);
+
+    const pause = new AbortController();
+    await executeLocalJob({ strategy: 'ATR_ENVELOPE', settings: input }, view => {
+      if (view.phase === 'DATA' && view.blockStart === origin + day) pause.abort();
+    }, pause.signal);
+    const paused = (await loadLocalJob('ATR_ENVELOPE'))!;
+    expect(paused).toMatchObject({ status: 'PAUSED', completed: 1, result: { openPositionCount: 1 } });
+    await executeLocalJob({ strategy: 'ATR_ENVELOPE', resumeId: paused.id }, () => {}, new AbortController().signal);
+    const resumed = (await loadLocalJob('ATR_ENVELOPE'))!;
+    expect(resumed).toMatchObject({ id: paused.id, status: 'COMPLETED', completed: 12, result: {
+      entryCount: 1, closedTradeCount: 1, atrEnvelopeSeedFrom: rows[0]!.openTime,
+    } });
+    expect(resumed.result!.recentTrades[0]!.exitAt).toBe(origin + day);
+    const header = (await readValue<{ snapshotKey: string }>('jobs', 'ATR_ENVELOPE'))!;
+    const checkpoint = await readValue<{ atrEnvelopeStates: Record<string, AtrEnvelopeState> }>('results', header.snapshotKey);
+    const parameters = atrEnvelopeParameters(atrEnvelope);
+    const expected = rows.reduce<AtrEnvelopeState | undefined>((state, row) => advanceAtrEnvelope(state, row, parameters), undefined);
+    expect(checkpoint?.atrEnvelopeStates.BTCUSDT).toEqual(expected);
+
+    await executeLocalJob({ strategy: 'ATR_ENVELOPE', settings: input }, () => {}, new AbortController().signal);
+    const fresh = (await loadLocalJob('ATR_ENVELOPE'))!;
+    expect(fresh).toMatchObject({ status: 'COMPLETED', completed: 12 });
+    expect({ ...fresh.result, localRunId: undefined }).toEqual({ ...resumed.result, localRunId: undefined });
+    expect(await loadLocalJob('ENVELOPE')).toBeNull();
+    expect(fetcher).not.toHaveBeenCalled();
   });
   it.each(['LONG', 'SHORT'] as const)('replays a wick-only BTC day with close-only %s entry, including saved progress', async side => {
     const day = 86400;

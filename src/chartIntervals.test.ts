@@ -85,6 +85,24 @@ describe('chart resolution without changing trade results', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('projects the frozen original ATR bands when viewing the trade on 15m', async () => {
+    await seed(['15m', '4h']);
+    const { chart, trade } = fixture();
+    const seedFrom = opened - 14400;
+    await cacheCandles('BTCUSDT', '4h', [
+      { ...row(seedFrom, 14400), high: 108, low: 95, close: 102 },
+      { ...row(opened, 14400), high: 110, low: 95, close: 107 },
+    ]);
+    const source = withChartExecutionTimes({ ...chart, atrEnvelope: {
+      interval: '4h', seedFrom, emaPeriod: 1, atrPeriod: 1, multiplier: 1, bands: [],
+    } }, trade);
+    const view = await chartAtInterval(source, '15m');
+    expect(view.atrEnvelope).toMatchObject({ interval: '4h', seedFrom });
+    expect(view.atrEnvelope!.bands.find(band => band.openTime === opened + 900)).toEqual({ openTime: opened + 900, center: 102, lower: 89, upper: 115 });
+    expect(view.atrEnvelope!.bands.find(band => band.openTime === opened + 14400)).toEqual({ openTime: opened + 14400, center: 107, lower: 92, upper: 122 });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('uses known entry/final-close times from an old server trade but does not invent a partial execution time', () => {
     const { chart, trade } = fixture();
     trade.executions = [];

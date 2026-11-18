@@ -7,7 +7,7 @@ import { saveBacktestHistory, saveCachedResult } from './storage';
 import { projectEnvelopeBands } from './envelope';
 import { atrWindowSeconds } from './atr';
 import { candleBreakoutWarmup } from './candleBreakout';
-import { enrichMarketCandles } from './marketIndicators';
+import { enrichMarketCandles, projectAtrEnvelopeBands } from './marketIndicators';
 import type { BacktestResult, BacktestSettings, BacktestTrade, ChartData, Strategy } from './types';
 import { loadLocalWeeklyUniverse, saveLocalWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
 
@@ -109,7 +109,10 @@ export async function chartForLocalTrade(
   const instrument = (await listInstruments(symbol))[0] ?? { symbol, launchAt: 0 };
   const warmup = trade.signal.strategy === 'CANDLE_BREAKOUT' ? candleBreakoutWarmup(settings)
     : trade.signal.strategy === 'NEW_HIGH' || trade.signal.strategy === 'VOLATILITY' ? Math.max(atrWindowSeconds + seconds, 200 * seconds) : 200 * seconds;
-  const rows = await ensureCandles(instrument, settings.interval, start - warmup, end);
+  const atrParameters = trade.signal.atrEnvelope;
+  const seedFrom = result.atrEnvelopeSeedFrom ?? start - warmup;
+  const from = atrParameters ? Math.min(start - warmup, seedFrom) : start - warmup;
+  const rows = await ensureCandles(instrument, settings.interval, from, end);
   const candles = (trade.signal.strategy === 'NEW_HIGH' || trade.signal.strategy === 'VOLATILITY' ? enrichMarketCandles(rows, settings.interval) : enrichCandles(rows)).filter(candle => candle.openTime >= start);
   if (!candles.length) throw new Error('차트에 표시할 캔들이 없습니다.');
   const indexFor = (time: number): number => {
@@ -143,5 +146,8 @@ export async function chartForLocalTrade(
     markers: executions.filter(execution => execution.candleIndex >= 0), executions,
     priceLines: trade.signal.strategy === 'NEW_HIGH' ? fallback.priceLines : trade.priceLines ?? fallback.priceLines,
     ...(fallback.envelope ? { envelope: projectEnvelopeBands(rows, candles, fallback.envelope) } : {}),
+    ...(atrParameters ? { atrEnvelope: projectAtrEnvelopeBands(rows, candles, {
+      ...atrParameters, interval: settings.interval, seedFrom,
+    }) } : {}),
   };
 }

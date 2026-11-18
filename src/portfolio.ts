@@ -2,7 +2,7 @@
 import type { PreparedBar, PreparedSymbol } from './engine';
 import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, ContractRisk, Execution, PriceLine, Signal } from './types';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
-import { envelopeEntryBandReached, envelopeHalfCandleAllowsEntry, envelopeParameters, envelopeTrailingStopPercent } from './envelope';
+import { envelopeEntryBandReached, envelopeHalfCandleAllowsEntry, envelopeParameters, envelopeTrailingStopPercent, isEnvelopeStrategy } from './envelope';
 import { envelopeCandleAllowsEntry, type EnvelopeCandleContext } from './envelopeCandleFilter';
 import { newHighRiskAmount, newHighSlMultiplier, newHighTpMultiplier, newHighTrailingStopMultiplier } from './newHigh';
 import { estimatedLiquidation } from './contractRisk';
@@ -130,13 +130,13 @@ function priceLines(p: Holding): PriceLine[] {
     ...(p.newHighTrailingStop === undefined ? [] : [{ kind: 'TRAILING_SL' as const, price: p.newHighTrailingStop }]),
     ...(p.signal.newHighSlEnabled === false || p.stop === p.signal.stop ? [] : [{ kind: 'INITIAL_SL' as const, price: p.signal.stop }]),
     ...(p.signal.newHighTpEnabled === false || p.signal.newHighTpMultiplier === undefined ? [] : [{ kind: 'TP' as const, price: p.target }])];
-  if (p.signal.strategy === 'ENVELOPE') {
+  if (isEnvelopeStrategy(p.signal.strategy)) {
     if (p.signal.exitMode === 'ENVELOPE_MA20_CLOSE') return [{ kind: 'ENTRY', price: p.first }]
     const lines: PriceLine[] = [
       { kind: 'ENTRY', price: p.first },
       ...(p.signal.second !== undefined ? [{ kind: 'SECOND_ENTRY' as const, price: p.second }] : []),
       ...(p.secondFill !== undefined ? [{ kind: 'AVERAGE_ENTRY' as const, price: p.entry }] : []),
-      { kind: 'SL', price: p.stop },
+      ...(p.signal.strategy === 'ATR_ENVELOPE' ? [] : [{ kind: 'SL' as const, price: p.stop }]),
       ...(p.envelopeTrailingStop === undefined ? [] : [{ kind: 'TRAILING_SL' as const, price: p.envelopeTrailingStop }]),
       { kind: 'TP', price: p.target },
     ];
@@ -223,10 +223,12 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
       : {}),
     signalIndex: p.signal.index, entryIndex: p.signal.index, exitIndex: -1,
     signal: { ...p.signal, target: p.target, partial: p.partial ?? undefined,
-      second: p.signal.strategy === 'ENVELOPE' && p.signal.envelopeEntryMode === 'BAND_TOUCH' ? undefined
-        : p.signal.strategy === 'ENVELOPE' ? p.second : p.secondFill ?? p.second,
-      initialStop: p.signal.strategy === 'NEW_HIGH' && p.signal.newHighSlEnabled === false ? undefined : p.signal.initialStop ?? p.signal.stop,
-      activeStop: p.signal.strategy === 'NEW_HIGH' && p.signal.newHighSlEnabled === false && p.newHighTrailingStop === undefined ? undefined : p.stop,
+      second: isEnvelopeStrategy(p.signal.strategy) && p.signal.envelopeEntryMode === 'BAND_TOUCH' ? undefined
+        : isEnvelopeStrategy(p.signal.strategy) ? p.second : p.secondFill ?? p.second,
+      initialStop: p.signal.strategy === 'ATR_ENVELOPE' || p.signal.strategy === 'NEW_HIGH' && p.signal.newHighSlEnabled === false
+        ? undefined : p.signal.initialStop ?? p.signal.stop,
+      activeStop: p.signal.strategy === 'ATR_ENVELOPE' || p.signal.strategy === 'NEW_HIGH' && p.signal.newHighSlEnabled === false && p.newHighTrailingStop === undefined
+        ? undefined : p.stop,
       averageEntry: p.entry },
     executions: structuredClone(p.executions), priceLines: [...priceLines(p), { kind: 'EXIT', price: fill }],
   });
@@ -246,6 +248,7 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   if (state.positions[symbol] || settings.side !== 'BOTH' && settings.side !== signal.side) return;
   state.signals += 1;
   const leverage = Number(settings.leverage);
+  const envelope = isEnvelopeStrategy(signal.strategy);
   const split = signal.strategy === 'ENVELOPE' && signal.second !== undefined
     || signal.strategy === 'PULLBACK' && signal.exitMode !== 'PULLBACK_ENVELOPE';
   const entry = signal.entry * (signal.side === 'LONG' ? 1 + slippage : 1 - slippage);
@@ -261,16 +264,18 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     bet = riskSizedQuantity * entry / leverage;
   }
   if (!Number.isFinite(bet) || bet <= 0) return;
-  if (signal.strategy === 'ENVELOPE' && settings.envelopeSideRatio50Enabled === true
+  if (envelope && settings.envelopeSideRatio50Enabled === true
     && !envelopeSideAllocationAllows(state, signal.side, signal.entry, entry, bet, leverage)) return;
   if (state.cash + 1e-10 < bet * (1 + leverage * feeRate)) { state.insufficientFunds += 1; return; }
   const target = signal.exitMode === 'VOLATILITY_TP' ? entry + direction * signal.breakoutRange! * signal.volatilityK1!
     : signal.exitMode === 'VOLATILITY_CLOSE' ? entry + direction * signal.breakoutRange! : signal.target;
   const targetRequired = !(signal.strategy === 'NEW_HIGH' && signal.newHighTpEnabled === false);
+  // A wide ATR band may put a short's lower target below zero until the next source candle.
+  const requiresPositiveTarget = signal.strategy !== 'ATR_ENVELOPE' && (signal.exitMode !== 'VOLATILITY_TP' || signal.volatilityTpEnabled !== false);
   if (targetRequired && signal.exitMode !== 'ENVELOPE_MA20_CLOSE'
     && signal.exitMode !== 'VOLATILITY_CANDLE_RULE'
     && signal.exitMode !== 'VOLATILITY_WICK_RULE'
-    && (!Number.isFinite(target) || target <= 0 && (signal.exitMode !== 'VOLATILITY_TP' || signal.volatilityTpEnabled !== false))) return;
+    && (!Number.isFinite(target) || target <= 0 && requiresPositiveTarget)) return;
   const margin = split ? bet / 2 : bet;
   const fee = margin * leverage * feeRate;
   const activeStop = signal.strategy === 'VOLATILITY'
@@ -294,8 +299,8 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     second: split ? signal.strategy === 'ENVELOPE' && signal.second !== undefined ? signal.second : (entry + signal.stop) / 2 : entry,
     ...(signal.strategy === 'ENVELOPE' && settings.envelopeRisk?.symbol === symbol ? { risk: settings.envelopeRisk } : {}),
     target,
-    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && signal.strategy !== 'ENVELOPE' && signal.strategy !== 'NEW_HIGH' && signal.strategy !== 'REFERENCE' && signal.strategy !== 'CANDLE_BREAKOUT' && signal.exitMode !== 'PULLBACK_ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
-    partialDone: false, stop: envelopeStop, mark: signal.strategy === 'ENVELOPE' && settings.envelopeSideRatio50Enabled === true ? signal.entry : candle.close, net: -fee, executions: [],
+    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && !envelope && signal.strategy !== 'NEW_HIGH' && signal.strategy !== 'REFERENCE' && signal.strategy !== 'CANDLE_BREAKOUT' && signal.exitMode !== 'PULLBACK_ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
+    partialDone: false, stop: envelopeStop, mark: envelope && settings.envelopeSideRatio50Enabled === true ? signal.entry : candle.close, net: -fee, executions: [],
     ...(signal.exitMode === 'VOLATILITY_CANDLE_RULE' ? {
       volatilityEntryOpen: candle.open,
       volatilityEntryClose: candle.close,
@@ -310,8 +315,8 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
       volatilityPreviousBody: Math.abs(candle.close - candle.open),
     } : {}),
   };
-  if (signal.strategy === 'ENVELOPE') {
-    p.signal = { ...effectiveSignal, stop: p.stop, initialStop: signal.envelopeEntryMode === 'BAND_TOUCH' ? p.stop : signal.second ?? signal.stop };
+  if (envelope) {
+    if (signal.strategy === 'ENVELOPE') p.signal = { ...effectiveSignal, stop: p.stop, initialStop: signal.envelopeEntryMode === 'BAND_TOUCH' ? p.stop : signal.second ?? signal.stop };
     p.envelopeCenter = signal.envelopeCenter;
     if (signal.envelopeTrailingStopPercent !== undefined) {
       p.envelopeTrailingDistance = entry * signal.envelopeTrailingStopPercent / 100;
@@ -320,7 +325,9 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     }
     if (signal.envelopeCloseOnCenterReturn === true && signal.envelopeCenter !== undefined) {
       p.envelopeCenterTouched = false;
-      p.envelopeReturnBand = signal.envelopeCenter * (1 - direction * signal.envelopeDeviationPercent! / 100);
+      if (signal.envelopeDeviationPercent !== undefined) {
+        p.envelopeReturnBand = signal.envelopeCenter * (1 - direction * signal.envelopeDeviationPercent / 100);
+      }
     }
   }
   state.positions[symbol] = p;
@@ -395,6 +402,11 @@ function roiPrice(p: Holding, settings: BacktestSettings): number | null {
   return p.entry * (p.signal.side === 'LONG' ? 1 - fraction : 1 + fraction);
 }
 
+function hasFixedStop(signal: Signal): boolean {
+  return signal.strategy !== 'ATR_ENVELOPE' && signal.exitMode !== 'PULLBACK_ENVELOPE'
+    && (signal.exitMode !== 'VOLATILITY_CLOSE' || signal.volatilityStopEnabled === true);
+}
+
 function atPrice(state: PortfolioState, symbol: string, price: number, candle: Candle, settings: BacktestSettings, opening = false): void {
   const p = state.positions[symbol];
   if (!p) return;
@@ -407,9 +419,7 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
       close(state, p, Math.max(Number.EPSILON, bankruptcy), p.qty, 'LIQ', candle, opening); return;
     }
   }
-  const stopped = p.signal.exitMode !== 'PULLBACK_ENVELOPE'
-    && (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true)
-    && (long ? price <= p.stop : price >= p.stop);
+  const stopped = hasFixedStop(p.signal) && (long ? price <= p.stop : price >= p.stop);
   if (p.pending && !stopped && (long ? price <= p.second : price >= p.second)) fillSecond(state, p, opening ? price : p.second, candle, settings, opening);
   if (stopped) { close(state, p, opening ? price : p.stop, p.qty, 'SL', candle, opening); return; }
   if (p.envelopeTrailingDistance !== undefined && p.envelopeTrailingExtreme !== undefined) {
@@ -422,7 +432,7 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
   }
   const roi = roiPrice(p, settings);
   if (roi !== null && (long ? price <= roi : price >= roi)) { close(state, p, opening ? price : roi, p.qty, 'ROI_LOSS', candle, opening); return; }
-  if (p.signal.strategy === 'ENVELOPE' && p.signal.envelopeExecutionModel !== 'MINUTE_POLL' && p.signal.envelopeCloseOnCenterReturn === true) {
+  if (isEnvelopeStrategy(p.signal.strategy) && p.signal.envelopeExecutionModel !== 'MINUTE_POLL' && p.signal.envelopeCloseOnCenterReturn === true) {
     if (p.envelopeCenterTouched && p.envelopeReturnBand !== undefined
       && (long ? price <= p.envelopeReturnBand : price >= p.envelopeReturnBand)) {
       close(state, p, opening ? price : p.envelopeReturnBand, p.qty, 'ENVELOPE_CENTER_RETURN', candle, opening);
@@ -447,14 +457,14 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
     if (p.signal.strategy === 'DISPARITY') p.stop = p.first;
     close(state, p, p.partial, p.qty / 2, 'PARTIAL_TP', candle, opening);
   }
-  const confirmedEnvelopeExit = p.signal.strategy === 'ENVELOPE' && p.signal.envelopeCloseOnConfirmedBreakout === true;
+  const confirmedEnvelopeExit = isEnvelopeStrategy(p.signal.strategy) && p.signal.envelopeCloseOnConfirmedBreakout === true;
   const targetEnabled = !confirmedEnvelopeExit && p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
     && (p.signal.exitMode !== 'VOLATILITY_CANDLE_RULE' || p.target > 0)
     && (p.signal.exitMode !== 'VOLATILITY_WICK_RULE' || p.target > 0)
     || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
   if (p.signal.envelopeExecutionModel !== 'MINUTE_POLL' && targetEnabled && (long ? price >= p.target : price <= p.target)) {
     const disparity = p.signal.strategy === 'DISPARITY';
-    const reason = p.signal.strategy === 'ENVELOPE' ? 'ENVELOPE_OPPOSITE'
+    const reason = isEnvelopeStrategy(p.signal.strategy) ? 'ENVELOPE_OPPOSITE'
       : p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE' ? 'PULLBACK_ENVELOPE'
       : p.signal.strategy === 'REFERENCE' ? 'REFERENCE_TP'
         : p.signal.strategy === 'CANDLE_BREAKOUT' ? 'CANDLE_BREAKOUT_TP'
@@ -470,13 +480,13 @@ function holdingPriceLevels(p: Holding, settings: BacktestSettings): number[] {
     const liq = estimatedLiquidation(p.signal.side, p.entry, p.qty, p.margin, p.risk);
     if (liq !== null) levels.add(liq);
   }
-  const confirmedEnvelopeExit = p.signal.strategy === 'ENVELOPE' && p.signal.envelopeCloseOnConfirmedBreakout === true;
+  const confirmedEnvelopeExit = isEnvelopeStrategy(p.signal.strategy) && p.signal.envelopeCloseOnConfirmedBreakout === true;
   const targetEnabled = !confirmedEnvelopeExit && p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
     && (p.signal.exitMode !== 'VOLATILITY_CANDLE_RULE' || p.target > 0)
     && (p.signal.exitMode !== 'VOLATILITY_WICK_RULE' || p.target > 0)
     || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
   if (p.signal.envelopeExecutionModel !== 'MINUTE_POLL' && targetEnabled) levels.add(p.target);
-  if (p.signal.exitMode !== 'PULLBACK_ENVELOPE' && (p.signal.exitMode !== 'VOLATILITY_CLOSE' || p.signal.volatilityStopEnabled === true)) levels.add(p.stop);
+  if (hasFixedStop(p.signal)) levels.add(p.stop);
   if (p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE' && p.pullbackMa60Exit !== undefined) levels.add(p.pullbackMa60Exit);
   if (p.pending) levels.add(p.second);
   if (p.partial !== null && !p.partialDone) levels.add(p.partial);
@@ -504,7 +514,7 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
 /** Close an envelope position only when the selected parent candle confirms a breakout. */
 function closeEnvelopeOnConfirmedClose(state: PortfolioState, symbol: string, candle: Candle): void {
   const position = state.positions[symbol];
-  if (!position || position.signal.strategy !== 'ENVELOPE' || position.signal.envelopeCloseOnConfirmedBreakout !== true) return;
+  if (!position || !isEnvelopeStrategy(position.signal.strategy) || position.signal.envelopeCloseOnConfirmedBreakout !== true) return;
   const confirmed = position.signal.side === 'LONG' ? candle.close > position.target : candle.close < position.target;
   if (confirmed) close(state, position, candle.close, position.qty, 'ENVELOPE_CLOSE_CONFIRM', candle);
 }
@@ -701,17 +711,18 @@ type EnvelopeEntryDefinition = ReturnType<typeof envelopeEntryDefinitions>[numbe
 
 function envelopeEntrySignal(definition: EnvelopeEntryDefinition, price: number, parent: Candle): Signal {
   const { side, band, parameters } = definition;
-  const { percent, stopPercent, period } = envelopeParameters(parameters);
+  const atr = band.atrEnvelope;
+  const sma = atr ? undefined : envelopeParameters(parameters);
   const target = side === 'LONG' ? band.upper : band.lower;
   return {
-    strategy: 'ENVELOPE', side, index: parent.openTime, entry: price,
-    stop: price * (1 + (side === 'LONG' ? -1 : 1) * stopPercent / 100), target, initialTarget: target,
-    exitMode: 'ENVELOPE_TOUCH', envelopeDeviationPercent: percent, envelopeExitMode: 'OPPOSITE',
-    envelopeStopLossPercent: stopPercent,
+    strategy: atr ? 'ATR_ENVELOPE' : 'ENVELOPE', side, index: parent.openTime, entry: price,
+    stop: sma ? price * (1 + (side === 'LONG' ? -1 : 1) * sma.stopPercent / 100) : 0,
+    target, initialTarget: target, exitMode: 'ENVELOPE_TOUCH', envelopeExitMode: 'OPPOSITE',
+    ...(sma ? { envelopeDeviationPercent: sma.percent, envelopeStopLossPercent: sma.stopPercent, envelopeMaPeriod: sma.period } : { atrEnvelope: atr }),
     ...(parameters.envelopeTrailingStopEnabled === true ? { envelopeTrailingStopPercent: envelopeTrailingStopPercent(parameters) } : {}),
     envelopeCloseOnConfirmedBreakout: parameters.envelopeCloseOnConfirmedBreakout === true,
     envelopeCloseOnCenterReturn: parameters.envelopeCloseOnCenterReturn === true,
-    envelopeMaPeriod: period, envelopeCenter: band.center, envelopeMoveSlOnCenter: false,
+    envelopeCenter: band.center, envelopeMoveSlOnCenter: false,
     envelopeEntryMode: 'BAND_TOUCH',
     ...(parameters.envelopeExecutionModel ? { envelopeExecutionModel: parameters.envelopeExecutionModel } : {}),
     ...(band.sourceInterval ? { envelopeSourceInterval: band.sourceInterval } : {}),
@@ -839,7 +850,7 @@ function replayEnvelopeMinutes(state: PortfolioState, rows: { symbol: string; ba
         const extreme = p.envelopeTrailingExtreme === undefined ? undefined
           : long ? Math.max(p.envelopeTrailingExtreme, row.minute.high) : Math.min(p.envelopeTrailingExtreme, row.minute.low);
         const trail = extreme === undefined || p.envelopeTrailingDistance === undefined ? undefined : extreme + (long ? -1 : 1) * p.envelopeTrailingDistance;
-        const mayStop = (long ? row.minute.low <= p.stop : row.minute.high >= p.stop)
+        const mayStop = hasFixedStop(p.signal) && (long ? row.minute.low <= p.stop : row.minute.high >= p.stop)
           || trail !== undefined && (long ? row.minute.low <= trail : row.minute.high >= trail);
         if (mayStop || p.risk) {
           const childBar = { ...row.bar, candle: row.minute, signal: null };
@@ -1137,7 +1148,7 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
     if (bar.ma60Exit === null) throw new Error(`${symbol}의 MA60 계산에 필요한 캔들이 부족합니다.`);
     position.target = bar.ma60Exit;
   }
-  if (position.signal.strategy === 'ENVELOPE') {
+  if (isEnvelopeStrategy(position.signal.strategy)) {
     if (position.signal.exitMode === 'ENVELOPE_MA20_CLOSE') {
       const ma20 = bar.ma20;
       const long = position.signal.side === 'LONG';
@@ -1488,11 +1499,11 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
     let intrabarBudget = Math.max(0, state.cash);
     intrabarBudget = replayNewHighRows(state, rows, settings, intrabarBudget);
     const minuteRows = settings.envelopeExecutionModel === 'MINUTE_POLL'
-      ? rows.filter(row => row.bar.envelope || row.bar.envelopeBySide || state.positions[row.symbol]?.signal.strategy === 'ENVELOPE') : [];
+      ? rows.filter(row => row.bar.envelope || row.bar.envelopeBySide || isEnvelopeStrategy(state.positions[row.symbol]?.signal.strategy)) : [];
     if (minuteRows.length) intrabarBudget = replayEnvelopeMinutes(state, minuteRows, settings, intrabarBudget, options, occupiedAtOpen);
     const minuteSymbols = new Set(minuteRows.map(row => row.symbol));
     const limitedRows = settings.envelopeSideRatio50Enabled === true
-      ? rows.filter(row => !minuteSymbols.has(row.symbol) && (row.bar.envelope || row.bar.envelopeBySide || state.positions[row.symbol]?.signal.strategy === 'ENVELOPE')) : [];
+      ? rows.filter(row => !minuteSymbols.has(row.symbol) && (row.bar.envelope || row.bar.envelopeBySide || isEnvelopeStrategy(state.positions[row.symbol]?.signal.strategy))) : [];
     const limitedSymbols = new Set([...minuteSymbols, ...limitedRows.map(row => row.symbol)]);
     if (limitedRows.length) intrabarBudget = replayEnvelopeSideLimitedRows(state, limitedRows, settings, intrabarBudget, options, occupiedAtOpen);
     for (const { symbol, bar } of rows) {

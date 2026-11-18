@@ -1,33 +1,94 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { calendarAtr, trueRange } from './atr';
 export { trueRange } from './atr';
-import type { BacktestInterval, Candle, ChartData, EnrichedCandle } from './types';
+import type { AtrEnvelopeInputs, AtrEnvelopeParameters, BacktestInterval, Candle, ChartData, EnrichedCandle, EnvelopeBand } from './types';
 
-export interface MarketIndicatorSettings {
+export interface MarketIndicatorSettings extends AtrEnvelopeInputs {
   smaPeriod: string;
   deviationPercent: string;
-  emaPeriod: string;
-  atrPeriod: string;
-  atrMultiplier: string;
   bollingerPeriod: string;
   bollingerMultiplier: string;
 }
 export const marketIndicatorStorageKey = 'zetaauto.web.marketChart.indicators.v1';
-export const defaultMarketIndicators: MarketIndicatorSettings = { smaPeriod: '20', deviationPercent: '0.0', emaPeriod: '20', atrPeriod: '14', atrMultiplier: '2.0', bollingerPeriod: '20', bollingerMultiplier: '2.0' };
+export const defaultAtrEnvelopeInputs: AtrEnvelopeInputs = { emaPeriod: '20', atrPeriod: '14', atrMultiplier: '2.0' };
+export const defaultMarketIndicators: MarketIndicatorSettings = { smaPeriod: '20', deviationPercent: '0.0', ...defaultAtrEnvelopeInputs, bollingerPeriod: '20', bollingerMultiplier: '2.0' };
 export const volumeWindowSeconds = 120 * 86400;
 
+const maximumPeriod = 120;
+const maximumAtrMultiplier = 20;
+export const atrEnvelopeFields = [
+  { key: 'emaPeriod', label: 'EMA', name: 'ATR 중심 EMA', max: maximumPeriod, step: 1 },
+  { key: 'atrPeriod', label: 'ATR', name: 'ATR 기간', max: maximumPeriod, step: 1 },
+  { key: 'atrMultiplier', label: '×', name: 'ATR 승수', max: maximumAtrMultiplier, step: 0.1 },
+] as const;
+
 function period(value: string, label: string): number {
-  if (!/^\d+$/.test(value) || Number(value) > 120) throw new Error(`${label}은 0~120 정수로 입력해 주세요.`);
+  if (!/^\d+$/.test(value) || Number(value) > maximumPeriod) throw new Error(`${label}은 0~${maximumPeriod} 정수로 입력해 주세요.`);
   return Number(value);
 }
 function decimal(value: string, label: string, maximum = 20): number {
   if (!/^\d+(\.\d)?$/.test(value) || !Number.isFinite(Number(value)) || Number(value) > maximum) throw new Error(`${label}은 0.0~${maximum.toFixed(1)}으로 입력해 주세요. (소수 한 자리)`);
   return Number(value);
 }
+export function atrEnvelopeParameters(settings: AtrEnvelopeInputs): AtrEnvelopeParameters {
+  return {
+    emaPeriod: period(settings.emaPeriod, 'EMA'),
+    atrPeriod: period(settings.atrPeriod, 'ATR 기간'),
+    multiplier: decimal(settings.atrMultiplier, 'ATR 승수', maximumAtrMultiplier),
+  };
+}
+
 export function marketIndicatorParameters(settings: MarketIndicatorSettings) {
   return { sma: period(settings.smaPeriod, 'SMA'), deviation: decimal(settings.deviationPercent, '엔벨로프 이격'),
-    ema: period(settings.emaPeriod, 'EMA'), atr: period(settings.atrPeriod, 'ATR 기간'), multiplier: decimal(settings.atrMultiplier, 'ATR 승수'),
+    atrEnvelope: atrEnvelopeParameters(settings),
     bollingerPeriod: period(settings.bollingerPeriod, '볼린저밴드 기간'), bollingerMultiplier: decimal(settings.bollingerMultiplier, '볼린저밴드 표준편차 배수', 10) };
+}
+
+export interface AtrEnvelopeState {
+  closeTime: number;
+  previousClose: number;
+  ema: number;
+  atr: number;
+}
+
+export function atrEnvelopeEnabled(parameters: AtrEnvelopeParameters): boolean {
+  return parameters.emaPeriod > 0 && parameters.atrPeriod > 0 && parameters.multiplier > 0;
+}
+
+export function advanceAtrEnvelope(state: AtrEnvelopeState | undefined, candle: Candle, parameters: AtrEnvelopeParameters): AtrEnvelopeState {
+  const tr = trueRange(candle, state?.previousClose);
+  return {
+    closeTime: candle.closeTime,
+    previousClose: candle.close,
+    ema: state ? state.ema + 2 / (parameters.emaPeriod + 1) * (candle.close - state.ema) : candle.close,
+    // Wilder smoothing starts at the first TR, matching adjust=False in the chart.
+    atr: state ? state.atr + (tr - state.atr) / parameters.atrPeriod : tr,
+  };
+}
+
+export function atrEnvelopeBand(state: AtrEnvelopeState, parameters: AtrEnvelopeParameters): EnvelopeBand {
+  const width = parameters.multiplier * state.atr;
+  return { center: state.ema, upper: state.ema + width, lower: state.ema - width };
+}
+
+/** Project only the source candles already completed at each target candle's open. */
+export function projectAtrEnvelopeBands(
+  rows: readonly Candle[],
+  targets: readonly Candle[],
+  definition: AtrEnvelopeParameters & { interval: BacktestInterval; seedFrom: number },
+): NonNullable<ChartData['atrEnvelope']> {
+  const bands: NonNullable<ChartData['atrEnvelope']>['bands'] = [];
+  if (!atrEnvelopeEnabled(definition)) return { ...definition, bands };
+  let state: AtrEnvelopeState | undefined;
+  let cursor = 0;
+  for (const target of targets) {
+    while (cursor < rows.length && rows[cursor]!.closeTime <= target.openTime) {
+      const candle = rows[cursor++]!;
+      if (candle.openTime >= definition.seedFrom) state = advanceAtrEnvelope(state, candle, definition);
+    }
+    if (state) bands.push({ openTime: target.openTime, ...atrEnvelopeBand(state, definition) });
+  }
+  return { ...definition, bands };
 }
 export function loadMarketIndicators(): MarketIndicatorSettings {
   try {
@@ -66,14 +127,15 @@ export function withMarketIndicators(chart: ChartData, settings: MarketIndicator
   if (!chart.market) return chart;
   const p = marketIndicatorParameters(settings);
   const envelope: NonNullable<ChartData['envelope']> = { interval: chart.interval, period: p.sma, deviationPercent: p.deviation, bands: [] };
-  const atrEnvelope: NonNullable<ChartData['atrEnvelope']> = { emaPeriod: p.ema, atrPeriod: p.atr, multiplier: p.multiplier, bands: [] };
+  const atrEnvelope: NonNullable<ChartData['atrEnvelope']> = { ...p.atrEnvelope, bands: [] };
   const bollinger: NonNullable<ChartData['bollinger']> = { period: p.bollingerPeriod, multiplier: p.bollingerMultiplier, bands: [] };
   const rows = chart.market.sourceCandles;
   const first = chart.candles[0]?.openTime ?? Infinity; const last = chart.candles.at(-1)?.openTime ?? -Infinity;
   const smaEnabled = p.sma > 0 && p.deviation > 0;
-  const atrEnabled = p.ema > 0 && p.atr > 0 && p.multiplier > 0;
+  const atrEnabled = atrEnvelopeEnabled(p.atrEnvelope);
   const bollingerEnabled = p.bollingerPeriod > 0 && p.bollingerMultiplier > 0;
-  let sum = 0; let ema: number | null = null; let atr: number | null = null; let bollingerSum = 0; let bollingerSquareSum = 0;
+  let sum = 0; let bollingerSum = 0; let bollingerSquareSum = 0;
+  let atrState: AtrEnvelopeState | undefined;
   for (let index = 0; index < rows.length; index += 1) {
     const candle = rows[index]!;
     if (smaEnabled) { sum += candle.close; if (index >= p.sma) sum -= rows[index - p.sma]!.close; }
@@ -84,18 +146,13 @@ export function withMarketIndicators(chart: ChartData, settings: MarketIndicator
         bollingerSum -= previousClose; bollingerSquareSum -= previousClose * previousClose;
       }
     }
-    if (atrEnabled) {
-      const tr = trueRange(candle, rows[index - 1]?.close);
-      ema = ema === null ? candle.close : ema + 2 / (p.ema + 1) * (candle.close - ema);
-      // Exactly TR.ewm(alpha=1/M, adjust=False).mean(): seed with the first TR, not an SMA.
-      atr = atr === null ? tr : atr + (tr - atr) / p.atr;
-    }
+    if (atrEnabled) atrState = advanceAtrEnvelope(atrState, candle, p.atrEnvelope);
     if (candle.openTime < first || candle.openTime > last) continue;
     if (smaEnabled && index + 1 >= p.sma) {
       const center = sum / p.sma;
       envelope.bands.push({ openTime: candle.openTime, center, upper: center * (1 + p.deviation / 100), lower: center * (1 - p.deviation / 100) });
     }
-    if (atrEnabled && ema !== null && atr !== null) atrEnvelope.bands.push({ openTime: candle.openTime, center: ema, upper: ema + p.multiplier * atr, lower: ema - p.multiplier * atr });
+    if (atrState) atrEnvelope.bands.push({ openTime: candle.openTime, ...atrEnvelopeBand(atrState, p.atrEnvelope) });
     if (bollingerEnabled && index + 1 >= p.bollingerPeriod) {
       const center = bollingerSum / p.bollingerPeriod;
       const variance = Math.max(0, bollingerSquareSum / p.bollingerPeriod - center * center);

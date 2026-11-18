@@ -5,11 +5,12 @@ import { envelopeEntryMayTouch, prepareSymbolBlock, type PreparedSymbol, type Wa
 import { analysisWindow, completedCandleEnd, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
-import { currentEnvelopeSettings, currentPullbackSettings, envelopeLocalJobVersion, envelopeParameters } from './envelope';
+import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvelopeSettings, currentPullbackSettings, envelopeLocalJobVersion, envelopeParameters, envelopeWarmupBars, isEnvelopeStrategy } from './envelope';
 import { envelopeCandleDataStart } from './envelopeCandleFilter';
 import { currentNewHighSettings, newHighExecutionInterval, newHighWarmup } from './newHigh';
 import { currentReferenceSettings } from './reference';
 import { candleBreakoutWarmup } from './candleBreakout';
+import type { AtrEnvelopeState } from './marketIndicators';
 import type { BacktestResult, BacktestSettings, Candle, Strategy } from './types';
 import { loadWeeklyUniverse, saveWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
 
@@ -23,6 +24,7 @@ export interface LocalRunOptions {
 // Data-fetch fixes retain this version so paused 2.10.26 account checkpoints can resume.
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
+  if (strategy === 'ATR_ENVELOPE') return '2.10.100';
   return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.93' : strategy === 'CANDLE_BREAKOUT' ? '2.10.99' : strategy === 'ENVELOPE' ? envelopeLocalJobVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
@@ -51,9 +53,10 @@ export interface LocalJob {
   message: string | null;
   state: PortfolioState;
   waveStates: Record<string, WaveState>;
+  atrEnvelopeStates?: Record<string, AtrEnvelopeState>;
 }
 
-export interface LocalJobView extends Omit<LocalJob, 'state' | 'waveStates' | 'candidates' | 'universe' | 'universeChecks'> {
+export interface LocalJobView extends Omit<LocalJob, 'state' | 'waveStates' | 'atrEnvelopeStates' | 'candidates' | 'universe' | 'universeChecks'> {
   candidateCount: number;
   universeCount: number;
   result: BacktestResult | null;
@@ -63,8 +66,8 @@ export interface LocalJobView extends Omit<LocalJob, 'state' | 'waveStates' | 'c
 }
 
 export interface StoredLocalResult { settings: BacktestSettings; result: BacktestResult }
-interface SavedJob extends Omit<LocalJob, 'state' | 'waveStates'> { snapshotKey: string }
-interface AccountSnapshot { state: PortfolioState; waveStates: Record<string, WaveState> }
+interface SavedJob extends Omit<LocalJob, 'state' | 'waveStates' | 'atrEnvelopeStates'> { snapshotKey: string }
+type AccountSnapshot = Pick<LocalJob, 'state' | 'waveStates' | 'atrEnvelopeStates'>;
 
 async function readJob(strategy: Strategy): Promise<LocalJob | null> {
   const header = await readValue<SavedJob>('jobs', strategy);
@@ -76,7 +79,7 @@ async function readJob(strategy: Strategy): Promise<LocalJob | null> {
 }
 
 export function jobView(job: LocalJob): LocalJobView {
-  const { state, waveStates: _waves, candidates, universe, universeChecks: _checks, ...view } = job;
+  const { state, waveStates: _waves, atrEnvelopeStates: _atr, candidates, universe, universeChecks: _checks, ...view } = job;
   const bars = (job.end - job.start) / intervalSeconds(job.settings.interval);
   const finishedBars = (job.blockStart - job.start) / intervalSeconds(job.settings.interval);
   const blockBars = Math.min(blockSize(job), bars - finishedBars);
@@ -85,6 +88,7 @@ export function jobView(job: LocalJob): LocalJobView {
   const result = state.observedBars || job.status === 'COMPLETED' ? {
     ...portfolioResult(state, job.settings), localRunId: job.id,
     universeCount: universe.length, excludedCount: job.excludedCount,
+    ...(job.strategy === 'ATR_ENVELOPE' ? { atrEnvelopeSeedFrom: job.start - envelopeWarmupBars * intervalSeconds(job.settings.interval) } : {}),
     ...(job.failedSymbols.length ? { failedSymbols: [...job.failedSymbols] } : {}),
   } : null;
   return {
@@ -102,8 +106,8 @@ function blockSize(job: LocalJob): number {
 }
 
 function skipsSingleEnvelopeSlippage(job: Pick<LocalJob, 'strategy' | 'settings' | 'version'>): boolean {
-  return job.strategy === 'ENVELOPE' && job.settings.mode === 'SINGLE'
-    && job.version === envelopeLocalJobVersion;
+  return isEnvelopeStrategy(job.strategy) && job.settings.mode === 'SINGLE'
+    && job.version === engineVersionFor(job.strategy);
 }
 
 function applyInstrumentEligibility(prepared: PreparedSymbol, instrument: EligibleInstrument): void {
@@ -153,8 +157,8 @@ async function executeWithLease(
     if (useLease && (leaseLost || !await lease(owner))) throw new Error('다른 탭에서 분석을 시작했습니다. 다시 이어가 주세요.');
     job.updatedAt = Date.now();
     const snapshotKey = `checkpoint:${job.id}:${job.blockStart}`;
-    if (savedState !== job.state) await writeValue('results', snapshotKey, { state: job.state, waveStates: job.waveStates } satisfies AccountSnapshot);
-    const { state, waveStates: _waves, ...header } = job;
+    const { state, waveStates, atrEnvelopeStates, ...header } = job;
+    if (savedState !== state) await writeValue('results', snapshotKey, { state, waveStates, atrEnvelopeStates } satisfies AccountSnapshot);
     // Header switches to a fully committed snapshot; the previous snapshot survives a crash before this write.
     await writeValue('jobs', job.strategy, { ...header, snapshotKey } satisfies SavedJob);
     if (savedSnapshotKey && savedSnapshotKey !== snapshotKey) await deleteValue('results', savedSnapshotKey);
@@ -186,9 +190,11 @@ async function executeWithLease(
       const copied = structuredClone(options.settings);
       const settings = options.strategy === 'NEW_HIGH' ? currentNewHighSettings(copied)
         : options.strategy === 'ENVELOPE' ? currentEnvelopeSettings(copied)
-          : options.strategy === 'PULLBACK' ? currentPullbackSettings(copied)
-            : options.strategy === 'REFERENCE' ? currentReferenceSettings(copied) : copied;
+        : options.strategy === 'ATR_ENVELOPE' ? currentAtrEnvelopeSettings(copied)
+        : options.strategy === 'PULLBACK' ? currentPullbackSettings(copied)
+        : options.strategy === 'REFERENCE' ? currentReferenceSettings(copied) : copied;
       if (options.strategy === 'ENVELOPE') envelopeParameters(settings);
+      if (options.strategy === 'ATR_ENVELOPE') atrEnvelopeBacktestParameters(settings);
       const { start, end } = analysisWindow(settings);
       previousJob = await readValue<SavedJob>('jobs', options.strategy);
       job = {
@@ -262,7 +268,7 @@ async function executeWithLease(
         const activeJob = job;
         const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings)
           : job.strategy === 'CANDLE_BREAKOUT' ? candleBreakoutWarmup(job.settings)
-            : 200 * seconds;
+            : envelopeWarmupBars * seconds;
         try {
           let candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
           const dailySeconds = intervalSeconds('1d');
@@ -277,7 +283,11 @@ async function executeWithLease(
             : undefined;
           const newHighIntrabarCandles = job.strategy === 'NEW_HIGH' ? executionCandles : undefined;
           const referenceIntrabarCandles = job.strategy === 'REFERENCE' ? executionCandles : undefined;
-          const prepare = (volatilityIntrabarCandles?: Candle[], envelopeIntrabarCandles?: Candle[]) => prepareSymbolBlock(instrument.symbol, candles, activeJob.settings, activeJob.strategy, activeJob.blockStart, blockEnd, activeJob.waveStates[instrument.symbol], undefined, dailyCandles, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles, envelopeIntrabarCandles);
+          const prepare = (volatilityIntrabarCandles?: Candle[], envelopeIntrabarCandles?: Candle[]) => prepareSymbolBlock(
+            instrument.symbol, candles, activeJob.settings, activeJob.strategy, activeJob.blockStart, blockEnd,
+            activeJob.waveStates[instrument.symbol], undefined, dailyCandles, newHighIntrabarCandles, referenceIntrabarCandles,
+            volatilityIntrabarCandles, envelopeIntrabarCandles, activeJob.atrEnvelopeStates?.[instrument.symbol],
+          );
           let prepared = prepare();
           applyInstrumentEligibility(prepared, instrument);
           if (job.strategy === 'VOLATILITY' && job.settings.interval !== '15m') {
@@ -289,7 +299,7 @@ async function executeWithLease(
               applyInstrumentEligibility(prepared, instrument);
             }
           }
-          if (job.strategy === 'ENVELOPE' && job.settings.interval !== '15m') {
+          if (isEnvelopeStrategy(job.strategy) && job.settings.interval !== '15m') {
             const firstEntryTouch = prepared.bars.find(bar => envelopeEntryMayTouch(bar, activeJob.settings));
             const first = job.state.positions[instrument.symbol] ? activeJob.blockStart : firstEntryTouch?.candle.openTime;
             const lowerFrom = first === undefined ? undefined : envelopeCandleDataStart(activeJob.settings, first);
@@ -343,7 +353,10 @@ async function executeWithLease(
       const next = structuredClone(job.state);
       replayPortfolioBlock(next, documents, job.settings, job.blockStart, blockEnd, seconds);
       job.state = next;
-      for (const document of documents) if (document.waveState) job.waveStates[document.symbol] = document.waveState;
+      for (const document of documents) {
+        if (document.waveState) job.waveStates[document.symbol] = document.waveState;
+        if (document.atrEnvelopeState) (job.atrEnvelopeStates ??= {})[document.symbol] = document.atrEnvelopeState;
+      }
       job.blockStart = blockEnd;
       job.cursor = 0;
       job.phase = 'DATA';

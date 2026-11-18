@@ -8,6 +8,7 @@ import { EnvelopeWorkspace } from './components/EnvelopeWorkspace';
 import { ChartBrowser } from './components/ChartBrowser';
 import type { ApiContext } from './api';
 import type { Strategy } from './types';
+import { isEnvelopeStrategy } from './envelope';
 import { sendNativeMessage, subscribeNativeBack } from './nativeBridge';
 
 type Screen = { kind: 'MENU' } | { kind: 'CHARTS' } | { kind: 'STRATEGY'; strategy: Strategy };
@@ -77,7 +78,7 @@ export function BacktestNavigation({ context, email, onSignOut }: { context: Api
       // The destination is still the same strategy, not the menu; use history
       // state instead of relying only on the dialog remaining in the DOM.
       if (event.state?.screen === 'STRATEGY'
-        && (event.state.strategy === 'PULLBACK' || event.state.strategy === 'DISPARITY' || event.state.strategy === 'VOLATILITY' || event.state.strategy === 'ENVELOPE' || event.state.strategy === 'NEW_HIGH' || event.state.strategy === 'REFERENCE' || event.state.strategy === 'CANDLE_BREAKOUT')) {
+        && (isEnvelopeStrategy(event.state.strategy) || event.state.strategy === 'PULLBACK' || event.state.strategy === 'DISPARITY' || event.state.strategy === 'VOLATILITY' || event.state.strategy === 'NEW_HIGH' || event.state.strategy === 'REFERENCE' || event.state.strategy === 'CANDLE_BREAKOUT')) {
         if (screenRef.current.kind !== 'STRATEGY' || screenRef.current.strategy !== event.state.strategy) {
           setScreen({ kind: 'STRATEGY', strategy: event.state.strategy });
         }
@@ -119,7 +120,7 @@ export function BacktestNavigation({ context, email, onSignOut }: { context: Api
           onOpenChart={() => { window.history.pushState({ zetaautoApp: true, screen: 'CHARTS' }, ''); setScreen({ kind: 'CHARTS' }); }}
         />
       ) : screen.kind === 'CHARTS' ? <ChartBrowser /> : (
-        screen.strategy === 'ENVELOPE' ? <EnvelopeWorkspace context={context} /> : <StrategyBacktest
+        isEnvelopeStrategy(screen.strategy) ? <EnvelopeWorkspace key={screen.strategy} strategy={screen.strategy} context={context} /> : <StrategyBacktest
           strategy={screen.strategy}
           context={context}
         />

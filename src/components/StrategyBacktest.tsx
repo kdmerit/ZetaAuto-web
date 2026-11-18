@@ -35,7 +35,8 @@ import { chartTimestamp, mergeChartPages } from '../chartData';
 import { chartAtInterval, withChartExecutionTimes } from '../chartIntervals';
 import { serverSettingsSnapshot } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
-import { currentEnvelopeSettings, currentPullbackSettings, envelopeParameters, envelopePeriods, pullbackEnvelopeParameters } from '../envelope';
+import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvelopeSettings, currentPullbackSettings, envelopeParameters, envelopePeriods, isEnvelopeStrategy, pullbackEnvelopeParameters } from '../envelope';
+import { atrEnvelopeFields, defaultAtrEnvelopeInputs } from '../marketIndicators';
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
 import { EnvelopeSideRatioControl } from './EnvelopeSideRatioControl';
@@ -48,8 +49,21 @@ import { useAnalysisBusy } from '../analysisActivity';
 import { currentNewHighSettings, newHighBreakoutCandleMaxMultiplier, newHighBreakoutCandleMinMultiplier, newHighPeriod, newHighRiskAmount, newHighRules, newHighSlMultiplier, newHighTpMultiplier, newHighTrailingStopMultiplier } from '../newHigh';
 import { currentReferenceSettings, referenceRules, referenceTpPercent } from '../reference';
 
-const strategySettings = (strategy: Strategy, value: BacktestSettings): BacktestSettings => strategy === 'NEW_HIGH'
-  ? currentNewHighSettings(value) : strategy === 'REFERENCE' ? currentReferenceSettings(value) : strategy === 'ENVELOPE' ? currentEnvelopeSettings(value) : strategy === 'PULLBACK' ? currentPullbackSettings(value) : value;
+function strategySettings(strategy: Strategy, settings: BacktestSettings): BacktestSettings {
+  switch (strategy) {
+    case 'NEW_HIGH': return currentNewHighSettings(settings);
+    case 'REFERENCE': return currentReferenceSettings(settings);
+    case 'ENVELOPE': return currentEnvelopeSettings(settings);
+    case 'ATR_ENVELOPE': return currentAtrEnvelopeSettings(settings);
+    case 'PULLBACK': return currentPullbackSettings(settings);
+    default: return settings;
+  }
+}
+
+const strategyTitles: Record<Strategy, string> = {
+  NEW_HIGH: '신고가', CANDLE_BREAKOUT: '캔들돌파', REFERENCE: '기준봉', PULLBACK: '눌림목',
+  DISPARITY: '이격매매', ENVELOPE: '엔벨로프', ATR_ENVELOPE: 'ATR 엔벨로프', VOLATILITY: '변동성 돌파',
+};
 
 interface StrategyBacktestProps {
   strategy: Strategy;
@@ -68,10 +82,11 @@ function defaultStartDate(): string {
 }
 
 export function defaultSettings(strategy?: Strategy): BacktestSettings {
+  const envelope = isEnvelopeStrategy(strategy);
   return {
     mode: 'SINGLE',
     symbol: 'BTC',
-    interval: strategy === 'ENVELOPE' ? '1d' : '15m',
+    interval: envelope ? '1d' : '15m',
     startDate: defaultStartDate(),
     startTime: '00:00',
     endDate: '',
@@ -94,22 +109,23 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     volatilityMa10DistancePercent: '1',
     volatilityMa60Enabled: false,
     volatilityMa60BelowEnabled: false,
-    envelopeDeviationPercent: strategy === 'ENVELOPE' ? '3' : '0.5',
+    envelopeDeviationPercent: strategy === 'ATR_ENVELOPE' ? undefined : strategy === 'ENVELOPE' ? '3' : '0.5',
+    ...(strategy === 'ATR_ENVELOPE' ? { atrEnvelope: { ...defaultAtrEnvelopeInputs } } : {}),
     envelopeStatisticsInterval: strategy === 'ENVELOPE' ? '1d' : undefined,
-    envelopeMaPeriod: '20',
+    envelopeMaPeriod: strategy === 'ATR_ENVELOPE' ? undefined : '20',
     envelopeExitMode: 'OPPOSITE',
     envelopeMoveSlOnCenter: false,
     envelopeEntryMode: 'BAND_TOUCH',
-    envelopeMa20Enabled: strategy === 'ENVELOPE',
+    envelopeMa20Enabled: envelope,
     envelopeMa20BelowEnabled: false,
     envelopeCloseOnConfirmedBreakout: false,
     envelopeCloseOnCenterReturn: false,
     envelopeSideRatio50Enabled: false,
     envelopeStopLossPercent: strategy === 'ENVELOPE' ? '3' : undefined,
-    envelopeTrailingStopEnabled: strategy === 'ENVELOPE' ? false : undefined,
-    envelopeTrailingStopPercent: strategy === 'ENVELOPE' ? '3' : undefined,
+    envelopeTrailingStopEnabled: envelope ? false : undefined,
+    envelopeTrailingStopPercent: envelope ? '3' : undefined,
     envelopeCloseOnlyEntryEnabled: false,
-    envelopeHalfCandleEnabled: strategy === 'ENVELOPE',
+    envelopeHalfCandleEnabled: envelope,
     envelopeCandleFilterEnabled: false,
     newHighLookback: '20',
     newHighBreakoutCandleMinEnabled: false,
@@ -202,7 +218,7 @@ const reasonLabels: Record<string, string> = {
 function defaultRequest(settings: BacktestSettings, strategy: Strategy): BacktestRequestBody {
   // The optional AWS fallback still runs VOLATILITY v1. Do not silently send a
   // v2 request to that incompatible calculation. Old server histories stay readable.
-  if (strategy === 'VOLATILITY' || strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'PULLBACK' || strategy === 'REFERENCE' || strategy === 'CANDLE_BREAKOUT') throw new Error('이 전략은 이 기기에서 분석합니다.');
+  if (strategy !== 'DISPARITY') throw new Error('이 전략은 이 기기에서 분석합니다.');
   const body: BacktestRequestBody = {
     strategy,
     mode: settings.mode,
@@ -258,6 +274,8 @@ function restoredServerJob(entry: BacktestHistoryEntry): ServerJob {
 }
 
 export function StrategyBacktest({ strategy, context, embedded = false, forcedMode, preferredSettings }: StrategyBacktestProps) {
+  const envelopeStrategy = isEnvelopeStrategy(strategy);
+  const usesAtrEnvelope = strategy === 'ATR_ENVELOPE';
   const defaults = useMemo(() => strategySettings(strategy, strategy === 'PULLBACK' ? { ...defaultSettings(), envelopeDeviationPercent: undefined } : defaultSettings(strategy)), [strategy]);
   const [settings, setSettings] = useState<BacktestSettings>(() => {
     const value = { ...(preferredSettings ?? loadSettings(strategy, defaults)), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
@@ -289,6 +307,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
   const restoringHistoryRef = useRef(false);
   const anyAnalysisBusy = useAnalysisBusy();
   const leverageMaximum = strategy === 'ENVELOPE' ? settings.envelopeRisk?.maxLeverage ?? 100 : 100;
+  const atrInputs = settings.atrEnvelope ?? defaultAtrEnvelopeInputs;
 
   useEffect(() => {
     contextRef.current = context;
@@ -369,7 +388,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
         if (saved && requestId === resultRequestRef.current) { setResult(saved.result); analysisSettingsRef.current = { ...defaults, ...saved.settings }; }
         return;
       }
-      if (strategy === 'ENVELOPE' || strategy === 'NEW_HIGH' || strategy === 'REFERENCE' || strategy === 'CANDLE_BREAKOUT') return;
+      if (isEnvelopeStrategy(strategy) || strategy === 'NEW_HIGH' || strategy === 'REFERENCE' || strategy === 'CANDLE_BREAKOUT') return;
       const job = await getServerBacktest(contextRef.current, strategy);
       if (job && requestId === resultRequestRef.current) {
         setServerJob(job);
@@ -462,6 +481,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     if (strategy === 'DISPARITY' && (!/^(0\.[1-9]|[1-9](\.\d)?|10(\.0)?)$/.test(settings.minDisparityPercent))) throw new Error('MA60 이격률은 0.1~10.0%로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^([1-9]|[1-9]\d|100)$/.test(settings.roiClosePercent))) throw new Error('ROI 손실 청산은 1~100 정수로 입력해 주세요.');
     if (strategy === 'ENVELOPE') envelopeParameters(settings);
+    if (usesAtrEnvelope) atrEnvelopeBacktestParameters(settings);
     if (strategy === 'PULLBACK') pullbackEnvelopeParameters(settings);
     if (strategy === 'NEW_HIGH') {
       newHighPeriod(settings);
@@ -715,7 +735,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
   };
 
   const activeServer = serverJob && ['QUEUED', 'RUNNING'].includes(serverJob.status);
-  const title = strategy === 'NEW_HIGH' ? '신고가' : strategy === 'CANDLE_BREAKOUT' ? '캔들돌파' : strategy === 'REFERENCE' ? '기준봉' : strategy === 'PULLBACK' ? '눌림목' : strategy === 'DISPARITY' ? '이격매매' : strategy === 'ENVELOPE' ? '엔벨로프' : '변동성 돌파';
+  const title = strategyTitles[strategy];
   const resultTrades = result?.recentTrades ? [...result.recentTrades].reverse() : [];
   const currentHistorySymbol = historyScopeSymbol(settings);
   const historyLabel = settings.mode === 'ALL'
@@ -789,23 +809,28 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <strong>숏 포지션</strong>
                 <p>위 조건을 반대로 적용합니다. ROI 손실은 레버리지가 반영된 가격 기준입니다.</p>
               </div>
-            ) : strategy === 'ENVELOPE' ? (
+            ) : envelopeStrategy ? (
               <div className="condition-copy">
-                <p>중심선·밴드는 선택한 1h·4h·1d 주기의 봉 시작 전에 확정된 N개 종가 평균으로 계산하며, 봉 안에서는 밴드를 고정합니다.</p>
-                <p>상단 = 중심선 × (1 + 이격%/100), 하단 = 중심선 × (1 − 이격%/100)</p>
+                {usesAtrEnvelope ? <>
+                  <p>선택한 1h·4h·1d의 직전 완성봉까지 종합차트와 같은 방식으로 EMA와 ATR(와일더 평활)을 계산합니다. 다음 봉에서는 그 값을 고정합니다.</p>
+                  <p>중심선 = EMA · 상단 = EMA + ATR × N · 하단 = EMA − ATR × N</p>
+                </> : <>
+                  <p>중심선·밴드는 선택한 1h·4h·1d 주기의 봉 시작 전에 확정된 N개 종가 평균으로 계산하며, 봉 안에서는 밴드를 고정합니다.</p>
+                  <p>상단 = 중심선 × (1 + 이격%/100), 하단 = 중심선 × (1 − 이격%/100)</p>
+                </>}
                 <strong>롱 포지션</strong>
-                <p>1분 점검 시 현재가가 엔벨로프 하단 이하이면 매수하고, 매수 이후 상단 이상이면 현재가로 전량 청산합니다. SL은 체결가 × (1 − SL%/100)입니다.</p>
+                <p>1분 점검 시 현재가가 엔벨로프 하단 이하이면 매수하고, 매수 이후 상단 이상이면 현재가로 전량 청산합니다.{usesAtrEnvelope ? '' : ' SL은 체결가 × (1 − SL%/100)입니다.'}</p>
                 <strong>숏 포지션</strong>
-                <p>1분 점검 시 현재가가 엔벨로프 상단 이상이면 매도하고, 매도 이후 하단 이하이면 현재가로 전량 청산합니다. SL은 체결가 × (1 + SL%/100)입니다.</p>
+                <p>1분 점검 시 현재가가 엔벨로프 상단 이상이면 매도하고, 매도 이후 하단 이하이면 현재가로 전량 청산합니다.{usesAtrEnvelope ? '' : ' SL은 체결가 × (1 + SL%/100)입니다.'}</p>
                 <p>‘종가에서만 매수’를 켜면 장중 밴드 터치는 무시하고, 롱은 기준 캔들 종가가 하단 이하·숏은 상단 이상으로 확정될 때 해당 캔들 종가에 진입합니다.</p>
                 <p>MA20·선택한 캔들 절반 엔벨·매수금지 캔들 필터는 매수 점검 시점까지의 고가·저가와 현재가로 판단합니다. MA20은 직전 완료 19봉 종가와 현재가의 평균입니다. 이후 확정될 일봉 고저가·종가는 앞선 매수에 사용하지 않습니다. MA20에 닿거나 걸친 캔들은 제외하며, ‘캔들 절반 엔벨 이내’를 켜면 1d 고저 중간값이 롱은 하단 이하·숏은 상단 이상인 캔들을 제외합니다.</p>
-                <p>1분봉을 시간순으로 읽어 각 분 시작 가격으로 점검합니다. 현재가가 반대 밴드에 도달하거나, 매수한 15분봉 다음 봉부터 현재 15분봉의 관측된 고가(롱)·저가(숏)가 반대 밴드에 닿으면 점검 시점 현재가에 시장가 슬리피지를 반영해 청산합니다. 과거 터치 가격으로 소급 체결하지 않습니다. SL·트레일링 스탑은 1분봉 내부의 두 가격 순서 중 보수적인 결과를 적용합니다.</p>
-                <p>‘중심선 터치후 이탈시 매도’를 켜면 매수 후 1분 점검 가격으로 중심선 도달을 기록하고, 이후 점검에서 롱은 하단·숏은 상단에 되돌아오면 전량 시장가 청산합니다. 점검 사이에 생겼다가 사라진 중심선 꼬리는 기록하지 않습니다. 중심선과 밴드는 매 봉 갱신하며 반대 밴드 청산과 최초 SL도 함께 적용합니다.</p>
+                <p>1분봉을 시간순으로 읽어 각 분 시작 가격으로 점검합니다. 현재가가 반대 밴드에 도달하거나, 매수한 15분봉 다음 봉부터 현재 15분봉의 관측된 고가(롱)·저가(숏)가 반대 밴드에 닿으면 점검 시점 현재가에 시장가 슬리피지를 반영해 청산합니다. 과거 터치 가격으로 소급 체결하지 않습니다. {usesAtrEnvelope ? '선택한 트레일링 스탑' : 'SL·트레일링 스탑'}은 1분봉 내부의 두 가격 순서 중 보수적인 결과를 적용합니다.</p>
+                <p>‘중심선 터치후 이탈시 매도’를 켜면 매수 후 1분 점검 가격으로 중심선 도달을 기록하고, 이후 점검에서 롱은 하단·숏은 상단에 되돌아오면 전량 시장가 청산합니다. 점검 사이에 생겼다가 사라진 중심선 꼬리는 기록하지 않습니다. 중심선과 밴드는 매 봉 갱신하며 {usesAtrEnvelope ? '반대 밴드 청산도' : '반대 밴드 청산과 최초 SL도'} 함께 적용합니다.</p>
                 <p>‘롱/숏 비율 50%’를 켜면 매수 시점의 총 평가자산 대비 롱·숏 평가자산을 각각 최대 50%로 제한합니다. 평가자산은 증거금에 평가손익과 수수료를 반영한 금액이며, 계약 명목금액은 사용하지 않습니다. 새 매수를 포함해 한도를 넘으면 그 주문 전체를 건너뛰고, 기존 포지션을 강제로 줄이지는 않습니다.</p>
                 <p>한 종목은 봉당 한 번만 진입하고 봉 시작에 보유했다면 같은 봉에 재진입하지 않습니다. 전체종목은 종목명 순서·봉 시작 가용자금 한도로 배분하며 미래 청산 자금을 재사용하지 않습니다. 기간 말 미청산분은 평가액에 포함합니다.</p>
-                <p>개별통계·전체통계는 선택한 1h·4h·1d 주기에서 방향당 최대 1,000조합, 롱+숏 최대 2,000조합을 비교합니다. 입력 배율과 MA20 필터를 고정해 MA3·MA5·MA20·MA60·MA120과 이격 0.1~20.0%(0.1 단위)를 비교합니다. 매매횟수·수익률·최소수익비 필터를 통과한 결과를 방향별로 선정합니다.</p>
+                {!usesAtrEnvelope ? <><p>개별통계·전체통계는 선택한 1h·4h·1d 주기에서 방향당 최대 1,000조합, 롱+숏 최대 2,000조합을 비교합니다. 입력 배율과 MA20 필터를 고정해 MA3·MA5·MA20·MA60·MA120과 이격 0.1~20.0%(0.1 단위)를 비교합니다. 매매횟수·수익률·최소수익비 필터를 통과한 결과를 방향별로 선정합니다.</p>
                 <p>전체통계는 슬리피지 필터 없이 모든 활성 USDT 종목에서 조건을 충족한 방향별 세팅을 저장합니다. 가상매매는 선정한 중심선·이격을 고정하고 별도로 입력한 기간·초기자금·베팅액·레버리지로 검증합니다. 검증 기간으로 다시 최적화하지 않습니다. 선정 기간과 겹치거나 그 이전을 검증하면 화면에 표시하며 실제 미래 성과를 보장하지 않습니다.</p>
-                {settings.envelopeRisk ? <p className="notice">통계에서 불러온 세팅은 현재 공개 위험한도에 따른 격리 LIQ 예상치를 사용합니다. 시가 갭이 SL과 LIQ를 모두 넘으면 남은 포지션 증거금을 소진하는 추정 청산으로 처리합니다. 실제 계좌·과거 거래소 청산가와 다를 수 있습니다.</p> : null}
+                {settings.envelopeRisk ? <p className="notice">통계에서 불러온 세팅은 현재 공개 위험한도에 따른 격리 LIQ 예상치를 사용합니다. 시가 갭이 SL과 LIQ를 모두 넘으면 남은 포지션 증거금을 소진하는 추정 청산으로 처리합니다. 실제 계좌·과거 거래소 청산가와 다를 수 있습니다.</p> : null}</> : null}
               </div>
             ) : (
               <div className="condition-copy">
@@ -842,7 +867,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               </button>
             ))}
           </div></> : null}
-          <p className="muted small">저장된 캔들을 우선 사용하고 없는 구간만 조회합니다. {strategy === 'ENVELOPE' && settings.mode === 'SINGLE' ? '엔벨로프 개별 종목은 슬리피지 필터 없이 분석합니다.' : '전체 종목은 현재 슬리피지 조건을 통과한 종목을 하나의 가상 계좌에서 분석합니다.'}</p>
+          <p className="muted small">저장된 캔들을 우선 사용하고 없는 구간만 조회합니다. {envelopeStrategy && settings.mode === 'SINGLE' ? '엔벨로프 개별 종목은 슬리피지 필터 없이 분석합니다.' : '전체 종목은 현재 슬리피지 조건을 통과한 종목을 하나의 가상 계좌에서 분석합니다.'}</p>
           {settings.mode === 'SINGLE' ? (
             <label className="field-label">종목명
               <span className="suffix-field"><input value={baseSymbol(settings.symbol)} onChange={(event) => update('symbol', baseSymbol(event.target.value))} placeholder="BTC" /><b>USDT</b></span>
@@ -854,9 +879,9 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             {(['BOTH', 'LONG', 'SHORT'] as const).map((side) => <button key={side} type="button" className={settings.side === side ? 'selected' : ''} onClick={() => update('side', side)}>{side === 'BOTH' ? '롱 + 숏' : side === 'LONG' ? '롱' : '숏'}</button>)}
           </div>
 
-          <h2>{strategy === 'ENVELOPE' ? `중심선 · 매매 기준 ${settings.interval.toUpperCase()}` : '캔들 주기'}</h2>
+          <h2>{envelopeStrategy ? `중심선 · 매매 기준 ${settings.interval.toUpperCase()}` : '캔들 주기'}</h2>
           <div className="segmented interval-selector">
-            {(strategy === 'NEW_HIGH' || strategy === 'REFERENCE' || strategy === 'ENVELOPE' ? ['1h', '4h', '1d'] as const : ['15m', '1h', '4h', '1d'] as const).map((interval) => <button key={interval} type="button" className={settings.interval === interval ? 'selected' : ''} onClick={() => update('interval', interval)}>{interval.toUpperCase()}</button>)}
+            {(strategy === 'NEW_HIGH' || strategy === 'REFERENCE' || envelopeStrategy ? ['1h', '4h', '1d'] as const : ['15m', '1h', '4h', '1d'] as const).map((interval) => <button key={interval} type="button" className={settings.interval === interval ? 'selected' : ''} onClick={() => update('interval', interval)}>{interval.toUpperCase()}</button>)}
           </div>
 
           <h2>분석 기간 (한국시간)</h2>
@@ -917,7 +942,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <label className="checkbox-row"><input type="checkbox" checked={settings.ma20HalfCloseEnabled} onChange={(event) => update('ma20HalfCloseEnabled', event.target.checked)} /><span>캔들 절반 MA20 청산</span></label>
               <label className="field-label">ROI 손실 청산 (%)<input inputMode="numeric" value={settings.roiClosePercent} onChange={(event) => update('roiClosePercent', event.target.value.replace(/\D/g, '').slice(0, 3))} /><small>레버리지 적용 ROI · 1~100</small></label>
             </>
-          ) : strategy === 'ENVELOPE' ? (
+          ) : envelopeStrategy ? (
             <>
               <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
               <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
@@ -925,11 +950,23 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnlyEntryEnabled === true} onChange={event => update('envelopeCloseOnlyEntryEnabled', event.target.checked)} /><span>종가에서만 매수</span></label>
               <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />
               <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
-              <h2>엔벨로프 중심선 봉수</h2>
-              <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
-              <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '3'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용</small></label>
-              <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
-              <EnvelopeTrailingStopControl enabled={settings.envelopeTrailingStopEnabled === true} value={settings.envelopeTrailingStopPercent ?? '3'} onToggle={enabled => update('envelopeTrailingStopEnabled', enabled)} onChange={value => update('envelopeTrailingStopPercent', value)} />
+              {usesAtrEnvelope ? <>
+                <h2>ATR 엔벨로프 설정</h2>
+                <div className="field-grid atr-envelope-fields" role="group" aria-label="ATR 엔벨로프 설정">
+                  {atrEnvelopeFields.map(({ key, label, name, max, step }) => <label className="field-label" key={key}>
+                    {key === 'atrMultiplier' ? '× N' : label}
+                    <input aria-label={name} type="number" inputMode={step === 1 ? 'numeric' : 'decimal'} min="0" max={max} step={step}
+                      value={atrInputs[key]} onChange={event => update('atrEnvelope', { ...atrInputs, [key]: event.target.value })} />
+                  </label>)}
+                </div>
+                <p className="muted small">EMA·ATR 0~120 정수 · 배수 0.0~20.0 (소수 한 자리). 하나라도 0이면 밴드가 꺼집니다.</p>
+              </> : <>
+                <h2>엔벨로프 중심선 봉수</h2>
+                <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
+                <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '3'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용</small></label>
+                <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
+              </>}
+              <EnvelopeTrailingStopControl enabled={settings.envelopeTrailingStopEnabled === true} fixedStop={!usesAtrEnvelope} value={settings.envelopeTrailingStopPercent ?? '3'} onToggle={enabled => update('envelopeTrailingStopEnabled', enabled)} onChange={value => update('envelopeTrailingStopPercent', value)} />
             </>
           ) : strategy === 'VOLATILITY' ? (
             <>
@@ -947,7 +984,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             <p className="muted small">롱은 거래량·몸통이 직전봉의 5배 이상인 양봉 기준봉에서 직전봉·기준봉 저가 중 더 낮은 SL라인과 기준봉 고가의 중간 매수라인을 사용합니다. MA10 조건을 켜면 기준봉 저가&lt;MA10·중간값≥MA10·종가&gt;MA10을 모두 확인하고, 숏은 반대로 적용합니다. 기준봉 고가가 15분봉에서 확정되기 전의 라인 터치는 무시하며, 확정 후 매수라인을 하락 재터치할 때만 매수합니다. TP는 SL라인과 기준봉 극값 사이 간격의 입력 비율이며 이후 캔들에서는 매수하지 않습니다.</p>
           ) : strategy === 'VOLATILITY' ? (
             <p className="muted small">롱은 아랫꼬리&gt;몸통인 양봉 중 윗꼬리가 전체 길이의 10% 이하인 캔들의 종가에 진입하고, 초기 SL은 해당 캔들 저가입니다. MA10 필터를 켜면 입력한 이격률만큼 종가가 MA10 아래인 경우만 진입합니다. MA60 필터는 선택한 방향으로만 허용합니다. 이후 최초 매수가보다 낮은 종가는 홀딩하며, 높은 종가가 나왔을 때 몸통이 직전보다 큰 양봉이면 SL을 해당 봉 저가로 올리고, 그렇지 않으면 종가에 청산합니다. 숏은 이 조건을 반대로 적용합니다.</p>
-          ) : strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' && strategy !== 'PULLBACK' ? (
+          ) : !envelopeStrategy && strategy !== 'NEW_HIGH' && strategy !== 'PULLBACK' ? (
             <>
               <label className="checkbox-row"><input type="checkbox" checked={settings.partialTpEnabled} onChange={(event) => update('partialTpEnabled', event.target.checked)} /><span>부분 TP 50%</span></label>
               <p className="muted small">매수가와 신호 시점 MA60의 중간에서 50% 청산하고 SL을 최초 매수가로 옮깁니다.</p>
@@ -961,7 +998,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           </div>
           {!running && !statisticsRunning && !activeServer && localJob?.status === 'PAUSED' && canResumeLocalJob(localJob) ? <button className="outline-button" type="button" onClick={() => run(true)}>분석 이어하기</button> : null}
           {localJob && localJob.status !== 'COMPLETED' ? <p className="muted small">화면을 끄거나 탭을 닫으면 분석이 정지될 수 있습니다. 다시 열어 ‘분석 이어하기’를 누르면 저장된 지점부터 계속합니다.</p> : null}
-          {error && strategy !== 'VOLATILITY' && strategy !== 'ENVELOPE' && strategy !== 'NEW_HIGH' && strategy !== 'PULLBACK' && strategy !== 'REFERENCE' && strategy !== 'CANDLE_BREAKOUT' && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
+          {error && strategy === 'DISPARITY' && !running && !activeServer ? <button className="outline-button" type="button" onClick={() => void runServer('AWS 분석 서버에서 분석합니다.').catch(failure => setError(failure instanceof Error ? failure.message : '분석 요청에 실패했습니다.'))}>서버에서 분석</button> : null}
           <button
             className="outline-button history-toggle"
             type="button"
@@ -983,7 +1020,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           {notice && notice !== error ? <p className="notice">{notice}</p> : null}
           {error ? <p className="error" role="alert">{error}</p> : null}
           {running || localJob?.status === 'PAUSED' ? <ProgressBar completed={progress.completed} total={progress.total || Math.max(estimateBars(settings), 1)} label={progress.phase} /> : null}
-          {localJob ? <p className="muted small">분석 대상 {localJob.universeCount.toLocaleString()}종목{strategy === 'ENVELOPE' && localJob.settings.mode === 'SINGLE' && localJob.version === engineVersionFor(strategy) ? ' · 슬리피지 검사 안 함' : ` · 슬리피지 제외 ${localJob.excludedCount.toLocaleString()}종목`}{localJob.failedSymbols.length ? ` · 캔들 누락 제외 ${localJob.failedSymbols.length}종목` : ''}{localJob.status === 'COMPLETED' ? ' · 완료' : localJob.status === 'PAUSED' ? ' · 일시정지' : ''}</p> : null}
+          {localJob ? <p className="muted small">분석 대상 {localJob.universeCount.toLocaleString()}종목{envelopeStrategy && localJob.settings.mode === 'SINGLE' && localJob.version === engineVersionFor(strategy) ? ' · 슬리피지 검사 안 함' : ` · 슬리피지 제외 ${localJob.excludedCount.toLocaleString()}종목`}{localJob.failedSymbols.length ? ` · 캔들 누락 제외 ${localJob.failedSymbols.length}종목` : ''}{localJob.status === 'COMPLETED' ? ' · 완료' : localJob.status === 'PAUSED' ? ' · 일시정지' : ''}</p> : null}
           {localJob?.settings.mode === 'ALL' && localJob.universeCheckedAt ? <p className="muted small">전체종목 필터: {new Date(localJob.universeCheckedAt).toLocaleString('ko-KR')} 검사 · 7일 공통 재사용</p> : null}
           {activeServer ? <ProgressBar completed={serverJob.completedBars} total={Math.max(serverJob.totalBars, 1)} label={`${serverJob.phase === 'UNIVERSE' ? '종목 확인' : serverJob.phase === 'DATA' ? '캔들 조회' : '전략 계산'} · ${serverJob.status === 'QUEUED' ? '대기 중' : '분석 중'}`} /> : null}
         </section>

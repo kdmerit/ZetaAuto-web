@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import type { Strategy } from '../types';
 
-type MenuItemId = 'CHART' | Strategy;
+type MenuItemId = 'CHART' | Exclude<Strategy, 'PULLBACK'>;
 
 interface MenuItem {
   id: MenuItemId;
@@ -16,7 +16,7 @@ const menuItems: MenuItem[] = [
   { id: 'CHART', title: '종합차트' },
   { id: 'NEW_HIGH', title: '신고가 백테스트', strategy: 'NEW_HIGH' },
   { id: 'CANDLE_BREAKOUT', title: '캔들돌파 백테스트', strategy: 'CANDLE_BREAKOUT' },
-  { id: 'PULLBACK', title: '눌림목 백테스트', strategy: 'PULLBACK' },
+  { id: 'ATR_ENVELOPE', title: 'ATR 엔벨로프 백테스트', strategy: 'ATR_ENVELOPE' },
   { id: 'DISPARITY', title: '이격매매 백테스트', strategy: 'DISPARITY' },
   { id: 'VOLATILITY', title: '변동성 돌파 백테스트', strategy: 'VOLATILITY' },
   { id: 'REFERENCE', title: '기준봉 백테스트', strategy: 'REFERENCE' },
@@ -31,7 +31,8 @@ function loadMenuOrder(): MenuItemId[] {
   try {
     const saved = JSON.parse(window.localStorage.getItem(backtestMenuOrderStorageKey) ?? 'null') as unknown;
     if (!Array.isArray(saved)) return defaultOrder;
-    const order = saved.filter((value): value is MenuItemId => typeof value === 'string' && menuItemById.has(value as MenuItemId));
+    const order = saved.map(value => value === 'PULLBACK' ? 'ATR_ENVELOPE' : value)
+      .filter((value): value is MenuItemId => typeof value === 'string' && menuItemById.has(value as MenuItemId));
     return defaultOrder.every(id => order.includes(id)) && order.length === defaultOrder.length ? order : defaultOrder;
   } catch {
     return defaultOrder;

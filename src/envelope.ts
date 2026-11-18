@@ -1,5 +1,6 @@
 /** Frozen, prior-completed SMA bands: the current candle never defines its own orders. */
-import type { BacktestInterval, BacktestSettings, Candle, ChartData, EnvelopeBand, EnvelopeExitMode } from './types';
+import { atrEnvelopeParameters, defaultAtrEnvelopeInputs } from './marketIndicators';
+import type { AtrEnvelopeParameters, BacktestInterval, BacktestSettings, Candle, ChartData, EnvelopeBand, EnvelopeExitMode, Strategy } from './types';
 
 export const envelopePeriod = 20;
 export const envelopePeriods = [3, 5, 20, 60, 120];
@@ -7,6 +8,9 @@ export const legacyEnvelopePeriods = [5, 10, 20, 40, 60, 80, 100, 120];
 export const envelopeModelVersion = '2.10.97';
 // All new envelope jobs share the causal minute execution model.
 export const envelopeLocalJobVersion = envelopeModelVersion;
+export const envelopeWarmupBars = 200;
+export const isEnvelopeStrategy = (strategy: Strategy | undefined): strategy is 'ENVELOPE' | 'ATR_ENVELOPE' =>
+  strategy === 'ENVELOPE' || strategy === 'ATR_ENVELOPE';
 export const envelopeExitModes: EnvelopeExitMode[] = ['MA20', 'CENTER', 'OPPOSITE', 'HALF'];
 export const envelopeExitLabels: Record<EnvelopeExitMode, string> = {
   CENTER: '중심선 전량 청산', OPPOSITE: '반대 밴드 전량 청산', HALF: '중심선 50% · 반대 밴드 나머지', MA20: 'MA20 이탈 종가 청산',
@@ -52,6 +56,17 @@ export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSet
     envelopeMa20BelowEnabled: false,
     envelopeCloseOnConfirmedBreakout: false,
     envelopeEntryMode: 'BAND_TOUCH', envelopeExecutionModel: 'MINUTE_POLL', envelopeExitMode: 'OPPOSITE', envelopeMoveSlOnCenter: false, envelopeRisk: undefined };
+}
+
+export function currentAtrEnvelopeSettings(settings: BacktestSettings): BacktestSettings {
+  const { envelopeMaPeriod: _sma, envelopeDeviationPercent: _percent, envelopeStopLossPercent: _stop,
+    envelopeStatisticsInterval: _statistics, ...shared } = currentEnvelopeSettings(settings);
+  return { ...shared, atrEnvelope: { ...defaultAtrEnvelopeInputs, ...settings.atrEnvelope } };
+}
+
+export function atrEnvelopeBacktestParameters(settings: BacktestSettings): AtrEnvelopeParameters {
+  if (settings.envelopeTrailingStopEnabled === true) envelopeTrailingStopPercent(settings);
+  return atrEnvelopeParameters(settings.atrEnvelope ?? defaultAtrEnvelopeInputs);
 }
 
 export function envelopeMa20FilterLabel(settings: Pick<BacktestSettings, 'envelopeMa20Enabled' | 'envelopeMa20BelowEnabled'>): string {
