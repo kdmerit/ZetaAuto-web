@@ -45,7 +45,7 @@ describe('archived completed-candle MA20 envelope entry filter', () => {
   });
 });
 
-describe('archived daily entry-band half-candle envelope entry filter', () => {
+describe('optional archived daily entry-band half-candle envelope entry filter', () => {
   it.each([
     { side: 'LONG' as const, candle: { open: 100, high: 101, low: 97, close: 100 }, expected: 0 },
     { side: 'SHORT' as const, candle: { open: 100, high: 103, low: 99, close: 100 }, expected: 0 },
@@ -56,7 +56,7 @@ describe('archived daily entry-band half-candle envelope entry filter', () => {
     { side: 'LONG' as const, candle: { open: 100, high: 103, low: 99, close: 100 }, expected: 1 },
     { side: 'SHORT' as const, candle: { open: 100, high: 101, low: 97, close: 100 }, expected: 1 },
   ])('applies the midpoint boundary for $side only on 1d', ({ side, candle, expected }) => {
-    const settings = { ...base, interval: '1d' as const, side };
+    const settings = { ...base, interval: '1d' as const, side, envelopeHalfCandleEnabled: true };
     const document: PreparedSymbol = { symbol: 'BTCUSDT', bars: [{ candle: { openTime: at, closeTime: at + 86400,
       ...candle, volume: 1 }, signal: null, ma20: null, ma60Exit: null,
       envelope: { center: 100, lower: 99, upper: 101, long: side === 'LONG', short: side === 'SHORT' } }] };
@@ -64,6 +64,18 @@ describe('archived daily entry-band half-candle envelope entry filter', () => {
     expect(envelopeEntryMayTouch(document.bars[0]!, settings)).toBe(expected === 1);
     replayPortfolioBlock(state, [document], settings, at, at + 86400, 86400);
     expect(state.entries).toBe(expected);
+  });
+
+  it.each(['LONG', 'SHORT'] as const)('allows the %s entry when the option is disabled', side => {
+    const long = side === 'LONG';
+    const settings = { ...base, interval: '1d' as const, side, envelopeHalfCandleEnabled: false };
+    const document: PreparedSymbol = { symbol: 'BTCUSDT', bars: [{ candle: { openTime: at, closeTime: at + 86400,
+      open: 100, high: long ? 101 : 103, low: long ? 97 : 99, close: 100, volume: 1 }, signal: null, ma20: null, ma60Exit: null,
+      envelope: { center: 100, lower: 99, upper: 101, long, short: !long } }] };
+    const state = initialPortfolio(1000);
+    expect(envelopeEntryMayTouch(document.bars[0]!, settings)).toBe(true);
+    replayPortfolioBlock(state, [document], settings, at, at + 86400, 86400);
+    expect(state.entries).toBe(1);
   });
 
   it.each([
@@ -89,7 +101,7 @@ describe('archived daily entry-band half-candle envelope entry filter', () => {
     { side: 'SHORT' as const, targetFirst: true },
     { side: 'SHORT' as const, targetFirst: false },
   ])('preserves 15m exit order after an allowed daily $side entry (targetFirst=$targetFirst)', ({ side, targetFirst }) => {
-    const settings = { ...base, interval: '1d' as const, side, envelopeDeviationPercent: '3' };
+    const settings = { ...base, interval: '1d' as const, side, envelopeDeviationPercent: '3', envelopeHalfCandleEnabled: true };
     const source = [
       [100, 100, 97, 97],
       targetFirst ? [97, 104, 97, 104] : [97, 97, 93, 93],

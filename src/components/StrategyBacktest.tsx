@@ -39,6 +39,7 @@ import { currentEnvelopeSettings, currentPullbackSettings, envelopeParameters, e
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
 import { EnvelopeSideRatioControl } from './EnvelopeSideRatioControl';
+import { EnvelopeHalfCandleControl } from './EnvelopeHalfCandleControl';
 import { EnvelopeCandleFilterControl } from './EnvelopeCandleFilterControl';
 import { EnvelopeStopLossControl, EnvelopeTrailingStopControl } from './EnvelopeStopLossControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
@@ -107,6 +108,7 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     envelopeStopLossPercent: strategy === 'ENVELOPE' ? '3' : undefined,
     envelopeTrailingStopEnabled: strategy === 'ENVELOPE' ? false : undefined,
     envelopeTrailingStopPercent: strategy === 'ENVELOPE' ? '3' : undefined,
+    envelopeHalfCandleEnabled: strategy === 'ENVELOPE',
     envelopeCandleFilterEnabled: false,
     newHighLookback: '20',
     newHighBreakoutCandleMinEnabled: false,
@@ -794,7 +796,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>1분 점검 시 현재가가 엔벨로프 하단 이하이면 매수하고, 매수 이후 상단 이상이면 현재가로 전량 청산합니다. SL은 체결가 × (1 − SL%/100)입니다.</p>
                 <strong>숏 포지션</strong>
                 <p>1분 점검 시 현재가가 엔벨로프 상단 이상이면 매도하고, 매도 이후 하단 이하이면 현재가로 전량 청산합니다. SL은 체결가 × (1 + SL%/100)입니다.</p>
-                <p>MA20·캔들 절반·매수금지 캔들 필터는 매수 점검 시점까지의 고가·저가와 현재가로 판단합니다. MA20은 직전 완료 19봉 종가와 현재가의 평균입니다. 이후 확정될 일봉 고저가·종가는 앞선 매수에 사용하지 않습니다. MA20에 닿거나 걸친 캔들은 제외하며, 1d 고저 중간값이 롱은 하단 이하·숏은 상단 이상이면 제외합니다.</p>
+                <p>MA20·선택한 캔들 절반 엔벨·매수금지 캔들 필터는 매수 점검 시점까지의 고가·저가와 현재가로 판단합니다. MA20은 직전 완료 19봉 종가와 현재가의 평균입니다. 이후 확정될 일봉 고저가·종가는 앞선 매수에 사용하지 않습니다. MA20에 닿거나 걸친 캔들은 제외하며, ‘캔들 절반 엔벨 이내’를 켜면 1d 고저 중간값이 롱은 하단 이하·숏은 상단 이상인 캔들을 제외합니다.</p>
                 <p>1분봉을 시간순으로 읽어 각 분 시작 가격으로 점검합니다. 현재가가 반대 밴드에 도달하거나, 매수한 15분봉 다음 봉부터 현재 15분봉의 관측된 고가(롱)·저가(숏)가 반대 밴드에 닿으면 점검 시점 현재가에 시장가 슬리피지를 반영해 청산합니다. 과거 터치 가격으로 소급 체결하지 않습니다. SL·트레일링 스탑은 1분봉 내부의 두 가격 순서 중 보수적인 결과를 적용합니다.</p>
                 <p>‘중심선 터치후 이탈시 매도’를 켜면 매수 후 1분 점검 가격으로 중심선 도달을 기록하고, 이후 점검에서 롱은 하단·숏은 상단에 되돌아오면 전량 시장가 청산합니다. 점검 사이에 생겼다가 사라진 중심선 꼬리는 기록하지 않습니다. 중심선과 밴드는 매 봉 갱신하며 반대 밴드 청산과 최초 SL도 함께 적용합니다.</p>
                 <p>‘롱/숏 비율 50%’를 켜면 매수 시점의 총 평가자산 대비 롱·숏 평가자산을 각각 최대 50%로 제한합니다. 평가자산은 증거금에 평가손익과 수수료를 반영한 금액이며, 계약 명목금액은 사용하지 않습니다. 새 매수를 포함해 한도를 넘으면 그 주문 전체를 건너뛰고, 기존 포지션을 강제로 줄이지는 않습니다.</p>
@@ -918,6 +920,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
               <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
               <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
+              <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />
               <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
               <h2>엔벨로프 중심선 봉수</h2>
               <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>

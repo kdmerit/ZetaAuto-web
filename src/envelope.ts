@@ -44,6 +44,7 @@ export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSet
     envelopeStopLossPercent: settings.envelopeStopLossPercent ?? '3',
     envelopeTrailingStopEnabled: settings.envelopeTrailingStopEnabled === true,
     envelopeTrailingStopPercent: settings.envelopeTrailingStopPercent ?? '3',
+    envelopeHalfCandleEnabled: settings.envelopeHalfCandleEnabled !== false,
     envelopeCandleFilterEnabled: settings.envelopeCandleFilterEnabled === true,
     // Retain these legacy fields for archived results, but never enable the
     // removed controls for a new envelope analysis.
@@ -115,7 +116,7 @@ export function bandFor(center: number, percent: number): EnvelopeBand {
 }
 
 /**
- * On daily envelope entries, reject a candle with at least
+ * When enabled for daily envelope entries, reject a candle with at least
  * half of its full range beyond the entry band.  The midpoint is used so
  * equality is also rejected; lower-timeframe envelope rules are unchanged.
  */

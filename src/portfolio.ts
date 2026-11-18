@@ -690,7 +690,7 @@ function envelopeEntryDefinitions(bar: PreparedBar, settings: BacktestSettings,
       || !(side === 'LONG' ? candle.low > bar.ma20 : candle.high < bar.ma20))) return [];
     if (parameters.envelopeMa20BelowEnabled === true && (bar.ma20 == null || !Number.isFinite(bar.ma20)
       || !(side === 'LONG' ? candle.high < bar.ma20 : candle.low > bar.ma20))) return [];
-    if (!envelopeHalfCandleAllowsEntry(candle, band, side, parameters.interval)) return [];
+    if (parameters.envelopeHalfCandleEnabled === true && !envelopeHalfCandleAllowsEntry(candle, band, side, parameters.interval)) return [];
     return [{ side, band, parameters, price: side === 'LONG' ? band.lower : band.upper }];
   });
 }
@@ -761,7 +761,7 @@ function minuteEnvelopeAllowsEntry(definition: EnvelopeEntryDefinition, bar: Pre
   const candle = observation.candle;
   const ma20 = bar.envelopeMa20PreviousSum == null ? null : (bar.envelopeMa20PreviousSum + candle.close) / 20;
   if (parameters.envelopeMa20Enabled && (ma20 === null || !(side === 'LONG' ? candle.low > ma20 : candle.high < ma20))) return false;
-  if (!envelopeHalfCandleAllowsEntry(candle, band, side, parameters.interval)) return false;
+  if (parameters.envelopeHalfCandleEnabled === true && !envelopeHalfCandleAllowsEntry(candle, band, side, parameters.interval)) return false;
   return parameters.envelopeCandleFilterEnabled !== true || envelopeCandleAllowsEntry(observation.context, side, [candle.close]);
 }
 

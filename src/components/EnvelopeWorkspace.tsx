@@ -16,6 +16,7 @@ import { EnvelopeResultControls } from './EnvelopeResultControls';
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
 import { EnvelopeSideRatioControl } from './EnvelopeSideRatioControl';
+import { EnvelopeHalfCandleControl } from './EnvelopeHalfCandleControl';
 import { EnvelopeCandleFilterControl } from './EnvelopeCandleFilterControl';
 import { EnvelopeStopLossControl, EnvelopeTrailingStopControl } from './EnvelopeStopLossControl';
 
@@ -46,6 +47,7 @@ function SearchFields({ settings, onChange, disabled, single }: { settings: Back
     <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
     <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
     <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
+    <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />
     <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
     <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
     <EnvelopeTrailingStopControl enabled={settings.envelopeTrailingStopEnabled === true} value={settings.envelopeTrailingStopPercent ?? '3'} onToggle={enabled => update('envelopeTrailingStopEnabled', enabled)} onChange={value => update('envelopeTrailingStopPercent', value)} />
@@ -79,6 +81,7 @@ export function VirtualEvaluationFields({ settings, onChange, disabled }: { sett
     <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
     <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
     <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
+    <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />
     <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
     <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
     <EnvelopeTrailingStopControl enabled={settings.envelopeTrailingStopEnabled === true} value={settings.envelopeTrailingStopPercent ?? '3'} onToggle={enabled => update('envelopeTrailingStopEnabled', enabled)} onChange={value => update('envelopeTrailingStopPercent', value)} />
@@ -171,7 +174,7 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
     {historyOpen ? <div className="history-list">{history.length ? history.map(item => <button className="history-card" type="button" key={item.id} onClick={() => { void openHistory(item.id); }} disabled={loading}><strong>{item.settings.startDate} ~ {item.settings.endDate} · {item.kind === 'ALL_STATS' ? `${item.optimized}/${item.symbols}종목` : `${num(item.returnPercent)}%`}</strong>{item.longOptimized !== undefined ? <span>롱 {item.longOptimized}종목 · 숏 {item.shortOptimized ?? 0}종목 최적 세팅</span> : null}<small>{statisticsIntervalLabel(item.settings)} · 레버리지 {item.settings.leverage}배 · {isCurrentEnvelopeStatisticsVersion(item.version) ? `밴드 매수·반대 밴드 청산·SL ${item.settings.envelopeStopLossPercent ?? '3'}%` : '이전 매매 조건'} · {new Date(item.at).toLocaleString('ko-KR')}</small></button>) : <p className="muted">{label} 이력이 없습니다.</p>}</div> : null}
     {error && error !== view?.message ? <p className="error" role="alert">{error}</p> : null}
     {view ? <><h2>{label} {view.status === 'COMPLETED' ? '결과' : view.status === 'PAUSED' ? '일시정지' : '진행 중'}</h2><p className="muted small">{view.settings.startDate} {view.settings.startTime} ~ {view.settings.endDate} {view.settings.endTime} (한국시간)</p>
-      <p className="notice small">{statisticsIntervalLabel(view.settings)} · {isFixedEnvelopeStatisticsVersion(view.version) ? `적용 레버리지 ${view.settings.leverage}배 고정` : '이전 자동 레버리지 탐색 방식의 저장 결과입니다. 새 분석은 입력 배율을 고정 적용합니다.'}{current ? ` · SL ${view.settings.envelopeStopLossPercent ?? '3'}% · 캔들 필터 ${view.settings.envelopeCandleFilterEnabled ? 'ON' : 'OFF'} · MA20 필터 ${envelopeMa20FilterLabel(view.settings)}` : ''}</p>
+      <p className="notice small">{statisticsIntervalLabel(view.settings)} · {isFixedEnvelopeStatisticsVersion(view.version) ? `적용 레버리지 ${view.settings.leverage}배 고정` : '이전 자동 레버리지 탐색 방식의 저장 결과입니다. 새 분석은 입력 배율을 고정 적용합니다.'}{current ? ` · SL ${view.settings.envelopeStopLossPercent ?? '3'}% · 절반 엔벨 ${view.settings.envelopeHalfCandleEnabled ? 'ON' : 'OFF'} · 캔들 필터 ${view.settings.envelopeCandleFilterEnabled ? 'ON' : 'OFF'} · MA20 필터 ${envelopeMa20FilterLabel(view.settings)}` : ''}</p>
       {current && kind === 'ALL_STATS' ? <p className="notice small">필터 통과 {sorted.length}/{view.rows.length}종목 · {resultSortLabel(options)} 내림차순 · 최적 세팅도 같은 정렬 기준입니다.</p> : null}
       {!current ? <p className="notice small">이전 매매 조건·선정 기준의 저장 결과입니다. 새 엔벨로프 조건은 소급 적용하지 않습니다. 새 분석을 시작해 주세요.</p> : null}
       {kind === 'VIRTUAL' && view.trainingSettings ? <><p className="muted small">세팅 선정 기간: {view.trainingSettings.startDate} {view.trainingSettings.startTime} ~ {view.trainingSettings.endDate} {view.trainingSettings.endTime}</p><VirtualPeriodNotice evaluation={view.settings} training={view.trainingSettings} /></> : null}

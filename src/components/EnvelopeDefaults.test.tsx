@@ -26,17 +26,19 @@ describe('envelope input defaults and arrangement', () => {
     const html = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
     expect(html).toMatch(/class="selected"[^>]*>1D<|aria-pressed="true"[^>]*>1D</);
     const rows = options(html);
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(6);
     expect(rows[0]).toContain('MA20 위에서만 매수 (롱)');
     expect(rows[0]).toContain('checked=""');
     expect(rows[1]).toContain('중심선 터치후 이탈시 매도');
     expect(rows[1]).not.toContain('checked=""');
     expect(rows[2]).toContain('롱/숏 비율 50%');
     expect(rows[2]).not.toContain('checked=""');
-    expect(rows[3]).toContain('매수금지 캔들 필터 적용');
-    expect(rows[3]).not.toContain('checked=""');
-    expect(rows[4]).toContain('트레일링 스탑 적용');
+    expect(rows[3]).toContain('캔들 절반 엔벨 이내');
+    expect(rows[3]).toContain('checked=""');
+    expect(rows[4]).toContain('매수금지 캔들 필터 적용');
     expect(rows[4]).not.toContain('checked=""');
+    expect(rows[5]).toContain('트레일링 스탑 적용');
+    expect(rows[5]).not.toContain('checked=""');
     expect(html).toMatch(/트레일링 스탑 \(%\)[\s\S]*?<input[^>]*min="1"[^>]*max="100"[^>]*step="0.1"[^>]*value="3"/);
     expect(html).toMatch(/SL \(%\)[\s\S]*?<input[^>]*min="0.1"[^>]*max="20"[^>]*step="0.1"[^>]*value="3"/);
     expect(html).not.toContain('MA20 아래에서만 매수 (롱)');
@@ -44,7 +46,7 @@ describe('envelope input defaults and arrangement', () => {
   });
 
   it('uses 3% without changing the defaults of other strategies or the center SMA period', () => {
-    expect(defaultSettings('ENVELOPE')).toMatchObject({ interval: '1d', envelopeStatisticsInterval: '1d', envelopeDeviationPercent: '3', envelopeStopLossPercent: '3', envelopeCandleFilterEnabled: false, envelopeMa20Enabled: true, envelopeMaPeriod: '20' });
+    expect(defaultSettings('ENVELOPE')).toMatchObject({ interval: '1d', envelopeStatisticsInterval: '1d', envelopeDeviationPercent: '3', envelopeStopLossPercent: '3', envelopeHalfCandleEnabled: true, envelopeCandleFilterEnabled: false, envelopeMa20Enabled: true, envelopeMaPeriod: '20' });
     expect(defaultSettings()).toMatchObject({ interval: '15m', envelopeDeviationPercent: '0.5', envelopeMa20Enabled: false });
     const html = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
     expect(html).toMatch(/엔벨로프 이격 \(%\)[\s\S]*?<input[^>]*value="3"/);
@@ -59,7 +61,9 @@ describe('envelope input defaults and arrangement', () => {
     expect(centerReturn).toBeGreaterThan(above);
     const ratio = html.indexOf('롱/숏 비율 50%');
     expect(ratio).toBeGreaterThan(centerReturn);
-    expect(html.indexOf('매수금지 캔들 필터 적용')).toBeGreaterThan(ratio);
+    const halfCandle = html.indexOf('캔들 절반 엔벨 이내');
+    expect(halfCandle).toBeGreaterThan(ratio);
+    expect(html.indexOf('매수금지 캔들 필터 적용')).toBeGreaterThan(halfCandle);
     expect(html.indexOf('SL (%)')).toBeGreaterThan(html.indexOf('엔벨로프 이격 (%)'));
     expect(html).not.toContain('MA20 아래에서만 매수 (롱)');
     expect(html).not.toContain('종가 &gt; 엔벨로프 상단 확정 시 청산 (롱)');
@@ -86,12 +90,14 @@ describe('envelope input defaults and arrangement', () => {
   });
 
   it('retains explicit saved intervals, deviations and unchecked filters', () => {
-    saveSettings('ENVELOPE', { ...defaultSettings('ENVELOPE'), interval: '4h', envelopeDeviationPercent: '7.5', envelopeStopLossPercent: '1.5', envelopeCandleFilterEnabled: true, envelopeMa20Enabled: false, envelopeCloseOnConfirmedBreakout: true });
+    saveSettings('ENVELOPE', { ...defaultSettings('ENVELOPE'), interval: '4h', envelopeDeviationPercent: '7.5', envelopeStopLossPercent: '1.5', envelopeHalfCandleEnabled: false, envelopeCandleFilterEnabled: true, envelopeMa20Enabled: false, envelopeCloseOnConfirmedBreakout: true });
     const html = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
     expect(html).toContain('중심선 · 매매 기준 4H');
     expect(html).toMatch(/엔벨로프 이격 \(%\)[\s\S]*?<input[^>]*value="7.5"/);
     expect(options(html)[0]).not.toContain('checked=""');
-    expect(options(html)[3]).toContain('checked=""');
+    expect(options(html)[3]).toContain('캔들 절반 엔벨 이내');
+    expect(options(html)[3]).not.toContain('checked=""');
+    expect(options(html)[4]).toContain('checked=""');
     expect(html).toMatch(/SL \(%\)[\s\S]*?<input[^>]*value="1.5"/);
   });
 
