@@ -4,7 +4,7 @@ import type { AtrEnvelopeParameters, BacktestInterval, BacktestSettings, Candle,
 
 export const envelopePeriod = 20;
 export const envelopeMaxPeriod = 240;
-// Candidate periods for the automatic statistics sweep.
+// Center periods in archived five-period statistics reports.
 export const envelopePeriods = [3, 5, 20, 60, 120];
 export const legacyEnvelopePeriods = [5, 10, 20, 40, 60, 80, 100, 120];
 export const envelopeModelVersion = '2.10.97';

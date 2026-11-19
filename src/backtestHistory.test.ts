@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { formatBacktestHistorySettings } from './backtestHistory';
 import { defaultSettings } from './components/StrategyBacktest';
+import { envelopeOptimizerVersion } from './envelopeStatistics';
 
 describe('backtest history setting summaries', () => {
   it('keeps dates but omits both times and unchecked envelope options', () => {
@@ -76,5 +77,11 @@ describe('backtest history setting summaries', () => {
     expect(summary).toContain('최소 수익률 5%');
     expect(summary).toContain('최소 수익비 55%');
     expect(summary).toContain('정렬 기준 승률');
+    expect(summary).toContain('SL 3%');
+    for (const kind of ['ENVELOPE_STATISTICS', 'ENVELOPE_BATCH_STATS'] as const) {
+      const updated = formatBacktestHistorySettings(settings, 'ENVELOPE', kind, envelopeOptimizerVersion);
+      expect(updated).toEqual(expect.arrayContaining(['중심선 탐색 1~10봉', '이격 탐색 0.1~10.0%', 'SL 탐색 0.1~10.0%']));
+      expect(updated).not.toContain('SL 3%');
+    }
   });
 });

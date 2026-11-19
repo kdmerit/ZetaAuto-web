@@ -2,11 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ApiContext } from '../api';
 import { useAnalysisBusy } from '../analysisActivity';
 import { loadSettings, saveSettings } from '../storage';
-import { currentEnvelopeSettings, envelopeExitLabels, envelopeMa20FilterLabel, envelopePeriod, envelopePeriods } from '../envelope';
+import { currentEnvelopeSettings, envelopeExitLabels, envelopeMa20FilterLabel } from '../envelope';
 import { canResumeEnvelopeBatch, envelopeBatchView, loadEnvelopeBatchHistory, loadEnvelopeBatchReport, saveEnvelopeBatchSelection, validateVirtualSettings, virtualPeriodRelation, type BatchHistoryEntry, type EnvelopeBatchKind, type EnvelopeBatchView, type OptimizedSymbol } from '../envelopeBatch';
-import { isCurrentEnvelopeStatisticsVersion, isDirectionalStatisticsVersion, isFixedEnvelopeStatisticsVersion, optimalSettingCriteria, selectedStatisticsSides, settingsForStatisticsRow, statisticsAnalysisWindow, statisticsIntervalLabel, statisticsIntervals, statisticsSideLabel, type StatisticsSide } from '../envelopeStatistics';
+import { fixedEnvelopeStatisticsSettings, isCurrentEnvelopeStatisticsVersion, isDirectionalStatisticsVersion, isFixedEnvelopeStatisticsVersion, optimalSettingCriteria, selectedStatisticsSides, settingsForStatisticsRow, statisticsAnalysisWindow, statisticsCenterRange, statisticsIntervalLabel, statisticsIntervals, statisticsPercentRange, statisticsSideLabel, usesCurrentEnvelopeExecution, type StatisticsSide } from '../envelopeStatistics';
 import { compareEnvelopeRows, defaultEnvelopeResultOptions, resultSortLabel, validateEnvelopeResultOptions } from '../envelopeResults';
-import { fixedEnvelopeSettings } from '../envelopeReplay';
 import { isEnvelopeBatchRunning, pauseEnvelopeBatch, restoreEnvelopeBatch, startEnvelopeBatch, subscribeEnvelopeBatch } from '../envelopeBatchClient';
 import type { BacktestSettings, EnvelopeResultOptions } from '../types';
 import { defaultSettings, formatDateInput, formatTimeInput, StrategyBacktest } from './StrategyBacktest';
@@ -28,16 +27,14 @@ function readSettings(view: string): BacktestSettings {
   const fallback = { ...loadSettings('ENVELOPE', defaultSettings('ENVELOPE')), mode: view === 'SINGLE_STATS' ? 'SINGLE' as const : 'ALL' as const, envelopeRisk: undefined, envelopeStatisticsInterval: '1d' as const };
   let settings = fallback;
   try { settings = { ...fallback, ...JSON.parse(localStorage.getItem(`zetaauto.web.envelope.${view}.settings`) ?? '{}'), mode: fallback.mode }; } catch { /* Use the last ordinary settings if statistics preferences are unreadable. */ }
-  // Statistics searches its preset periods independently of the manual analysis input.
-  const period = Number(settings.envelopeMaPeriod);
-  return currentEnvelopeSettings({ ...settings, envelopeMaPeriod: String(envelopePeriods.includes(period) ? period : envelopePeriod) });
+  return currentEnvelopeSettings(settings);
 }
 function storeSettings(view: string, settings: BacktestSettings): void { try { localStorage.setItem(`zetaauto.web.envelope.${view}.settings`, JSON.stringify(settings)); } catch { /* Keep inputs usable without storage. */ } }
 function validateSearch(settings: BacktestSettings): void {
   if (settings.mode === 'SINGLE' && !/^[A-Z0-9]{1,36}$/.test(settings.symbol.replace(/USDT$/, ''))) throw new Error('종목명을 입력해 주세요.');
   if (!/^\d+(\.\d{1,2})?$/.test(settings.initialCapitalUsdt) || Number(settings.initialCapitalUsdt) < 10) throw new Error('초기자금을 확인해 주세요.');
   if (!/^\d+(\.\d{1,2})?$/.test(settings.betAmountUsdt) || Number(settings.betAmountUsdt) < 1 || Number(settings.betAmountUsdt) > Number(settings.initialCapitalUsdt)) throw new Error('고정 베팅액을 확인해 주세요.');
-  fixedEnvelopeSettings(settings);
+  fixedEnvelopeStatisticsSettings(settings);
   validateEnvelopeResultOptions(settings.envelopeResultOptions ?? defaultEnvelopeResultOptions);
   statisticsAnalysisWindow(settings);
 }
@@ -48,14 +45,13 @@ function SearchFields({ settings, onChange, disabled, single }: { settings: Back
     <h2>분석 방향</h2><div className="segmented three" role="group" aria-label="통계 분석 방향">{(['BOTH', 'LONG', 'SHORT'] as const).map(side => <button key={side} type="button" aria-pressed={settings.side === side} className={settings.side === side ? 'selected' : ''} onClick={() => update('side', side)}>{side === 'BOTH' ? '롱 + 숏' : side === 'LONG' ? '롱' : '숏'}</button>)}</div>
     <p className="muted small">롱 + 숏은 방향별로 독립 분석해 필터·정렬 기준의 최적 세팅을 각각 찾습니다.</p>
     <h2>통계 캔들 주기</h2><div className="segmented interval-selector">{statisticsIntervals.map(interval => <button key={interval} type="button" aria-pressed={settings.envelopeStatisticsInterval === interval} className={settings.envelopeStatisticsInterval === interval ? 'selected' : ''} onClick={() => update('envelopeStatisticsInterval', interval)}>{interval.toUpperCase()}</button>)}</div>
-    <p className="notice small">롱: 엔벨로프 하단 매수 → 상단 청산 · 숏: 상단 매도 → 하단 청산 · SL은 별도 입력한 비율로 고정</p>
+    <p className="notice small">롱은 엔벨로프 하단에서 매수해 상단에서 청산합니다. 숏은 반대로 적용합니다.</p>
     <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
     <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
     <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
     <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnlyEntryEnabled === true} onChange={event => update('envelopeCloseOnlyEntryEnabled', event.target.checked)} /><span>종가에서만 매수</span></label>
     <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />
     <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
-    <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
     <EnvelopeTrailingStopControl enabled={settings.envelopeTrailingStopEnabled === true} value={settings.envelopeTrailingStopPercent ?? '3'} onToggle={enabled => update('envelopeTrailingStopEnabled', enabled)} onChange={value => update('envelopeTrailingStopPercent', value)} />
     <h2>분석 기간 (한국시간)</h2><div className="field-grid two">
       <label className="field-label">시작일<input inputMode="numeric" value={settings.startDate} onChange={event => update('startDate', formatDateInput(event.target.value))} /></label>
@@ -63,12 +59,14 @@ function SearchFields({ settings, onChange, disabled, single }: { settings: Back
       <label className="field-label">종료일 (선택)<input inputMode="numeric" value={settings.endDate} onChange={event => update('endDate', formatDateInput(event.target.value))} placeholder="현재까지" /></label>
       <label className="field-label">종료시간<input inputMode="numeric" value={settings.endTime} onChange={event => update('endTime', formatTimeInput(event.target.value))} /></label>
     </div><div className="field-grid three"><label className="field-label">가상 초기자금<input inputMode="decimal" value={settings.initialCapitalUsdt} onChange={event => update('initialCapitalUsdt', event.target.value)} /></label><label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /></label><label className="field-label">고정 레버리지<input inputMode="decimal" value={settings.leverage} onChange={event => update('leverage', event.target.value)} /><small>1~100배 · 모든 조건에 동일 적용</small></label></div>
-    <p className="muted small">{statisticsIntervalLabel(settings)}에서 레버리지와 MA20 필터를 고정하고 MA3·MA5·MA20·MA60·MA120 및 이격 0.1~20.0%를 비교합니다.</p>
+    <p className="muted small">중심선은 {statisticsCenterRange}봉을 1봉씩, 이격과 SL은 각각 {statisticsPercentRange}를 0.1%씩 바꿔 비교합니다. SL은 실제 진입가 기준입니다.</p>
     <p className="muted small">거래소 최대 레버리지·위험한도는 조회하지 않습니다. SL·수수료를 반영한 가정 계산이며 실제 계좌의 강제청산은 재현하지 않습니다. 중지 후 이어갈 수 있습니다.</p>
   </fieldset></section>;
 }
 
-export function VirtualEvaluationFields({ settings, onChange, disabled }: { settings: BacktestSettings; onChange: (settings: BacktestSettings) => void; disabled: boolean }) {
+export function VirtualEvaluationFields({ settings, onChange, disabled, usesOptimizedStopLoss = false }: {
+  settings: BacktestSettings; onChange: (settings: BacktestSettings) => void; disabled: boolean; usesOptimizedStopLoss?: boolean;
+}) {
   const update = <K extends keyof BacktestSettings>(key: K, value: BacktestSettings[K]): void => onChange({ ...settings, [key]: value });
   const sideLabel = settings.side === 'LONG' ? '롱' : settings.side === 'SHORT' ? '숏' : '롱 + 숏';
   return <section className="surface-card form-card" aria-label="가상매매 검증 설정"><fieldset className="analysis-fields" disabled={disabled}>
@@ -83,16 +81,16 @@ export function VirtualEvaluationFields({ settings, onChange, disabled }: { sett
       <label className="field-label">가상 초기자금<input inputMode="decimal" value={settings.initialCapitalUsdt} onChange={event => update('initialCapitalUsdt', event.target.value)} /></label>
       <label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /></label>
       <label className="field-label">레버리지<input inputMode="decimal" value={settings.leverage} onChange={event => update('leverage', event.target.value)} /><small>1~100배 · 모든 종목에 동일 적용</small></label>
-    </div><p className="notice small">전체통계에서 선정된 1h·4h·1d 주기로 검증합니다. 롱은 하단 매수·상단 청산, 숏은 상단 매도·하단 청산하며 SL은 별도 입력한 비율로 고정합니다.</p>
+    </div><p className="notice small">전체통계에서 선정된 주기와 밴드를 사용합니다. {usesOptimizedStopLoss ? 'SL도 종목·방향별로 선정된 값을 사용합니다.' : 'SL은 별도 입력한 비율로 고정합니다.'}</p>
     <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
     <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
     <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
     <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnlyEntryEnabled === true} onChange={event => update('envelopeCloseOnlyEntryEnabled', event.target.checked)} /><span>종가에서만 매수</span></label>
     <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />
     <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
-    <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
+    {!usesOptimizedStopLoss ? <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} /> : null}
     <EnvelopeTrailingStopControl enabled={settings.envelopeTrailingStopEnabled === true} value={settings.envelopeTrailingStopPercent ?? '3'} onToggle={enabled => update('envelopeTrailingStopEnabled', enabled)} onChange={value => update('envelopeTrailingStopPercent', value)} />
-    <p className="muted small">검증 기간·자금·배율·MA20 필터·청산 옵션·롱/숏 비율・SL・캔들 필터는 통계와 별도로 저장합니다.</p>
+    <p className="muted small">검증 기간·자금·배율·MA20 필터·청산 옵션·롱/숏 비율·캔들 필터{usesOptimizedStopLoss ? '' : '·SL'}는 통계와 별도로 저장합니다.</p>
   </fieldset></section>;
 }
 
@@ -106,7 +104,7 @@ export function EnvelopeSymbolSettings({ row, settings, disabled, onChoose, resu
     : [{ side: settings.side === 'BOTH' ? undefined : settings.side, best: row.best }];
   return <article className="envelope-symbol-result" aria-label={`${row.symbol} 최적 세팅`}><h3>{row.symbol}</h3>{choices.filter(choice => !resultOptions || choice.best).map(({ side, best }) => <button className="envelope-stat-row" key={side ?? 'combined'} type="button" disabled={disabled || !best} onClick={() => onChoose(side)}>
     <strong>{side ? statisticsSideLabel(side) : '이전 롱 + 숏 합산'} 최고 {resultOptions ? resultSortLabel(resultOptions) : '수익률'} <span className={(best?.returnPercent ?? 0) >= 0 ? 'long-text' : 'short-text'}>{best ? `${num(best[resultOptions?.sort ?? 'returnPercent'])}%` : row.status === 'UNSUPPORTED' ? '지원 불가' : side && row.tradedSides?.[side] ? '최적 기준 미달' : '체결 없음'}</span></strong>
-    {best ? <><span>{best.interval} · SMA{best.maPeriod} · 이격 {best.deviationPercent}% · {best.leverage ?? settings.leverage}배</span><span>{envelopeExitLabels[best.exitMode]} · 수익률 {num(best.returnPercent)}% · 순손익 {num(best.profitUsdt)} USDT · 승률 {num(best.winRatePercent)}%</span><span>진입 {best.entryCount}회 · 승/패 {best.winCount}/{best.lossCount}{resultOptions ? ` · 수익비 ${num(best.profitRatioPercent)}%` : ''}</span><small>개별분석에 이 방향의 세팅 불러오기 ›</small></> : <span>{row.message ?? (side && row.tradedSides?.[side] ? optimalSettingCriteria : '기간 내 진입 가능한 세팅이 없습니다.')}</span>}
+    {best ? <><span>{best.interval} · SMA{best.maPeriod} · 이격 {best.deviationPercent}%{best.stopLossPercent === undefined ? '' : ` · SL ${best.stopLossPercent.toFixed(1)}%`} · {best.leverage ?? settings.leverage}배</span><span>{envelopeExitLabels[best.exitMode]} · 수익률 {num(best.returnPercent)}% · 순손익 {num(best.profitUsdt)} USDT · 승률 {num(best.winRatePercent)}%</span><span>진입 {best.entryCount}회 · 승/패 {best.winCount}/{best.lossCount}{resultOptions ? ` · 수익비 ${num(best.profitRatioPercent)}%` : ''}</span><small>개별분석에 이 방향의 세팅 불러오기 ›</small></> : <span>{row.message ?? (side && row.tradedSides?.[side] ? optimalSettingCriteria : '기간 내 진입 가능한 세팅이 없습니다.')}</span>}
   </button>)}</article>;
 }
 
@@ -122,7 +120,7 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
     void restoreEnvelopeBatch(kind).then(saved => { if (saved && mounted.current && !received && request.current === 0) receive(saved, !selectedSource); }).catch(failure => { if (mounted.current) setError(String(failure)); });
     const refreshSources = async (preferred?: string): Promise<void> => {
       const current = ++sourceRequest;
-      try { const value = (await loadEnvelopeBatchHistory('ALL_STATS')).filter(item => isCurrentEnvelopeStatisticsVersion(item.version)); if (mounted.current && current === sourceRequest) { setSources(value); const chosen = preferred ?? selectedSource; if (value.some(item => item.id === chosen)) { if (preferred) onSelectSource(chosen); } else onSelectSource(value[0]?.id ?? ''); } }
+      try { const value = (await loadEnvelopeBatchHistory('ALL_STATS')).filter(item => usesCurrentEnvelopeExecution(item.version)); if (mounted.current && current === sourceRequest) { setSources(value); const chosen = preferred ?? selectedSource; if (value.some(item => item.id === chosen)) { if (preferred) onSelectSource(chosen); } else onSelectSource(value[0]?.id ?? ''); } }
       catch { if (mounted.current && current === sourceRequest) setError('전체통계 이력을 불러오지 못했습니다.'); }
     };
     if (kind === 'VIRTUAL') void refreshSources();
@@ -130,8 +128,15 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
     const unsubscribe = subscribeEnvelopeBatch(kind, event => { received = true; if (event.type === 'UPDATE') receive(event.view, true); else if (event.type === 'ERROR') setError(event.message); else setRunning(false); });
     return () => { mounted.current = false; unsubscribe(); unsubscribeSources(); };
   }, [kind, onSelectSource]);
+  const source = sources.find(value => value.id === selectedSource);
+  const usesOptimizedStopLoss = isCurrentEnvelopeStatisticsVersion(source?.version);
   const start = (resume = false): void => {
-    try { if (!resume && kind === 'ALL_STATS') validateSearch(settings); if (!resume && kind === 'VIRTUAL') { validateVirtualSettings(settings); if (!source) throw new Error('새 매매 조건으로 완료한 전체통계 결과를 먼저 선택해 주세요.'); }
+    try {
+      if (!resume && kind === 'ALL_STATS') validateSearch(settings);
+      if (!resume && kind === 'VIRTUAL') {
+        if (!source) throw new Error('완료한 전체통계 결과를 먼저 선택해 주세요.');
+        validateVirtualSettings(usesOptimizedStopLoss ? fixedEnvelopeStatisticsSettings(settings) : settings);
+      }
       if (resume && latest && isFixedEnvelopeStatisticsVersion(latest.version)) { onRestore(latest.settings); if (latest.sourceId) onSelectSource(latest.sourceId); }
       startEnvelopeBatch(kind, settings, resume ? latest?.id : undefined, selectedSource); request.current += 1; setHistoryOpen(false); setError(null); setRunning(true); if (!resume) setView(null);
     } catch (failure) { setError(failure instanceof Error ? failure.message : '분석을 시작하지 못했습니다.'); }
@@ -155,7 +160,8 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
       if (mounted.current) onChoose(settingsForStatisticsRow({ ...report.settings, symbol: symbol.replace(/USDT$/, '') }, best, isFixedEnvelopeStatisticsVersion(report.version) ? undefined : row.risk));
     } catch (failure) { if (mounted.current) setError(failure instanceof Error ? failure.message : '설정을 불러오지 못했습니다.'); } finally { if (mounted.current) setLoading(false); }
   };
-  const current = !!view && isCurrentEnvelopeStatisticsVersion(view.version);
+  const current = !!view && usesCurrentEnvelopeExecution(view.version);
+  const optimizedStopLoss = !!view && isCurrentEnvelopeStatisticsVersion(view.version);
   const options = view?.settings.envelopeResultOptions ?? settings.envelopeResultOptions ?? defaultEnvelopeResultOptions;
   const sorted = [...(view?.rows ?? [])].filter(row => !current || !!row.best).sort((a, b) => current && a.best && b.best ? compareEnvelopeRows(a.best, b.best, options) : (b.best?.returnPercent ?? -Infinity) - (a.best?.returnPercent ?? -Infinity));
   const applyResults = async (options: EnvelopeResultOptions): Promise<void> => {
@@ -166,22 +172,23 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
     catch (failure) { if (mounted.current && id === request.current) setError(failure instanceof Error ? failure.message : '필터를 적용하지 못했습니다.'); }
     finally { if (mounted.current && id === request.current) setLoading(false); }
   };
-  const source = sources.find(value => value.id === selectedSource);
-  return <section className="surface-card form-card envelope-batch" aria-label={label}>
+  const stopLossSummary = optimizedStopLoss ? kind === 'ALL_STATS' ? `SL 탐색 ${statisticsPercentRange}` : '전체통계의 종목·방향별 SL' : `SL ${view?.settings.envelopeStopLossPercent ?? '3'}%`;
+  return <>{kind === 'VIRTUAL' ? <VirtualEvaluationFields settings={settings} onChange={onRestore} disabled={busy || loading} usesOptimizedStopLoss={usesOptimizedStopLoss} /> : null}
+    <section className="surface-card form-card envelope-batch" aria-label={label}>
     {kind === 'ALL_STATS' ? <EnvelopeResultControls value={options} onApply={options => { void applyResults(options); }} disabled={running || loading} /> : null}
     {kind === 'VIRTUAL' ? <><label className="field-label">전체통계 결과 선택<select value={selectedSource} disabled={busy || loading} onChange={event => onSelectSource(event.target.value)}><option value="">완료된 전체통계를 선택하세요</option>{sources.map(item => <option key={item.id} value={item.id}>{new Date(item.at).toLocaleString('ko-KR')} · {statisticsIntervalLabel(item.settings)} · {item.optimized}/{item.symbols}종목 · {item.settings.startDate}~{item.settings.endDate}</option>)}</select></label>
       {!sources.length ? <p className="notice">새 고정 매매 조건으로 전체통계를 먼저 완료해 주세요. 이전 조건의 이력은 그대로 보존됩니다.</p> : null}
       {source ? <><p className="muted small">세팅 선정 기간: {source.settings.startDate} {source.settings.startTime} ~ {source.settings.endDate} {source.settings.endTime} · 통계 주기 {statisticsIntervalLabel(source.settings)}</p><VirtualPeriodNotice evaluation={settings} training={source.settings} /></> : null}
       {source && !source.optimized ? <p className="notice">선택한 전체통계에는 최적 기준을 충족한 세팅이 없습니다. 다른 이력을 선택하거나 전체통계를 다시 실행해 주세요.</p> : null}
-      <p className="notice small">종목·방향별로 현재 필터·정렬에서 선정한 중심선·이격만 고정해 적용합니다. 검증 기간에는 다시 최적화하지 않습니다. {source ? statisticsIntervalLabel(source.settings) : '선정된 주기'} 시간축·종목당 한 포지션·공유 계좌로 수익 누적을 계산합니다.</p></> : null}
+      <p className="notice small">현재 필터와 정렬 기준으로 고른 종목·방향별 중심선·이격{usesOptimizedStopLoss ? '·SL' : ''}을 검증 기간에 고정 적용합니다. {source ? statisticsIntervalLabel(source.settings) : '선정된 주기'} 시간축에서 종목당 한 포지션을 공유 계좌로 계산합니다.</p></> : null}
     <button className="primary-button" type="button" disabled={busy || loading || kind === 'VIRTUAL' && (!source || !source.optimized)} onClick={() => start()}>{running ? `${label} 진행 중` : `${label} 분석 시작`}</button>
     {running ? <button className="danger-button" type="button" onClick={pauseEnvelopeBatch}>{label} 일시정지</button> : null}
     {!running && latest?.status === 'PAUSED' ? <button className="outline-button" type="button" disabled={busy || loading || !canResumeEnvelopeBatch(latest)} onClick={() => start(true)}>{label} 이어하기</button> : null}
     <button className="outline-button" type="button" disabled={busy || loading} aria-expanded={historyOpen} onClick={() => { void toggleHistory(); }}>{historyOpen ? `${label} 이력 닫기` : `${label} 이력보기`}</button>
-    {historyOpen ? <div className="history-list">{history.length ? history.map(item => <button className="history-card" type="button" key={item.id} onClick={() => { void openHistory(item.id); }} disabled={loading}><strong>{item.kind === 'ALL_STATS' ? `전체통계 · ${item.optimized}/${item.symbols}종목` : `가상매매 · ${num(item.returnPercent)}%`}</strong>{item.longOptimized !== undefined ? <span>롱 {item.longOptimized}종목 · 숏 {item.shortOptimized ?? 0}종목 최적 세팅</span> : null}<span className="history-card-settings">{formatBacktestHistorySettings(item.settings, 'ENVELOPE', item.kind === 'ALL_STATS' ? 'ENVELOPE_BATCH_STATS' : 'ENVELOPE_BATCH_VIRTUAL').map(value => <span className="history-card-setting" key={value}>{value}</span>)}</span><small>{isCurrentEnvelopeStatisticsVersion(item.version) ? '현재 엔벨로프 조건' : '이전 매매 조건'} · {new Date(item.at).toLocaleString('ko-KR')}</small></button>) : <p className="muted">{label} 이력이 없습니다.</p>}</div> : null}
+    {historyOpen ? <div className="history-list">{history.length ? history.map(item => <button className="history-card" type="button" key={item.id} onClick={() => { void openHistory(item.id); }} disabled={loading}><strong>{item.kind === 'ALL_STATS' ? `전체통계 · ${item.optimized}/${item.symbols}종목` : `가상매매 · ${num(item.returnPercent)}%`}</strong>{item.longOptimized !== undefined ? <span>롱 {item.longOptimized}종목 · 숏 {item.shortOptimized ?? 0}종목 최적 세팅</span> : null}<span className="history-card-settings">{formatBacktestHistorySettings(item.settings, 'ENVELOPE', item.kind === 'ALL_STATS' ? 'ENVELOPE_BATCH_STATS' : 'ENVELOPE_BATCH_VIRTUAL', item.version).map(value => <span className="history-card-setting" key={value}>{value}</span>)}</span><small>{new Date(item.at).toLocaleString('ko-KR')}</small></button>) : <p className="muted">{label} 이력이 없습니다.</p>}</div> : null}
     {error && error !== view?.message ? <p className="error" role="alert">{error}</p> : null}
     {view ? <><h2>{label} {view.status === 'COMPLETED' ? '결과' : view.status === 'PAUSED' ? '일시정지' : '진행 중'}</h2><p className="muted small">{view.settings.startDate} {view.settings.startTime} ~ {view.settings.endDate} {view.settings.endTime} (한국시간)</p>
-      <p className="notice small">{statisticsIntervalLabel(view.settings)} · {isFixedEnvelopeStatisticsVersion(view.version) ? `적용 레버리지 ${view.settings.leverage}배 고정` : '이전 자동 레버리지 탐색 방식의 저장 결과입니다. 새 분석은 입력 배율을 고정 적용합니다.'}{current ? ` · 종가 매수 ${view.settings.envelopeCloseOnlyEntryEnabled ? 'ON' : 'OFF'} · SL ${view.settings.envelopeStopLossPercent ?? '3'}% · 절반 엔벨 ${view.settings.envelopeHalfCandleEnabled ? 'ON' : 'OFF'} · 캔들 필터 ${view.settings.envelopeCandleFilterEnabled ? 'ON' : 'OFF'} · MA20 필터 ${envelopeMa20FilterLabel(view.settings)}` : ''}</p>
+      <p className="notice small">{statisticsIntervalLabel(view.settings)} · {isFixedEnvelopeStatisticsVersion(view.version) ? `적용 레버리지 ${view.settings.leverage}배 고정` : '이전 자동 레버리지 탐색 방식의 저장 결과입니다. 새 분석은 입력 배율을 고정 적용합니다.'}{current ? ` · 종가 매수 ${view.settings.envelopeCloseOnlyEntryEnabled ? 'ON' : 'OFF'} · ${stopLossSummary} · 절반 엔벨 ${view.settings.envelopeHalfCandleEnabled ? 'ON' : 'OFF'} · 캔들 필터 ${view.settings.envelopeCandleFilterEnabled ? 'ON' : 'OFF'} · MA20 필터 ${envelopeMa20FilterLabel(view.settings)}` : ''}</p>
       {current && kind === 'ALL_STATS' ? <p className="notice small">필터 통과 {sorted.length}/{view.rows.length}종목 · {resultSortLabel(options)} 내림차순 · 최적 세팅도 같은 정렬 기준입니다.</p> : null}
       {!current ? <p className="notice small">이전 매매 조건·선정 기준의 저장 결과입니다. 새 엔벨로프 조건은 소급 적용하지 않습니다. 새 분석을 시작해 주세요.</p> : null}
       {kind === 'VIRTUAL' && view.trainingSettings ? <><p className="muted small">세팅 선정 기간: {view.trainingSettings.startDate} {view.trainingSettings.startTime} ~ {view.trainingSettings.endDate} {view.trainingSettings.endTime}</p><VirtualPeriodNotice evaluation={view.settings} training={view.trainingSettings} /></> : null}
@@ -195,7 +202,7 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
         <div><span>최종 평가금액</span><strong>{num(view.result.finalEquityUsdt)} USDT</strong></div><div><span>실현 손익</span><strong>{num(view.result.realizedProfitUsdt)} USDT</strong></div><div><span>승률</span><strong>{num(view.result.winRatePercent)}%</strong></div><div><span>진입 · 청산</span><strong>{view.result.entryCount} · {view.result.closedTradeCount}</strong></div><div><span>최대 낙폭</span><strong>{num(view.result.maxDrawdownPercent)}%</strong></div><div><span>미청산</span><strong>{view.result.openPositionCount}</strong></div>
       </div><p className="muted small">적용 종목 {view.rows.length}개 · 수수료 {num(view.result.feesUsdt)} USDT · 자금 부족 {view.result.insufficientFundsCount}회</p><p className="muted small">{isFixedEnvelopeStatisticsVersion(view.version) ? '입력 배율을 고정 적용한 가정 계산입니다. 실제 거래소의 강제청산·최대 레버리지 한도는 검증하지 않습니다.' : '이전 계산 방식으로 저장된 결과이며 새 고정 레버리지 분석과는 기준이 다릅니다.'}</p></div> : null}
     </> : null}
-  </section>;
+  </section></>;
 }
 
 function StatisticsPage({ all, onChoose, selectedSource, onSelectSource }: { all: boolean; onChoose: (settings: BacktestSettings) => void; selectedSource: string; onSelectSource: (id: string) => void }) {
@@ -207,7 +214,6 @@ function StatisticsPage({ all, onChoose, selectedSource, onSelectSource }: { all
   return <div className="strategy-content envelope-statistics-page">
     {all ? <div className="segmented"><button type="button" className={kind === 'ALL_STATS' ? 'selected' : ''} onClick={() => setKind('ALL_STATS')}>전체통계분석</button><button type="button" className={kind === 'VIRTUAL' ? 'selected' : ''} onClick={() => setKind('VIRTUAL')}>가상매매</button></div> : null}
     {!all || kind === 'ALL_STATS' ? <SearchFields settings={settings} onChange={update} disabled={busy || loading} single={!all} /> : null}
-    {all && kind === 'VIRTUAL' ? <VirtualEvaluationFields settings={virtualSettings} onChange={updateVirtual} disabled={busy || loading} /> : null}
     {all ? <BatchPanel key={kind} kind={kind} settings={kind === 'VIRTUAL' ? virtualSettings : settings} onRestore={kind === 'VIRTUAL' ? updateVirtual : update} selectedSource={selectedSource} onSelectSource={onSelectSource} onChoose={onChoose} /> : <section className="surface-card form-card"><EnvelopeStatisticsPanel settings={settings} disabled={busy} validate={() => validateSearch(settings)} onBusyChange={setLoading} onResultOptionsChange={options => update({ ...settings, envelopeResultOptions: options })} onChoose={(next, source) => { if (source === 'history') update(next); else onChoose(next); }} /></section>}
   </div>;
 }

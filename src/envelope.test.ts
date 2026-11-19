@@ -101,6 +101,9 @@ describe('envelope band-touch entries and exits', () => {
   it('searches wick touches rather than closing breakouts in optimizer bounds', () => {
     const { document } = replay(false, [[100, 100, 98.5, 100]]);
     expect(maximumTouchedStep(document)).toBe(15);
+    expect(maximumTouchedStep(document, true)).toBe(0);
+    const wide = replay(false, [[100, 100, 80, 85]]).document;
+    expect(maximumTouchedStep(wide)).toBe(100);
   });
 
   it.each([

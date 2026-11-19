@@ -1,7 +1,7 @@
 /** All-symbol optimization and a separate, cash-constrained hourly portfolio revalidation. */
 import { deletePrefix, deleteValue, lease, maintainCache, readValue, retentionMs, writeValue } from './database';
 import { intervalSeconds } from './api';
-import { envelopeOptimizerVersion, isCurrentEnvelopeStatisticsVersion, isFilteredEnvelopeStatisticsVersion, searchEnvelopeInstrument, selectedStatisticsSides, statisticsAnalysisWindow, statisticsProgress, statisticsTotalFor, type DirectionalBests, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from './envelopeStatistics';
+import { envelopeOptimizerVersion, fixedEnvelopeStatisticsSettings, isCurrentEnvelopeStatisticsVersion, isFilteredEnvelopeStatisticsVersion, searchEnvelopeInstrument, selectedStatisticsSides, settingsForStatisticsRow, statisticsAnalysisWindow, statisticsProgress, statisticsTotalFor, usesCurrentEnvelopeExecution, type DirectionalBests, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow, type StatisticsSide } from './envelopeStatistics';
 import { currentEnvelopeSettings } from './envelope';
 import { defaultEnvelopeResultOptions, envelopeBests, matchesEnvelopeFilters, retainEnvelopeCandidates, validateEnvelopeResultOptions } from './envelopeResults';
 import { analysisWindow, ensureCandles, listInstruments, refreshMismatchedLowerTimeframes, type Instrument } from './marketData';
@@ -56,7 +56,7 @@ async function selectBatchResults(job: EnvelopeBatchJob, options?: EnvelopeResul
 /** Persist selection preferences, never rewrite the immutable parameter sweep or its raw candidate archive. */
 export async function saveEnvelopeBatchSelection(id: string, options: EnvelopeResultOptions): Promise<EnvelopeBatchJob> {
   const raw = await readValue<EnvelopeBatchJob>('results', archiveKey(id));
-  if (!raw || raw.status !== 'COMPLETED' || raw.kind !== 'ALL_STATS' || !isCurrentEnvelopeStatisticsVersion(raw.version)) throw new Error('새 조건으로 완료한 전체통계에서 필터를 적용해 주세요.');
+  if (!raw || raw.status !== 'COMPLETED' || raw.kind !== 'ALL_STATS' || !usesCurrentEnvelopeExecution(raw.version)) throw new Error('필터를 적용할 수 있는 완료된 전체통계를 선택해 주세요.');
   const selected = await selectBatchResults(raw, options);
   await writeValue('publicData', selectionKey(id), { options: structuredClone(options), optimized: selected.rows.filter(row => row.best).length,
     longOptimized: selected.rows.filter(row => row.bestBySide?.LONG).length, shortOptimized: selected.rows.filter(row => row.bestBySide?.SHORT).length } satisfies ResultSelection);
@@ -83,11 +83,11 @@ async function readJob(kind: EnvelopeBatchKind): Promise<EnvelopeBatchJob | null
 export async function loadEnvelopeBatch(kind: EnvelopeBatchKind): Promise<EnvelopeBatchView | null> {
   const job = await readJob(kind);
   if (!job) return null;
-  if (job.version !== envelopeOptimizerVersion && job.status !== 'COMPLETED') job.message = '매매 조건과 검증 방식이 변경되었습니다. 새 분석을 시작해 주세요. 기존 이력은 보존됩니다.';
+  if (!canResumeEnvelopeBatch(job) && job.status !== 'COMPLETED') job.message = '저장된 작업과 현재 계산 범위가 다릅니다. 새 분석을 시작해 주세요. 완료한 이력은 그대로 볼 수 있습니다.';
   return envelopeBatchView(await selectBatchResults({ ...job, status: job.status === 'RUNNING' ? 'PAUSED' : job.status }));
 }
 export function canResumeEnvelopeBatch(job: Pick<EnvelopeBatchJob, 'version' | 'kind' | 'cursor' | 'rows' | 'settings'> & { activeSearch?: EnvelopeStatisticsJob; completed?: number }): boolean {
-  return job.version === envelopeOptimizerVersion;
+  return job.version === envelopeOptimizerVersion || job.kind === 'VIRTUAL' && usesCurrentEnvelopeExecution(job.version);
 }
 export async function loadEnvelopeBatchReport(id: string): Promise<EnvelopeBatchJob | null> {
   const value = await readValue<EnvelopeBatchJob>('results', archiveKey(id));
@@ -116,7 +116,7 @@ async function saveReport(job: EnvelopeBatchJob): Promise<void> {
   }
 }
 function frozenSettings(settings: BacktestSettings): BacktestSettings {
-  const copy = { ...currentEnvelopeSettings(fixedEnvelopeSettings(settings)), mode: 'ALL' as const,
+  const copy = { ...settings, mode: 'ALL' as const,
     envelopeResultOptions: structuredClone(settings.envelopeResultOptions ?? defaultEnvelopeResultOptions) };
   validateEnvelopeResultOptions(copy.envelopeResultOptions);
   if (!copy.endDate) { const text = new Date(Date.now() + 9 * 3600_000).toISOString(); copy.endDate = text.slice(0, 10); copy.endTime = text.slice(11, 16); }
@@ -167,11 +167,12 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
       job.status = 'RUNNING';
     } else if (options.kind === 'ALL_STATS') {
       if (!options.settings) throw new Error('분석 설정이 없습니다.');
-      const settings = frozenSettings(options.settings); statisticsAnalysisWindow(settings);
+      const settings = frozenSettings(fixedEnvelopeStatisticsSettings(options.settings));
+      statisticsAnalysisWindow(settings);
       job = { id: crypto.randomUUID(), version: envelopeOptimizerVersion, kind: options.kind, status: 'RUNNING', settings, updatedAt: Date.now(), message: 'USDT 전체 종목 확인 · 슬리피지 필터 미사용', universe: [], cursor: 0, rows: [] };
     } else {
       const source = options.sourceId ? await loadEnvelopeBatchReport(options.sourceId) : null;
-      if (!source || source.kind !== 'ALL_STATS' || !isCurrentEnvelopeStatisticsVersion(source.version)) throw new Error('새 매매 조건으로 완료한 전체통계 결과를 먼저 선택해 주세요.');
+      if (!source || source.kind !== 'ALL_STATS' || !usesCurrentEnvelopeExecution(source.version)) throw new Error('새 매매 조건으로 완료한 전체통계 결과를 먼저 선택해 주세요.');
       if (!options.settings) throw new Error('가상매매 기간·초기자금·베팅액·레버리지를 입력해 주세요.');
       const requestedSides = selectedStatisticsSides(options.settings);
       const rows = source.rows.flatMap(row => {
@@ -187,9 +188,10 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
       const sourceIntervals = new Set(rows.flatMap(row => [row.best?.interval, ...Object.values(row.bestBySide ?? {}).map(best => best?.interval)]).filter((value): value is BacktestInterval => !!value));
       if (sourceIntervals.size !== 1) throw new Error('전체통계 결과의 캔들 주기가 섞여 있습니다. 한 주기로 다시 통계를 실행해 주세요.');
       const sourceInterval = [...sourceIntervals][0]!;
-      const settings = { ...frozenSettings(options.settings), side: options.settings.side, interval: sourceInterval };
+      const input = isCurrentEnvelopeStatisticsVersion(source.version) ? fixedEnvelopeStatisticsSettings(options.settings) : currentEnvelopeSettings(fixedEnvelopeSettings(options.settings));
+      const settings = { ...frozenSettings(input), interval: sourceInterval };
       validateVirtualSettings(settings); const window = analysisWindow(settings);
-      job = { id: crypto.randomUUID(), version: envelopeOptimizerVersion, kind: options.kind, status: 'RUNNING', settings, updatedAt: Date.now(), message: `${sourceInterval} 공유 계좌 재검증 준비`,
+      job = { id: crypto.randomUUID(), version: source.version, kind: options.kind, status: 'RUNNING', settings, updatedAt: Date.now(), message: `${sourceInterval} 공유 계좌 재검증 준비`,
         sourceId: source.id, trainingSettings: structuredClone(source.settings), rows, universe: rows.map(row => ({ symbol: row.symbol, launchAt: row.launchAt })), cursor: 0, state: initialPortfolio(Number(settings.initialCapitalUsdt)), start: window.start, end: window.end, blockStart: window.start };
     }
     await checkpoint(true); signal.throwIfAborted();
@@ -198,7 +200,7 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
       while (job.cursor < job.universe.length) {
         signal.throwIfAborted(); const instrument = job.universe[job.cursor]!;
         job.activeSearch ??= { id: `${job.id}:${instrument.symbol}`, version: envelopeOptimizerVersion, settings: { ...job.settings, mode: 'SINGLE', symbol: instrument.symbol.replace(/USDT$/, '') },
-          status: 'RUNNING', intervalIndex: 0, periodIndex: 0, step: 1, exitIndex: 0, updatedAt: Date.now(), message: '', rows: [], maxSteps: {}, skippedIntervals: {},
+          status: 'RUNNING', intervalIndex: 0, periodIndex: 0, step: 1, stopStep: 1, exitIndex: 0, updatedAt: Date.now(), message: '', rows: [], maxSteps: {}, skippedIntervals: {},
           instrument: { ...instrument, LONG: true, SHORT: true } };
         await searchEnvelopeInstrument(job.activeSearch, async force => { job!.message = `${job!.cursor + 1}/${job!.universe.length} · ${instrument.symbol} · ${job!.activeSearch!.message}`; await checkpoint(force); }, signal);
         const search = job.activeSearch;
@@ -210,8 +212,13 @@ async function run(options: { kind: EnvelopeBatchKind; settings?: BacktestSettin
     } else {
       const parameters: Record<string, BacktestSettings> = {};
       const parametersBySide: Record<string, Partial<Record<StatisticsSide, BacktestSettings>>> = {};
-      const settingFor = (row: OptimizedSymbol, best: EnvelopeStatisticsRow, side = job!.settings.side): BacktestSettings => currentEnvelopeSettings({ ...fixedEnvelopeSettings(job!.settings), side,
-        interval: best.interval, symbol: row.symbol.replace(/USDT$/, ''), envelopeMaPeriod: String(best.maPeriod), envelopeDeviationPercent: String(best.deviationPercent) });
+      const settingFor = (row: OptimizedSymbol, best: EnvelopeStatisticsRow, side = job!.settings.side): BacktestSettings => {
+        const picked = settingsForStatisticsRow(job!.settings, best);
+        return {
+          ...currentEnvelopeSettings(fixedEnvelopeSettings({ ...picked, leverage: job!.settings.leverage })),
+          mode: 'ALL', side, symbol: row.symbol.replace(/USDT$/, ''),
+        };
+      };
       for (const row of job.rows) {
         parameters[row.symbol] = settingFor(row, row.best!);
         if (row.bestBySide) {

@@ -1,4 +1,5 @@
 import type { BacktestSettings, Strategy } from './types';
+import { isCurrentEnvelopeStatisticsVersion, statisticsCenterRange, statisticsPercentRange } from './envelopeStatistics';
 
 /** Which input form produced the history card. */
 export type BacktestHistorySettingsKind =
@@ -41,6 +42,7 @@ export function formatBacktestHistorySettings(
   settings: BacktestSettings,
   strategy: Strategy,
   kind: BacktestHistorySettingsKind = 'BACKTEST',
+  version?: string,
 ): string[] {
   const values: string[] = [];
   add(values, '방향', sideLabel(settings.side));
@@ -112,12 +114,20 @@ export function formatBacktestHistorySettings(
     addEnabled(values, settings.envelopeHalfCandleEnabled === true, '캔들 절반 엔벨 이내');
     addEnabled(values, settings.envelopeCandleFilterEnabled === true, '매수금지 캔들 필터');
 
+    const statistics = kind === 'ENVELOPE_STATISTICS' || kind === 'ENVELOPE_BATCH_STATS';
+    const optimized = isCurrentEnvelopeStatisticsVersion(version);
     if (strategy === 'ATR_ENVELOPE') {
       const atr = settings.atrEnvelope;
       add(values, 'EMA', atr?.emaPeriod ?? '3');
       add(values, 'ATR', atr?.atrPeriod ?? '3');
       add(values, 'N', atr?.atrMultiplier ?? '0.5');
       add(values, 'SL 배수', `${settings.atrEnvelopeStopMultiplier ?? '0'} ATR`);
+    } else if (statistics && optimized) {
+      add(values, '중심선 탐색', `${statisticsCenterRange}봉`);
+      add(values, '이격 탐색', statisticsPercentRange);
+      add(values, 'SL 탐색', statisticsPercentRange);
+    } else if (kind === 'ENVELOPE_BATCH_VIRTUAL' && optimized) {
+      values.push('전체통계의 종목·방향별 중심선·이격·SL 적용');
     } else {
       add(values, '엔벨로프 중심선 봉수', settings.envelopeMaPeriod ?? '20');
       add(values, '엔벨로프 이격', `${settings.envelopeDeviationPercent ?? '3'}%`);
@@ -125,7 +135,7 @@ export function formatBacktestHistorySettings(
     }
     addEnabled(values, settings.envelopeTrailingStopEnabled === true, '트레일링 스탑', `${settings.envelopeTrailingStopPercent ?? '3'}%`);
 
-    if (kind === 'ENVELOPE_STATISTICS' || kind === 'ENVELOPE_BATCH_STATS') {
+    if (statistics) {
       const options = settings.envelopeResultOptions;
       if (options) {
         add(values, '최소 진입횟수', options.minTrades);

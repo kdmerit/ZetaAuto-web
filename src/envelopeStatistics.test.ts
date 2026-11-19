@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { intervalSeconds } from './api';
 import { cacheCandles, openCacheDatabase, readValue, writeValue } from './database';
-import { executeEnvelopeStatistics, isCurrentEnvelopeStatisticsVersion, loadEnvelopeStatistics, selectedStatisticsIntervals, statisticsAnalysisWindow, statisticsIntervals, statisticsProgress, statisticsTotalFor, usesFiveEnvelopePeriods, type EnvelopeStatisticsJob } from './envelopeStatistics';
+import { envelopeOptimizerVersion, executeEnvelopeStatistics, isCurrentEnvelopeStatisticsVersion, loadEnvelopeStatistics, selectedStatisticsIntervals, settingsForStatisticsRow, statisticsAnalysisWindow, statisticsIntervals, statisticsPeriods, statisticsProgress, statisticsTotalFor, usesFiveEnvelopePeriods } from './envelopeStatistics';
 import { currentEnvelopeSettings } from './envelope';
 import { analysisWindow } from './marketData';
 import type { BacktestSettings, Candle } from './types';
@@ -45,10 +45,15 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('envelope breakout statistics', () => {
-  it('keeps v2.10.92 report totals without treating the body-only engine as current', () => {
-    expect(isCurrentEnvelopeStatisticsVersion('2.10.92')).toBe(false);
-    expect(usesFiveEnvelopePeriods('2.10.92')).toBe(true);
-    expect(statisticsTotalFor(settings, '2.10.92')).toBe(2000);
+  it.each(['2.10.92', '2.10.97'])('keeps the five-center grid for version %s', version => {
+    expect(isCurrentEnvelopeStatisticsVersion(version)).toBe(false);
+    expect(usesFiveEnvelopePeriods(version)).toBe(true);
+    expect(statisticsTotalFor(settings, version)).toBe(2000);
+  });
+  it('counts 10 centers × 100 deviations × 100 stops for each direction', () => {
+    expect(statisticsPeriods(envelopeOptimizerVersion)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    expect(statisticsTotalFor({ ...settings, side: 'LONG' })).toBe(100_000);
+    expect(statisticsTotalFor(settings)).toBe(200_000);
   });
   it('offers only 1h, 4h and 1d and uses the selected period for validation', () => {
     expect(statisticsIntervals).toEqual(['1h', '4h', '1d']);
@@ -58,15 +63,31 @@ describe('envelope breakout statistics', () => {
     expect(() => selectedStatisticsIntervals({ envelopeStatisticsInterval: '30m' } as unknown as BacktestSettings)).toThrow('통계 분석 주기');
   });
 
-  it('searches the selected hourly period with one opposite-band exit case', async () => {
-    await cacheCandles('BTCUSDT', '1h', rows('1h'));
-    await cacheCandles('BTCUSDT', '1m', lowerRows('1h'));
-    let final: EnvelopeStatisticsJob | null = null;
-    await executeEnvelopeStatistics({ settings: { ...settings, envelopeStatisticsInterval: '1h' } }, job => { final = structuredClone(job); }, new AbortController().signal);
-    const job = final as unknown as EnvelopeStatisticsJob;
+  it('simulates and restores every stop step independently of the saved manual SL', async () => {
+    const candles = rows('1h').slice(0, 210).map((row, index) => index === 200
+      ? { ...row, open: 99.9, low: 99.75, high: 100.25, close: 100 }
+      : { ...row, open: 100, low: 100, high: 100, close: 100 });
+    await cacheCandles('BTCUSDT', '1h', candles);
+    await cacheCandles('BTCUSDT', '1m', minuteRows(candles.slice(200)));
+    await executeEnvelopeStatistics({ settings: { ...settings, side: 'LONG', endDate: settings.startDate, endTime: '19:00',
+      envelopeStatisticsInterval: '1h', envelopeStopLossPercent: 'invalid' } }, () => {}, new AbortController().signal);
+    const job = (await loadEnvelopeStatistics())!;
     expect(job.status).toBe('COMPLETED'); expect(job.settings.envelopeStatisticsInterval).toBe('1h');
-    expect(job.rows.length).toBeGreaterThan(0); expect(job.rows.every(row => row.interval === '1h' && row.exitMode === 'OPPOSITE' && row.leverage === 5)).toBe(true);
+    expect(job.settings.envelopeStopLossPercent).toBeUndefined();
+    expect(job.rows.every(row => row.interval === '1h' && row.exitMode === 'OPPOSITE' && row.leverage === 5)).toBe(true);
+    expect([...new Set(job.rows.map(row => row.maPeriod))]).toEqual(statisticsPeriods(envelopeOptimizerVersion));
+    expect([...new Set(job.rows.map(row => row.deviationPercent))]).toEqual([0.1, 0.2]);
+    const stops = job.rows.filter(row => row.maPeriod === 1 && row.deviationPercent === 0.1);
+    expect(stops.map(row => row.stopLossPercent)).toEqual(Array.from({ length: 100 }, (_, index) => (index + 1) / 10));
+    expect(stops[0]!.returnPercent).toBeLessThan(0);
+    expect(stops[99]!.returnPercent).toBeGreaterThan(0);
+    expect(settingsForStatisticsRow(job.settings, stops[99]!)).toMatchObject({ envelopeMaPeriod: '1', envelopeDeviationPercent: '0.1', envelopeStopLossPercent: '10.0' });
     expect(statisticsProgress(job)).toBe(statisticsTotalFor(job.settings)); expect(await readValue('results', `envelope-statistics:${job.id}`)).not.toBeNull();
+    const paused = { ...job, status: 'PAUSED' as const, intervalIndex: 0, periodIndex: 0, sideIndex: 0, step: 1, stopStep: 2, rows: [stops[0]!], best: null, bestBySide: {} };
+    expect(statisticsProgress(paused)).toBe(1);
+    await writeValue('jobs', 'ENVELOPE_STATISTICS', paused);
+    await executeEnvelopeStatistics({ resumeId: paused.id }, () => {}, new AbortController().signal);
+    expect((await loadEnvelopeStatistics())!.rows).toEqual(job.rows);
     expect(fetch).not.toHaveBeenCalled();
   }, 30000);
 
@@ -81,23 +102,27 @@ describe('envelope breakout statistics', () => {
   }, 30000);
 
   it.each(['LONG', 'SHORT'] as const)('loads minutes before a completed daily %s half-range rejection could hide earlier entries', async side => {
-    const candles = rows('1d').map((row, index) => index < 200 ? row : {
-      ...row, open: 100, high: side === 'LONG' ? 104 : 107, low: side === 'LONG' ? 93 : 96, close: 100,
+    const exitPrice = side === 'LONG' ? 110 : 90;
+    const candles = rows('1d').map((row, index) => {
+      if (index < 200) return row;
+      if (index === 200) return { ...row, open: 100, high: side === 'LONG' ? 104 : 107, low: side === 'LONG' ? 93 : 96, close: 100 };
+      return { ...row, open: exitPrice, high: exitPrice, low: exitPrice, close: exitPrice };
     });
     const path = [[100, 100, 97, 97], [97, 104, 97, 104], [104, 104, 93, 93], [93, 100, 93, 100]];
-    const lower = candles.flatMap((parent, parentIndex) => Array.from({ length: 96 }, (_, index) => {
-      const raw = parentIndex >= 200 ? path[index] ?? [100, 100, 100, 100] : [100, 100, 100, 100];
-      const prices = side === 'LONG' ? raw : [200 - raw[0]!, 200 - raw[2]!, 200 - raw[1]!, 200 - raw[3]!];
+    const lower = candles.slice(200).flatMap((parent, parentIndex) => Array.from({ length: 96 }, (_, index) => {
+      const raw = path[index] ?? [100, 100, 100, 100];
+      const prices = parentIndex > 0 ? [exitPrice, exitPrice, exitPrice, exitPrice]
+        : side === 'LONG' ? raw : [200 - raw[0]!, 200 - raw[2]!, 200 - raw[1]!, 200 - raw[3]!];
       return { openTime: parent.openTime + index * 900, closeTime: parent.openTime + (index + 1) * 900,
         open: prices[0]!, high: prices[1]!, low: prices[2]!, close: prices[3]!, volume: parent.volume / 96 };
     }));
     await cacheCandles('BTCUSDT', '1d', candles);
-    await cacheCandles('BTCUSDT', '1m', minuteRows(lower.slice(200 * 96)));
+    await cacheCandles('BTCUSDT', '1m', minuteRows(lower));
     await executeEnvelopeStatistics({ settings: { ...settings, side, interval: '1d', envelopeStatisticsInterval: '1d' } }, () => {}, new AbortController().signal);
     const job = (await loadEnvelopeStatistics())!;
     expect(job.status).toBe('COMPLETED');
-    const threePercent = job.rows.filter(row => row.deviationPercent === 3);
-    expect(threePercent).toHaveLength(5);
+    const threePercent = job.rows.filter(row => row.deviationPercent === 3 && row.stopLossPercent === 3);
+    expect(threePercent).toHaveLength(10);
     expect(threePercent.every(row => row.side === side && row.entryCount > 0)).toBe(true);
     expect(fetch).not.toHaveBeenCalled();
   }, 30000);
@@ -120,6 +145,6 @@ describe('envelope breakout statistics', () => {
     await executeEnvelopeStatistics({ resumeId: paused.id }, () => {}, new AbortController().signal);
     const done = (await loadEnvelopeStatistics())!;
     expect(done.status).toBe('COMPLETED'); expect(done.settings.envelopeStatisticsInterval).toBe('1h');
-    expect(new Set(done.rows.map(row => `${row.side}:${row.interval}:${row.maPeriod}:${row.deviationPercent}:${row.exitMode}`)).size).toBe(done.rows.length);
+    expect(new Set(done.rows.map(row => `${row.side}:${row.interval}:${row.maPeriod}:${row.deviationPercent}:${row.stopLossPercent}`)).size).toBe(done.rows.length);
   }, 30000);
 });

@@ -27,6 +27,11 @@ describe('envelope input defaults and arrangement', () => {
     expect(html).toMatch(/class="selected"[^>]*>1D<|aria-pressed="true"[^>]*>1D</);
     if (view === 'SINGLE' || view === 'ALL') {
       expect(html).toMatch(/엔벨로프 중심선 봉수\s*<input[^>]*type="number"[^>]*min="1" max="240" step="1"[^>]*value="20"/);
+      expect(html).toMatch(/SL \(%\)[\s\S]*?<input[^>]*min="0.1"[^>]*max="20"[^>]*step="0.1"[^>]*value="3"/);
+    } else {
+      expect(html).toContain('중심선은 1~10봉을 1봉씩');
+      expect(html).toContain('이격과 SL은 각각 0.1~10.0%');
+      expect(html).not.toContain('SL (%)');
     }
     const rows = options(html);
     expect(rows).toHaveLength(7);
@@ -45,7 +50,6 @@ describe('envelope input defaults and arrangement', () => {
     expect(rows[6]).toContain('트레일링 스탑 적용');
     expect(rows[6]).not.toContain('checked=""');
     expect(html).toMatch(/트레일링 스탑 \(%\)[\s\S]*?<input[^>]*min="1"[^>]*max="100"[^>]*step="0.1"[^>]*value="3"/);
-    expect(html).toMatch(/SL \(%\)[\s\S]*?<input[^>]*min="0.1"[^>]*max="20"[^>]*step="0.1"[^>]*value="3"/);
     expect(html).not.toContain('MA20 아래에서만 매수 (롱)');
     expect(html).not.toContain('종가 &gt; 엔벨로프 상단 확정 시 청산');
   });

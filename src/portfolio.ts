@@ -785,30 +785,64 @@ function minuteEnvelopeAllowsEntry(definition: EnvelopeEntryDefinition, bar: Pre
   return parameters.envelopeCandleFilterEnabled !== true || envelopeCandleAllowsEntry(observation.context, side, [candle.close]);
 }
 
+interface EnvelopeMinuteRow {
+  symbol: string;
+  bar: PreparedBar;
+  parameters: BacktestSettings;
+  definitions: EnvelopeEntryDefinition[];
+  observation: EnvelopeMinuteObservation;
+}
+
+function* envelopeMinuteFrames(rows: (EnvelopeMinuteRow & { children: Candle[] })[]) {
+  // A single symbol already has chronological minutes. Build each frame only when needed.
+  if (rows.length === 1) {
+    const { children, ...row } = rows[0]!;
+    const minute = { ...children[0]!, parentOpenTime: row.bar.candle.openTime };
+    const entries = [{ ...row, minute }];
+    for (const child of children) {
+      Object.assign(minute, child);
+      minute.parentOpenTime = row.bar.candle.openTime;
+      yield entries;
+    }
+    return;
+  }
+  const frames = new Map<number, (EnvelopeMinuteRow & { minute: Candle & { parentOpenTime: number } })[]>();
+  for (const { children, ...row } of rows) for (const child of children) {
+    const entries = frames.get(child.openTime) ?? [];
+    entries.push({ ...row, minute: { ...child, parentOpenTime: row.bar.candle.openTime } });
+    frames.set(child.openTime, entries);
+  }
+  for (const [, entries] of [...frames].sort((a, b) => a[0] - b[0])) yield entries;
+}
+
 /** Local emulation of the live one-minute worker. SL/TS remain exchange-side intraminute stops. */
 function replayEnvelopeMinutes(state: PortfolioState, rows: { symbol: string; bar: PreparedBar }[], settings: BacktestSettings,
   openingBudget: number, options: ReplayOptions, occupiedAtOpen: Set<string>): number {
-  const frames = new Map<number, { symbol: string; bar: PreparedBar; minute: Candle & { parentOpenTime: number }; observation: EnvelopeMinuteObservation;
-    definitions: EnvelopeEntryDefinition[]; parameters: BacktestSettings }[]>();
+  const activeRows: (EnvelopeMinuteRow & { children: Candle[] })[] = [];
   for (const { symbol, bar } of rows) {
     const parameters = options.settingsForSymbol?.[symbol] ?? settings;
     const definitions = envelopeEntryDefinitions(bar, parameters, options.settingsForSymbolSide?.[symbol]);
     const children = bar.envelopeIntrabarCandles ?? [];
     if (!children.length && !state.positions[symbol] && !definitions.some(({ side, band, closeOnly }) =>
       envelopeEntryBandReached(bar.candle, band, side, closeOnly))) continue;
-    validateLowerTimeframeCandles(bar.candle, children, 60, '1분봉');
+    const openRange = options.validatedMinuteOpenRanges?.get(bar);
+    if (!openRange) {
+      validateLowerTimeframeCandles(bar.candle, children, 60, '1분봉');
+    } else if (!state.positions[symbol] && !definitions.some(({ side, closeOnly, price }) => {
+      const close = children.at(-1)!.close;
+      return side === 'LONG' ? (closeOnly ? close : openRange.low) <= price : (closeOnly ? close : openRange.high) >= price;
+    })) {
+      continue;
+    }
     const initial = { ...bar.candle, high: bar.candle.open, low: bar.candle.open, close: bar.candle.open };
     const observation: EnvelopeMinuteObservation = { candle: initial, quarter: { ...initial, closeTime: initial.openTime + 900 },
       ...(bar.envelopeCandleContext ? { context: structuredClone(bar.envelopeCandleContext) } : {}) };
-    for (const child of children) {
-      const entries = frames.get(child.openTime) ?? [];
-      entries.push({ symbol, bar, parameters, definitions, observation, minute: { ...child, parentOpenTime: bar.candle.openTime } });
-      frames.set(child.openTime, entries);
-    }
+    activeRows.push({ symbol, bar, parameters, definitions, observation, children });
   }
   const occupied = new Set(occupiedAtOpen);
   let budget = openingBudget;
-  for (const [, entries] of [...frames].sort((a, b) => a[0] - b[0])) {
+  const onlySymbol = rows.length === 1 ? rows[0]!.symbol : undefined;
+  for (const entries of envelopeMinuteFrames(activeRows)) {
     // Synchronize the account's marks before evaluating any allocation limit.
     for (const row of entries) {
       observeEnvelopeMinute(row.observation, row.minute, false);
@@ -884,6 +918,7 @@ function replayEnvelopeMinutes(state: PortfolioState, rows: { symbol: string; ba
     const equity = portfolioEquity(state);
     state.peak = Math.max(state.peak, equity);
     if (state.peak > 0) state.maxDrawdown = Math.max(state.maxDrawdown, (state.peak - equity) / state.peak * 100);
+    if (onlySymbol && occupied.has(onlySymbol) && !state.positions[onlySymbol]) break;
   }
   return budget;
 }
@@ -1356,6 +1391,8 @@ function replayNewHighRows(state: PortfolioState, rows: { symbol: string; bar: P
 export interface ReplayOptions {
   settingsForSymbol?: Record<string, BacktestSettings>;
   settingsForSymbolSide?: Record<string, Partial<Record<'LONG' | 'SHORT', BacktestSettings>>>;
+  /** Bounds from prevalidated minute candles, reused by each parameter replay. */
+  validatedMinuteOpenRanges?: WeakMap<PreparedBar, { low: number; high: number }>;
 }
 
 /**

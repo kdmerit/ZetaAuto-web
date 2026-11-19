@@ -27,14 +27,23 @@ export function compareEnvelopeRows(a: EnvelopeStatisticsRow, b: EnvelopeStatist
     || (b[other] ?? -Infinity) - (a[other] ?? -Infinity)
     || (b.profitRatioPercent ?? -Infinity) - (a.profitRatioPercent ?? -Infinity)
     || b.entryCount - a.entryCount || a.maxDrawdownPercent - b.maxDrawdownPercent
-    || a.maPeriod - b.maPeriod || a.deviationPercent - b.deviationPercent || (a.side ?? '').localeCompare(b.side ?? '');
+    || a.maPeriod - b.maPeriod || a.deviationPercent - b.deviationPercent
+    || (a.stopLossPercent ?? 0) - (b.stopLossPercent ?? 0) || (a.side ?? '').localeCompare(b.side ?? '');
 }
 export function selectedEnvelopeRows(rows: EnvelopeStatisticsRow[], options = defaultEnvelopeResultOptions): EnvelopeStatisticsRow[] {
   return rows.filter(row => matchesEnvelopeFilters(row, options)).sort((a, b) => compareEnvelopeRows(a, b, options));
 }
 export function envelopeBests(rows: EnvelopeStatisticsRow[], options = defaultEnvelopeResultOptions): { best: EnvelopeStatisticsRow | null; bestBySide: DirectionalBests } {
-  const selected = selectedEnvelopeRows(rows, options);
-  return { best: selected[0] ?? null, bestBySide: { LONG: selected.find(row => row.side === 'LONG') ?? null, SHORT: selected.find(row => row.side === 'SHORT') ?? null } };
+  let best: EnvelopeStatisticsRow | null = null;
+  const bestBySide: DirectionalBests = { LONG: null, SHORT: null };
+  for (const row of rows) {
+    if (!matchesEnvelopeFilters(row, options)) continue;
+    if (best === null || compareEnvelopeRows(row, best, options) < 0) best = row;
+    if (!row.side) continue;
+    const previous = bestBySide[row.side];
+    if (!previous || compareEnvelopeRows(row, previous, options) < 0) bestBySide[row.side] = row;
+  }
+  return { best, bestBySide };
 }
 export function betterFilteredEnvelopeSetting(row: EnvelopeStatisticsRow, previous?: EnvelopeStatisticsRow | null, options = defaultEnvelopeResultOptions): boolean {
   return matchesEnvelopeFilters(row, options) && (!previous || compareEnvelopeRows(row, previous, options) < 0);

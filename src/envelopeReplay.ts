@@ -1,6 +1,6 @@
 /** Fixed user leverage only; no contract-risk queries, leverage sweep, or automatic cap. */
 import type { PreparedSymbol } from './engine';
-import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
+import { initialPortfolio, portfolioResult, replayPortfolioBlock, type ReplayOptions } from './portfolio';
 import type { BacktestResult, BacktestSettings } from './types';
 import { envelopeParameters } from './envelope';
 
@@ -16,7 +16,7 @@ export function fixedEnvelopeSettings(settings: BacktestSettings): BacktestSetti
 
 export async function replayFixedEnvelope(
   document: PreparedSymbol, settings: BacktestSettings, seconds: number, signal: AbortSignal,
-  progress: (label: string) => Promise<void>,
+  progress: (label: string) => Promise<void>, options: ReplayOptions & { shouldYield?: () => boolean } = {},
 ): Promise<BacktestResult> {
   const parameters = fixedEnvelopeSettings(settings);
   const state = initialPortfolio(Number(parameters.initialCapitalUsdt));
@@ -24,9 +24,11 @@ export async function replayFixedEnvelope(
   for (let cursor = 0; cursor < document.bars.length; cursor += blockSize) {
     signal.throwIfAborted();
     const bars = document.bars.slice(cursor, cursor + blockSize);
-    replayPortfolioBlock(state, [{ ...document, bars }], parameters, bars[0]!.candle.openTime, bars.at(-1)!.candle.closeTime, seconds);
-    await progress(`${parameters.leverage}배 고정 · ${Math.min(cursor + blockSize, document.bars.length)}/${document.bars.length}봉`);
-    await yieldAnalysis();
+    replayPortfolioBlock(state, [{ ...document, bars }], parameters, bars[0]!.candle.openTime, bars.at(-1)!.candle.closeTime, seconds, options);
+    if (options.shouldYield?.() ?? true) {
+      await progress(`${parameters.leverage}배 고정 · ${Math.min(cursor + blockSize, document.bars.length)}/${document.bars.length}봉`);
+      await yieldAnalysis();
+    }
   }
   return portfolioResult(state, parameters);
 }
