@@ -23,7 +23,7 @@ describe('backtest history setting summaries', () => {
     };
 
     const summary = formatBacktestHistorySettings(settings, 'ENVELOPE').join(' · ');
-    expect(summary.startsWith('1D · 2026-01-01 ~ 2026-02-01 · 가상 초기자금 1000 USDT · 고정 베팅액 500 USDT · 레버리지 10배')).toBe(true);
+    expect(summary.startsWith('방향 롱 + 숏 · 1D · 2026-01-01 ~ 2026-02-01 · 가상 초기자금 1000 USDT · 고정 베팅액 500 USDT · 레버리지 10배')).toBe(true);
     expect(summary).toContain('MA20 위·아래 방향 필터 적용');
     expect(summary).toContain('캔들 절반 엔벨 이내 적용');
     expect(summary).not.toContain('12:34');

@@ -1058,7 +1058,7 @@ function HistoryList({
             <strong>{entry.symbol === 'ALL' ? '전체종목' : `${entry.symbol}USDT`}</strong>
             <em className={entry.result.returnPercent >= 0 ? 'positive' : 'negative'}>{percent(entry.result.returnPercent)}</em>
           </span>
-          <span className="history-card-settings">{formatBacktestHistorySettings(entry.settings, entry.strategy).join(' · ')}</span>
+          <span className="history-card-settings">{formatBacktestHistorySettings(entry.settings, entry.strategy).map(value => <span className="history-card-setting" key={value}>{value}</span>)}</span>
           <small>저장 {new Date(entry.savedAt).toLocaleDateString('ko-KR')}</small>
         </button>
       ))}

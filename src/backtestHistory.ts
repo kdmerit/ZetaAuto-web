@@ -42,14 +42,15 @@ export function formatBacktestHistorySettings(
   strategy: Strategy,
   kind: BacktestHistorySettingsKind = 'BACKTEST',
 ): string[] {
-  const values: string[] = [intervalFor(settings, kind).toUpperCase()];
+  const values: string[] = [];
+  add(values, '방향', sideLabel(settings.side));
+  values.push(intervalFor(settings, kind).toUpperCase());
   values.push(`${settings.startDate} ~ ${valueOrCurrent(settings.endDate)}`);
   add(values, '가상 초기자금', `${settings.initialCapitalUsdt} USDT`);
   if (strategy !== 'NEW_HIGH') {
     add(values, '고정 베팅액', `${settings.betAmountUsdt} USDT`);
   }
   add(values, '레버리지', `${settings.leverage}배`);
-  add(values, '방향', sideLabel(settings.side));
   add(values, '분석 대상', settings.mode === 'ALL' ? '전체 종목' : '개별 종목');
 
   if (strategy === 'NEW_HIGH') {
