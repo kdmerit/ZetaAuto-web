@@ -41,15 +41,18 @@ describe('envelope parameters and causal bands', () => {
   it.each(['0', '0.09', '20.1', '1.25', '-1', 'NaN', ''])('rejects invalid offset %s', value => {
     expect(() => envelopeParameters({ ...settings, envelopeDeviationPercent: value })).toThrow();
   });
-  it.each(envelopePeriods)('supports SMA%d, using only prior closed prices', period => {
-    const rows = Array.from({ length: 121 }, (_, i) => candle(i, [i + 1, i + 1, i + 1, i + 1]));
-    expect(priorMovingAverages(rows, period)[120]).toBe((121 - period + 120) / 2);
-    const changed = rows.map(row => ({ ...row })); changed[120]!.close = 9999;
-    expect(priorMovingAverages(changed, period)[120]).toBe(priorMovingAverages(rows, period)[120]);
+  it.each([1, ...envelopePeriods, 137, 240])('supports SMA%d, using only prior closed prices', period => {
+    expect(envelopeParameters({ ...settings, envelopeMaPeriod: String(period) }).period).toBe(period);
+    const rows = Array.from({ length: period + 1 }, (_, i) => candle(i, [i + 1, i + 1, i + 1, i + 1]));
+    expect(priorMovingAverages(rows, period)[period]).toBe((1 + period) / 2);
+    rows[period]!.close = 9999;
+    expect(priorMovingAverages(rows, period)[period]).toBe((1 + period) / 2);
     expect(priorMovingAverages(rows, period)[period - 1]).toBeNull();
   });
-  it('rejects unlisted periods and exit modes', () => {
-    expect(() => envelopeParameters({ ...settings, envelopeMaPeriod: '30' })).toThrow();
+  it('rejects out-of-range or non-integer periods and unknown exit modes', () => {
+    for (const period of ['0', '241', '-1', '3.5', '2e2', '']) {
+      expect(() => envelopeParameters({ ...settings, envelopeMaPeriod: period })).toThrow('엔벨로프 중심선 봉수');
+    }
     expect(() => envelopeParameters({ ...settings, envelopeExitMode: 'INVALID' as EnvelopeExitMode })).toThrow();
   });
   it('projects fixed original-period bands on smaller display bars without future closes', () => {

@@ -25,6 +25,9 @@ describe('envelope input defaults and arrangement', () => {
     values.set('zetaauto.web.envelope.view', view);
     const html = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
     expect(html).toMatch(/class="selected"[^>]*>1D<|aria-pressed="true"[^>]*>1D</);
+    if (view === 'SINGLE' || view === 'ALL') {
+      expect(html).toMatch(/엔벨로프 중심선 봉수\s*<input[^>]*type="number"[^>]*min="1" max="240" step="1"[^>]*value="20"/);
+    }
     const rows = options(html);
     expect(rows).toHaveLength(7);
     expect(rows[0]).toContain('MA20 위에서만 매수 (롱)');
@@ -98,7 +101,8 @@ describe('envelope input defaults and arrangement', () => {
     expect(html).not.toContain('MA20 아래에서만 매수 (롱)');
     expect(html).not.toContain('종가 &gt; 엔벨로프 상단 확정 시 청산 (롱)');
     expect(html).not.toContain('첫 번째는 롱 저가');
-    expect(ratio).toBeLessThan(html.indexOf('<h2>엔벨로프 중심선 봉수</h2>'));
+    expect(ratio).toBeLessThan(html.indexOf('엔벨로프 중심선 봉수'));
+    expect(html.indexOf('엔벨로프 중심선 봉수')).toBeLessThan(html.indexOf('엔벨로프 이격 (%)'));
   });
 
   it('shows and copies the body and daily/four-hour wick exclusions', () => {
@@ -120,9 +124,10 @@ describe('envelope input defaults and arrangement', () => {
   });
 
   it('retains explicit saved intervals, deviations and unchecked filters', () => {
-    saveSettings('ENVELOPE', { ...defaultSettings('ENVELOPE'), interval: '4h', envelopeDeviationPercent: '7.5', envelopeStopLossPercent: '1.5', envelopeHalfCandleEnabled: false, envelopeCandleFilterEnabled: true, envelopeMa20Enabled: false, envelopeCloseOnConfirmedBreakout: true });
+    saveSettings('ENVELOPE', { ...defaultSettings('ENVELOPE'), interval: '4h', envelopeMaPeriod: '137', envelopeDeviationPercent: '7.5', envelopeStopLossPercent: '1.5', envelopeHalfCandleEnabled: false, envelopeCandleFilterEnabled: true, envelopeMa20Enabled: false, envelopeCloseOnConfirmedBreakout: true });
     const html = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
     expect(html).toContain('중심선 · 매매 기준 4H');
+    expect(html).toMatch(/엔벨로프 중심선 봉수\s*<input[^>]*value="137"/);
     expect(html).toMatch(/엔벨로프 이격 \(%\)[\s\S]*?<input[^>]*value="7.5"/);
     expect(options(html)[0]).not.toContain('checked=""');
     expect(options(html)[3]).toContain('종가에서만 매수');

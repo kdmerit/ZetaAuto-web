@@ -9,9 +9,8 @@ const candidate: EnvelopeStatisticsRow = { interval: '4h', side: 'LONG', maPerio
   maxDrawdownPercent: 1, openPositionCount: 0 };
 
 describe('current envelope model settings', () => {
-  it('offers only five periods and migrates a removed period and daily trend preference', () => {
-    expect(envelopePeriods).toEqual([3, 5, 20, 60, 120]);
-    expect(currentEnvelopeSettings({ ...base, envelopeMaPeriod: '10', envelopeDailyTrend: true })).toMatchObject({ envelopeMaPeriod: '20', envelopeEntryMode: 'BAND_TOUCH' });
+  it('keeps a custom SMA period and drops the old daily trend preference', () => {
+    expect(currentEnvelopeSettings({ ...base, envelopeMaPeriod: '10', envelopeDailyTrend: true })).toMatchObject({ envelopeMaPeriod: '10', envelopeEntryMode: 'BAND_TOUCH' });
     expect(currentEnvelopeSettings({ ...base, envelopeDailyTrend: true }).envelopeDailyTrend).toBeUndefined();
   });
   it('preserves the selected 1h/4h/1d trading and statistics periods', () => {
@@ -22,6 +21,7 @@ describe('current envelope model settings', () => {
   });
 
   it('keeps the inclusive result filters and one fixed opposite-band exit case', () => {
+    expect(envelopePeriods).toEqual([3, 5, 20, 60, 120]);
     expect(qualifiesEnvelopeSetting(candidate)).toBe(true); expect(betterEnvelopeSetting(candidate)).toBe(true);
     expect(qualifiesEnvelopeSetting({ ...candidate, entryCount: 1 })).toBe(false);
     expect(statisticsTotalFor({ ...base, envelopeStatisticsInterval: '1h' })).toBe(2000);

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ApiContext } from '../api';
 import { useAnalysisBusy } from '../analysisActivity';
 import { loadSettings, saveSettings } from '../storage';
-import { currentEnvelopeSettings, envelopeExitLabels, envelopeMa20FilterLabel } from '../envelope';
+import { currentEnvelopeSettings, envelopeExitLabels, envelopeMa20FilterLabel, envelopePeriod, envelopePeriods } from '../envelope';
 import { canResumeEnvelopeBatch, envelopeBatchView, loadEnvelopeBatchHistory, loadEnvelopeBatchReport, saveEnvelopeBatchSelection, validateVirtualSettings, virtualPeriodRelation, type BatchHistoryEntry, type EnvelopeBatchKind, type EnvelopeBatchView, type OptimizedSymbol } from '../envelopeBatch';
 import { isCurrentEnvelopeStatisticsVersion, isDirectionalStatisticsVersion, isFixedEnvelopeStatisticsVersion, optimalSettingCriteria, selectedStatisticsSides, settingsForStatisticsRow, statisticsAnalysisWindow, statisticsIntervalLabel, statisticsIntervals, statisticsSideLabel, type StatisticsSide } from '../envelopeStatistics';
 import { compareEnvelopeRows, defaultEnvelopeResultOptions, resultSortLabel, validateEnvelopeResultOptions } from '../envelopeResults';
@@ -25,7 +25,11 @@ const views: { id: View; label: string }[] = [{ id: 'SINGLE', label: '개별분�
 const num = (value: number | undefined | null): string => value == null ? '—' : value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
 function readSettings(view: string): BacktestSettings {
   const fallback = { ...loadSettings('ENVELOPE', defaultSettings('ENVELOPE')), mode: view === 'SINGLE_STATS' ? 'SINGLE' as const : 'ALL' as const, envelopeRisk: undefined, envelopeStatisticsInterval: '1d' as const };
-  try { return currentEnvelopeSettings({ ...fallback, ...JSON.parse(localStorage.getItem(`zetaauto.web.envelope.${view}.settings`) ?? '{}'), mode: fallback.mode }); } catch { return currentEnvelopeSettings(fallback); }
+  let settings = fallback;
+  try { settings = { ...fallback, ...JSON.parse(localStorage.getItem(`zetaauto.web.envelope.${view}.settings`) ?? '{}'), mode: fallback.mode }; } catch { /* Use the last ordinary settings if statistics preferences are unreadable. */ }
+  // Statistics searches its preset periods independently of the manual analysis input.
+  const period = Number(settings.envelopeMaPeriod);
+  return currentEnvelopeSettings({ ...settings, envelopeMaPeriod: String(envelopePeriods.includes(period) ? period : envelopePeriod) });
 }
 function storeSettings(view: string, settings: BacktestSettings): void { try { localStorage.setItem(`zetaauto.web.envelope.${view}.settings`, JSON.stringify(settings)); } catch { /* Keep inputs usable without storage. */ } }
 function validateSearch(settings: BacktestSettings): void {

@@ -3,6 +3,8 @@ import { atrEnvelopeParameters, defaultAtrEnvelopeInputs, parseAtrEnvelopeMultip
 import type { AtrEnvelopeParameters, BacktestInterval, BacktestSettings, Candle, ChartData, EnvelopeBand, EnvelopeExitMode, Strategy } from './types';
 
 export const envelopePeriod = 20;
+export const envelopeMaxPeriod = 240;
+// Candidate periods for the automatic statistics sweep.
 export const envelopePeriods = [3, 5, 20, 60, 120];
 export const legacyEnvelopePeriods = [5, 10, 20, 40, 60, 80, 100, 120];
 export const envelopeModelVersion = '2.10.97';
@@ -42,7 +44,7 @@ export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSet
   const statisticsInterval = settings.envelopeStatisticsInterval === '4h' || settings.envelopeStatisticsInterval === '1d' ? settings.envelopeStatisticsInterval : '1h';
   const { envelopeDailyTrend: _trend, ...current } = settings;
   return { ...current, interval, envelopeStatisticsInterval: statisticsInterval,
-    envelopeMaPeriod: envelopePeriods.includes(Number(settings.envelopeMaPeriod)) ? settings.envelopeMaPeriod : '20',
+    envelopeMaPeriod: settings.envelopeMaPeriod ?? String(envelopePeriod),
     envelopeMa20Enabled: settings.envelopeMa20Enabled === true,
     envelopeCloseOnCenterReturn: settings.envelopeCloseOnCenterReturn === true,
     envelopeSideRatio50Enabled: settings.envelopeSideRatio50Enabled === true,
@@ -110,8 +112,11 @@ export function envelopeParameters(settings: BacktestSettings): { percent: numbe
   }
   const exit = settings.envelopeExitMode ?? 'OPPOSITE';
   if (!envelopeExitModes.includes(exit)) throw new Error('엔벨로프 청산 방식을 선택해 주세요.');
-  const period = Number(settings.envelopeMaPeriod ?? '20');
-  if (!envelopePeriods.includes(period)) throw new Error('중심선 봉수는 3·5·20·60·120 중에서 선택해 주세요.');
+  const periodValue = settings.envelopeMaPeriod ?? String(envelopePeriod);
+  const period = Number(periodValue);
+  if (!/^\d+$/.test(periodValue) || period < 1 || period > envelopeMaxPeriod) {
+    throw new Error(`엔벨로프 중심선 봉수는 1~${envelopeMaxPeriod} 정수로 입력해 주세요.`);
+  }
   // Archived inputs did not separate SL from the band width. New settings
   // always carry their independent SL, defaulted by currentEnvelopeSettings.
   const stopValue = settings.envelopeStopLossPercent ?? value;

@@ -35,7 +35,7 @@ import { chartTimestamp, mergeChartPages } from '../chartData';
 import { chartAtInterval, withChartExecutionTimes } from '../chartIntervals';
 import { serverSettingsSnapshot } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
-import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvelopeSettings, currentPullbackSettings, defaultAtrEnvelopeStopMultiplier, envelopeParameters, envelopePeriods, isEnvelopeStrategy, pullbackEnvelopeParameters } from '../envelope';
+import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvelopeSettings, currentPullbackSettings, defaultAtrEnvelopeStopMultiplier, envelopeMaxPeriod, envelopeParameters, envelopePeriod, isEnvelopeStrategy, pullbackEnvelopeParameters } from '../envelope';
 import { atrEnvelopeFields, atrEnvelopeMultiplierInput, defaultAtrEnvelopeInputs } from '../marketIndicators';
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
@@ -112,7 +112,7 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     envelopeDeviationPercent: strategy === 'ATR_ENVELOPE' ? undefined : strategy === 'ENVELOPE' ? '3' : '0.5',
     ...(strategy === 'ATR_ENVELOPE' ? { atrEnvelope: { ...defaultAtrEnvelopeInputs }, atrEnvelopeStopMultiplier: defaultAtrEnvelopeStopMultiplier } : {}),
     envelopeStatisticsInterval: strategy === 'ENVELOPE' ? '1d' : undefined,
-    envelopeMaPeriod: strategy === 'ATR_ENVELOPE' ? undefined : '20',
+    envelopeMaPeriod: strategy === 'ATR_ENVELOPE' ? undefined : String(envelopePeriod),
     envelopeExitMode: 'OPPOSITE',
     envelopeMoveSlOnCenter: false,
     envelopeEntryMode: 'BAND_TOUCH',
@@ -968,8 +968,11 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                   <small>0.0~20.0 · 0은 사용 안 함 · 진입에 사용한 ATR 기준<br />롱 매수가−ATR×배수 / 숏 매수가+ATR×배수</small>
                 </label>
               </> : <>
-                <h2>엔벨로프 중심선 봉수</h2>
-                <div className="segmented four envelope-periods">{envelopePeriods.map(period => <button key={period} type="button" className={Number(settings.envelopeMaPeriod ?? '20') === period ? 'selected' : ''} onClick={() => update('envelopeMaPeriod', String(period))}>MA{period}</button>)}</div>
+                <label className="field-label">엔벨로프 중심선 봉수
+                  <input type="number" inputMode="numeric" min="1" max={envelopeMaxPeriod} step="1"
+                    value={settings.envelopeMaPeriod ?? String(envelopePeriod)} onChange={event => update('envelopeMaPeriod', event.target.value)} />
+                  <small>1~{envelopeMaxPeriod} 정수 · 기본 {envelopePeriod}봉</small>
+                </label>
                 <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '3'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용</small></label>
                 <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
               </>}

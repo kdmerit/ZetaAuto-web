@@ -258,6 +258,9 @@ async function executeWithLease(
       await checkpoint();
     }
     const seconds = intervalSeconds(job.settings.interval);
+    const warmupBars = job.strategy === 'ENVELOPE' ? Math.max(envelopeWarmupBars, envelopeParameters(job.settings).period) : envelopeWarmupBars;
+    const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings)
+      : job.strategy === 'CANDLE_BREAKOUT' ? candleBreakoutWarmup(job.settings) : warmupBars * seconds;
     while (job.blockStart < job.end) {
       signal.throwIfAborted();
       if (!job.universe.length) throw new Error('캔들을 확보할 수 있는 종목이 없습니다. 분석 기간의 데이터를 확인해 주세요.');
@@ -267,9 +270,6 @@ async function executeWithLease(
         signal.throwIfAborted();
         const instrument = job.universe[job.cursor]!;
         const activeJob = job;
-        const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings)
-          : job.strategy === 'CANDLE_BREAKOUT' ? candleBreakoutWarmup(job.settings)
-            : envelopeWarmupBars * seconds;
         try {
           let candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
           const dailySeconds = intervalSeconds('1d');

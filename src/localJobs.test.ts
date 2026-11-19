@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cacheCandles, lease, openCacheDatabase, readValue, writeValue } from './database';
+import { chartForLocalTrade } from './localBacktest';
 import { canResumeLocalJob, engineVersionFor, executeLocalJob, loadLocalJob, loadLocalResult, type LocalJobView } from './localJobs';
 import { ensureCandles, instrumentEligibility, listInstruments, MissingCandleError } from './marketData';
 import { advanceAtrEnvelope, atrEnvelopeParameters, type AtrEnvelopeState } from './marketIndicators';
@@ -139,6 +140,42 @@ describe('durable local analysis', () => {
       const intervals = new Set(vi.mocked(ensureCandles).mock.calls.map(call => call[1]));
       expect(intervals).toEqual(new Set(['4h', '1m']));
     }
+  });
+  it('uses all 240 prior closes from the first analysis candle and the first visible chart candle', async () => {
+    const day = 86400;
+    const end = origin + 10 * day;
+    const chartEnd = origin + 2 * day;
+    const chartStart = chartEnd - 300 * day;
+    const firstCached = chartStart - 240 * day;
+    const rows = Array.from({ length: (end - firstCached) / day }, (_, index): Candle => {
+      const openTime = firstCached + index * day;
+      const earlierCloses = openTime >= origin - 240 * day && openTime < origin - 200 * day;
+      const price = openTime === origin ? 98 : openTime === origin + day ? 108 : earlierCloses ? 112 : 100;
+      return { openTime, closeTime: openTime + day, open: price, high: price, low: price, close: price, volume: 1440 };
+    });
+    vi.mocked(listInstruments).mockResolvedValue([{ symbol: 'BTCUSDT', launchAt: 0 }]);
+    const actual = await vi.importActual<typeof import('./marketData')>('./marketData');
+    vi.mocked(ensureCandles).mockImplementation(actual.ensureCandles);
+    await cacheCandles('BTCUSDT', '1d', rows);
+    await cacheCandles('BTCUSDT', '1m', minuteRows(rows.filter(row => row.openTime >= origin && row.openTime < chartEnd)));
+    const fetcher = vi.fn(() => { throw new Error('All required candle data is already cached'); });
+    vi.stubGlobal('fetch', fetcher);
+
+    await executeLocalJob({ strategy: 'ENVELOPE', settings: {
+      ...settings, mode: 'SINGLE', symbol: 'BTC', interval: '1d', side: 'LONG', endDate: '2026-01-11', endTime: '09:00',
+      envelopeMaPeriod: '240', envelopeDeviationPercent: '3', envelopeHalfCandleEnabled: false,
+    } }, () => {}, new AbortController().signal);
+    const completed = (await loadLocalJob('ENVELOPE'))!;
+    expect(completed).toMatchObject({ status: 'COMPLETED', settings: { envelopeMaPeriod: '240' }, result: { closedTradeCount: 1 } });
+    const trade = completed.result!.recentTrades[0]!;
+    expect(trade).toMatchObject({ entryAt: origin, exitAt: origin + day, signal: { envelopeMaPeriod: 240, envelopeCenter: 102 } });
+    expect(vi.mocked(ensureCandles).mock.calls.find(call => call[1] === '1d')?.[2]).toBe(origin - 240 * day);
+
+    const chart = await chartForLocalTrade(completed.result!, trade, completed.settings, chartEnd);
+    expect(chart.envelope).toMatchObject({ period: 240 });
+    expect(chart.envelope?.bands[0]).toMatchObject({ openTime: chartStart, center: 100 });
+    expect(chart.envelope?.bands.find(band => band.openTime === origin)?.center).toBe(102);
+    expect(fetcher).not.toHaveBeenCalled();
   });
   it.each([
     { mode: 'SINGLE', stopEnabled: true },

@@ -4,7 +4,7 @@ import { buildLocalChart } from './engine';
 import { loadLocalJob, loadLocalResult, type LocalJobView } from './localJobs';
 import { ensureCandles, listInstruments } from './marketData';
 import { saveBacktestHistory, saveCachedResult } from './storage';
-import { projectEnvelopeBands } from './envelope';
+import { envelopeWarmupBars, projectEnvelopeBands } from './envelope';
 import { atrWindowSeconds } from './atr';
 import { candleBreakoutWarmup } from './candleBreakout';
 import { enrichMarketCandles, projectAtrEnvelopeBands } from './marketIndicators';
@@ -107,8 +107,9 @@ export async function chartForLocalTrade(
   const start = end - 300 * seconds;
   const symbol = trade.symbol === 'LOCAL' ? `${settings.symbol.replace(/USDT$/i, '').toUpperCase()}USDT` : trade.symbol;
   const instrument = (await listInstruments(symbol))[0] ?? { symbol, launchAt: 0 };
+  const indicatorWarmup = Math.max(envelopeWarmupBars, trade.signal.envelopeMaPeriod ?? 0) * seconds;
   const warmup = trade.signal.strategy === 'CANDLE_BREAKOUT' ? candleBreakoutWarmup(settings)
-    : trade.signal.strategy === 'NEW_HIGH' || trade.signal.strategy === 'VOLATILITY' ? Math.max(atrWindowSeconds + seconds, 200 * seconds) : 200 * seconds;
+    : trade.signal.strategy === 'NEW_HIGH' || trade.signal.strategy === 'VOLATILITY' ? Math.max(atrWindowSeconds + seconds, indicatorWarmup) : indicatorWarmup;
   const atrParameters = trade.signal.atrEnvelope;
   const seedFrom = result.atrEnvelopeSeedFrom ?? start - warmup;
   const from = atrParameters ? Math.min(start - warmup, seedFrom) : start - warmup;
