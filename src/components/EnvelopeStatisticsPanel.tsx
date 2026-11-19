@@ -7,6 +7,7 @@ import { defaultEnvelopeResultOptions, envelopeBests, resultSortLabel, selectedE
 import { EnvelopeResultControls } from './EnvelopeResultControls';
 import { loadEnvelopeStatisticsHistory, loadEnvelopeStatisticsReport, type EnvelopeStatisticsHistoryEntry } from '../envelopeStatisticsHistory';
 import { ProgressBar } from './ProgressBar';
+import { formatBacktestHistorySettings } from '../backtestHistory';
 
 type Metric = 'returnPercent' | 'profitUsdt' | 'winCount' | 'winRatePercent' | 'entryCount';
 const metrics: Record<Metric, string> = { returnPercent: '수익률', profitUsdt: '순손익', winCount: '수익횟수', winRatePercent: '승률', entryCount: '진입횟수' };
@@ -175,8 +176,8 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
     {historyOpen ? <div className="history-list envelope-stat-history" aria-label="개별통계 이력">
       {historyEntries.length ? historyEntries.map(entry => <button type="button" className="history-card" key={entry.id} disabled={historyLoading || running || disabled} onClick={() => { void openHistory(entry); }}>
         <span className="history-card-heading"><strong>{entry.settings.symbol.toUpperCase().replace(/USDT$/, '')} 개별통계</strong>{entry.bestBySide ? Object.entries(entry.bestBySide).map(([side, value]) => <em key={side} className={value !== null && value < 0 ? 'negative' : 'positive'}>{statisticsSideLabel(side as StatisticsSide)} 최고 {value == null ? '—' : `${number(value)}%`}</em>) : <em>이전 {entry.settings.side === 'BOTH' ? '롱 + 숏 합산' : entry.settings.side === 'LONG' ? '롱' : '숏'} 최고 {entry.bestReturnPercent === null ? '—' : `${number(entry.bestReturnPercent)}%`}</em>}</span>
-        <span>{entry.settings.startDate} {entry.settings.startTime} ~ {entry.settings.endDate || '현재'} {entry.settings.endDate ? entry.settings.endTime : ''}</span>
-        <small>{statisticsIntervalLabel(entry.settings)} · {entry.comparedCount.toLocaleString()}개 조건 비교 · 저장 {new Date(entry.savedAt).toLocaleString('ko-KR')}</small>
+        <span className="history-card-settings">{formatBacktestHistorySettings(entry.settings, 'ENVELOPE', 'ENVELOPE_STATISTICS').join(' · ')}</span>
+        <small>{entry.comparedCount.toLocaleString()}개 조건 비교 · 저장 {new Date(entry.savedAt).toLocaleString('ko-KR')}</small>
       </button>) : <p className="muted history-empty">{settings.mode === 'SINGLE' ? `${historySymbol || '해당 종목'} ` : ''}개별통계 이력이 없습니다.</p>}
     </div> : null}
     {error && error !== job?.message ? <p className="error" role="alert">{error}</p> : null}

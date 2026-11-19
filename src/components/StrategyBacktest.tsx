@@ -48,6 +48,7 @@ import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
 import { currentNewHighSettings, newHighBreakoutCandleMaxMultiplier, newHighBreakoutCandleMinMultiplier, newHighPeriod, newHighRiskAmount, newHighRules, newHighSlMultiplier, newHighTpMultiplier, newHighTrailingStopMultiplier } from '../newHigh';
 import { currentReferenceSettings, referenceRules, referenceTpPercent } from '../reference';
+import { formatBacktestHistorySettings } from '../backtestHistory';
 
 function strategySettings(strategy: Strategy, settings: BacktestSettings): BacktestSettings {
   switch (strategy) {
@@ -244,12 +245,6 @@ function defaultRequest(settings: BacktestSettings, strategy: Strategy): Backtes
 
 function historyScopeSymbol(settings: BacktestSettings): string {
   return settings.mode === 'ALL' ? 'ALL' : baseSymbol(settings.symbol);
-}
-
-function historyPeriod(settings: BacktestSettings): string {
-  const start = `${settings.startDate} ${settings.startTime}`;
-  const end = settings.endDate ? `${settings.endDate} ${settings.endTime}` : '현재';
-  return `${start} ~ ${end}`;
 }
 
 function restoredServerJob(entry: BacktestHistoryEntry): ServerJob {
@@ -1063,7 +1058,7 @@ function HistoryList({
             <strong>{entry.symbol === 'ALL' ? '전체종목' : `${entry.symbol}USDT`}</strong>
             <em className={entry.result.returnPercent >= 0 ? 'positive' : 'negative'}>{percent(entry.result.returnPercent)}</em>
           </span>
-          <span>{entry.interval.toUpperCase()} · 레버리지 {entry.settings.leverage}배 · {historyPeriod(entry.settings)}</span>
+          <span className="history-card-settings">{formatBacktestHistorySettings(entry.settings, entry.strategy).join(' · ')}</span>
           <small>저장 {new Date(entry.savedAt).toLocaleDateString('ko-KR')}</small>
         </button>
       ))}
