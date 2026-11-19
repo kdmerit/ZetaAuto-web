@@ -46,6 +46,7 @@ import { EnvelopeStopLossControl, EnvelopeTrailingStopControl } from './Envelope
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
+import { useBacktestScreenWakeLock } from '../screenWakeLock';
 import { currentNewHighSettings, newHighBreakoutCandleMaxMultiplier, newHighBreakoutCandleMinMultiplier, newHighPeriod, newHighRiskAmount, newHighRules, newHighSlMultiplier, newHighTpMultiplier, newHighTrailingStopMultiplier } from '../newHigh';
 import { currentReferenceSettings, referenceRules, referenceTpPercent } from '../reference';
 import { formatBacktestHistorySettings } from '../backtestHistory';
@@ -279,6 +280,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
   const [expanded, setExpanded] = useState(false);
   const [result, setResult] = useState<BacktestResult | null>(() => forcedMode ? null : loadCachedResult(strategy));
   const [serverJob, setServerJob] = useState<ServerJob | null>(null);
+  useBacktestScreenWakeLock(serverJob?.status === 'QUEUED' || serverJob?.status === 'RUNNING');
   const [progress, setProgress] = useState({ phase: '대기 중', completed: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -368,7 +370,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     const unsubscribe = subscribeLocalBacktest(strategy, event => {
       if (event.type === 'UPDATE') receive(event.view);
       else if (event.type === 'ERROR') { setError(event.message); setRunning(false); }
-      else setRunning(false);
+      else setRunning(event.type === 'START');
     });
     void restoreLocalBacktest(strategy).then(async local => {
       if (requestId !== resultRequestRef.current) return;

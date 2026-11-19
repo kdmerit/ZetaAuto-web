@@ -11,7 +11,7 @@ import { enrichMarketCandles, projectAtrEnvelopeBands } from './marketIndicators
 import type { BacktestResult, BacktestSettings, BacktestTrade, ChartData, Strategy } from './types';
 import { loadLocalWeeklyUniverse, saveLocalWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
 
-type LocalEvent = { type: 'UPDATE'; view: LocalJobView } | { type: 'ERROR'; message: string } | { type: 'IDLE' };
+type LocalEvent = { type: 'UPDATE'; view: LocalJobView } | { type: 'ERROR'; message: string } | { type: 'START' | 'IDLE' };
 const listeners = new Map<Strategy, Set<(event: LocalEvent) => void>>();
 const views = new Map<Strategy, LocalJobView>();
 let worker: Worker | null = null;
@@ -86,6 +86,7 @@ export function startLocalBacktest(strategy: Strategy, settings: BacktestSetting
   };
   instance.postMessage({ type: 'START', strategy, settings, resumeId,
     ...(settings.mode === 'ALL' ? { universeSnapshot: loadLocalWeeklyUniverse() } : {}) });
+  notify(strategy, { type: 'START' });
 }
 
 export function pauseLocalBacktest(strategy: Strategy): void {

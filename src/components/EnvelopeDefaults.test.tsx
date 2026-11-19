@@ -32,6 +32,9 @@ describe('envelope input defaults and arrangement', () => {
       expect(html).toContain('중심선은 1~10봉을 1봉씩');
       expect(html).toContain('이격과 SL은 각각 0.1~10.0%');
       expect(html).not.toContain('SL (%)');
+      expect(html).toContain('월별 검증');
+      expect(html).toMatch(/aria-pressed="true">과거<\/button>/);
+      expect(html).toMatch(/disabled=""[^>]*>검증<\/button>/);
     }
     const rows = options(html);
     expect(rows).toHaveLength(7);

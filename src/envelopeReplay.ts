@@ -1,8 +1,9 @@
 /** Fixed user leverage only; no contract-risk queries, leverage sweep, or automatic cap. */
-import type { PreparedSymbol } from './engine';
+import type { PreparedBar, PreparedSymbol } from './engine';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type ReplayOptions } from './portfolio';
 import type { BacktestResult, BacktestSettings } from './types';
 import { envelopeParameters } from './envelope';
+import { validateLowerTimeframeCandles } from './intrabar';
 
 export const yieldAnalysis = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -12,6 +13,23 @@ export function fixedEnvelopeSettings(settings: BacktestSettings): BacktestSetti
     throw new Error('고정 레버리지는 1~100배, 소수 둘째 자리까지 입력해 주세요.');
   }
   return { ...settings, envelopeRisk: undefined };
+}
+
+export function validateEnvelopeMinuteRanges(document: PreparedSymbol): WeakMap<PreparedBar, { low: number; high: number }> {
+  const ranges = new WeakMap<PreparedBar, { low: number; high: number }>();
+  for (const bar of document.bars) {
+    const minutes = bar.envelopeIntrabarCandles;
+    if (!minutes) continue;
+    validateLowerTimeframeCandles(bar.candle, minutes, 60, '1분봉');
+    let low = Infinity;
+    let high = -Infinity;
+    for (const minute of minutes) {
+      low = Math.min(low, minute.open);
+      high = Math.max(high, minute.open);
+    }
+    ranges.set(bar, { low, high });
+  }
+  return ranges;
 }
 
 export async function replayFixedEnvelope(

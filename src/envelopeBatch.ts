@@ -19,6 +19,15 @@ export interface OptimizedSymbol {
   tradedSides?: Partial<Record<StatisticsSide, boolean>>;
   candidatesKey?: string;
 }
+
+export function envelopeBatchSettings(row: Pick<OptimizedSymbol, 'best' | 'bestBySide'>, settings: Pick<BacktestSettings, 'side'>): EnvelopeStatisticsRow[] {
+  if (!row.bestBySide) return row.best ? [row.best] : [];
+  return selectedStatisticsSides(settings).flatMap(side => {
+    const best = row.bestBySide?.[side];
+    return best ? [best] : [];
+  });
+}
+
 export interface EnvelopeBatchJob {
   id: string; version: string; kind: EnvelopeBatchKind; status: 'RUNNING' | 'PAUSED' | 'COMPLETED';
   settings: BacktestSettings; updatedAt: number; message: string;
@@ -89,9 +98,9 @@ export async function loadEnvelopeBatch(kind: EnvelopeBatchKind): Promise<Envelo
 export function canResumeEnvelopeBatch(job: Pick<EnvelopeBatchJob, 'version' | 'kind' | 'cursor' | 'rows' | 'settings'> & { activeSearch?: EnvelopeStatisticsJob; completed?: number }): boolean {
   return job.version === envelopeOptimizerVersion || job.kind === 'VIRTUAL' && usesCurrentEnvelopeExecution(job.version);
 }
-export async function loadEnvelopeBatchReport(id: string): Promise<EnvelopeBatchJob | null> {
+export async function loadEnvelopeBatchReport(id: string, options?: EnvelopeResultOptions): Promise<EnvelopeBatchJob | null> {
   const value = await readValue<EnvelopeBatchJob>('results', archiveKey(id));
-  return value && value.status === 'COMPLETED' && Date.now() - value.updatedAt <= retentionMs ? selectBatchResults(value) : null;
+  return value && value.status === 'COMPLETED' && Date.now() - value.updatedAt <= retentionMs ? selectBatchResults(value, options) : null;
 }
 export async function loadEnvelopeBatchHistory(kind: EnvelopeBatchKind): Promise<BatchHistoryEntry[]> {
   const entries = await readValue<BatchHistoryEntry[]>('publicData', historyKey) ?? [];

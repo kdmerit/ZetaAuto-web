@@ -1,6 +1,6 @@
 import { loadEnvelopeBatch, type EnvelopeBatchKind, type EnvelopeBatchView } from './envelopeBatch';
 import type { BacktestSettings } from './types';
-type Event = { type: 'UPDATE'; view: EnvelopeBatchView } | { type: 'ERROR'; message: string } | { type: 'IDLE' };
+type Event = { type: 'UPDATE'; view: EnvelopeBatchView } | { type: 'ERROR'; message: string } | { type: 'START' | 'IDLE' };
 let worker: Worker | null = null; let active: EnvelopeBatchKind | null = null;
 const views = new Map<EnvelopeBatchKind, EnvelopeBatchView>(); const listeners = new Map<EnvelopeBatchKind, Set<(event: Event) => void>>();
 export const isEnvelopeBatchRunning = (kind?: EnvelopeBatchKind): boolean => worker !== null && (!kind || active === kind);
@@ -28,5 +28,6 @@ export function startEnvelopeBatch(kind: EnvelopeBatchKind, settings?: BacktestS
   };
   instance.onerror = () => { instance.terminate(); if (worker === instance) { worker = null; active = null; } notify({ type: 'ERROR', message: '분석이 중단되었습니다. 저장 지점부터 이어가 주세요.' }); notify({ type: 'IDLE' }); };
   instance.postMessage({ type: 'START', kind, settings, resumeId, sourceId });
+  notify({ type: 'START' });
 }
 export const pauseEnvelopeBatch = (): void => worker?.postMessage({ type: 'PAUSE' });

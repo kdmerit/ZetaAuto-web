@@ -1,7 +1,7 @@
 import { loadEnvelopeStatistics, type EnvelopeStatisticsJob } from './envelopeStatistics';
 import type { BacktestSettings } from './types';
 
-type Event = { type: 'UPDATE'; job: EnvelopeStatisticsJob } | { type: 'ERROR'; message: string } | { type: 'IDLE' };
+type Event = { type: 'UPDATE'; job: EnvelopeStatisticsJob } | { type: 'ERROR'; message: string } | { type: 'START' | 'IDLE' };
 let worker: Worker | null = null;
 let latest: EnvelopeStatisticsJob | null = null;
 const listeners = new Set<(event: Event) => void>();
@@ -27,6 +27,7 @@ export function startEnvelopeStatistics(settings: BacktestSettings, resumeId?: s
     notify({ type: 'IDLE' });
   };
   instance.postMessage({ type: 'START', settings, resumeId });
+  notify({ type: 'START' });
 }
 
 export const pauseEnvelopeStatistics = (): void => worker?.postMessage({ type: 'PAUSE' });

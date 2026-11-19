@@ -10,6 +10,8 @@ import type { ApiContext } from './api';
 import type { Strategy } from './types';
 import { isEnvelopeStrategy } from './envelope';
 import { sendNativeMessage, subscribeNativeBack } from './nativeBridge';
+import { useAnalysisBusy } from './analysisActivity';
+import { useBacktestScreenWakeLock } from './screenWakeLock';
 
 type Screen = { kind: 'MENU' } | { kind: 'CHARTS' } | { kind: 'STRATEGY'; strategy: Strategy };
 
@@ -131,6 +133,7 @@ export function BacktestNavigation({ context, email, onSignOut }: { context: Api
 
 function SignedInApp() {
   const auth = useAuth();
+  useBacktestScreenWakeLock(useAnalysisBusy());
   if (!auth.config || !auth.accessToken || auth.email !== ALLOWED_WEB_EMAIL) return <LoginScreen />;
   return <BacktestNavigation email={auth.email} onSignOut={() => void auth.signOut()} context={{ apiBaseUrl: auth.config.apiBaseUrl, accessToken: auth.accessToken, refreshAccessToken: auth.refreshAccessToken }} />;
 }

@@ -3,6 +3,8 @@ import { isAnalysisBusy } from './analysisActivity';
 import { startLocalBacktest, subscribeLocalBacktest } from './localBacktest';
 import { startEnvelopeStatistics, subscribeEnvelopeStatistics } from './envelopeStatisticsClient';
 import { startEnvelopeBatch, subscribeEnvelopeBatch } from './envelopeBatchClient';
+import { startEnvelopeVerification, subscribeEnvelopeVerification } from './envelopeVerificationClient';
+import { defaultEnvelopeResultOptions } from './envelopeResults';
 import type { BacktestSettings } from './types';
 
 class TestWorker {
@@ -23,16 +25,17 @@ beforeEach(() => {
 afterEach(() => { TestWorker.latest?.idle(); TestWorker.latest = undefined; vi.unstubAllGlobals(); });
 
 describe('shared analysis activity notifications', () => {
-  for (const kind of ['ORDINARY', 'SINGLE_STATS', 'ALL_STATS', 'VIRTUAL'] as const) {
+  for (const kind of ['ORDINARY', 'SINGLE_STATS', 'ALL_STATS', 'VIRTUAL', 'VERIFICATION'] as const) {
     it(`clears ${kind} activity before notifying the page so analysis controls re-enable`, () => {
       let activeAtIdle: boolean | undefined;
       const receive = (event: { type: string }): void => { if (event.type === 'IDLE') activeAtIdle = isAnalysisBusy(); };
       const unsubscribe = kind === 'ORDINARY' ? subscribeLocalBacktest('ENVELOPE', receive)
-        : kind === 'SINGLE_STATS' ? subscribeEnvelopeStatistics(receive) : subscribeEnvelopeBatch(kind, receive);
+        : kind === 'SINGLE_STATS' ? subscribeEnvelopeStatistics(receive) : kind === 'VERIFICATION' ? subscribeEnvelopeVerification(receive) : subscribeEnvelopeBatch(kind, receive);
       try {
         expect(isAnalysisBusy()).toBe(false);
         if (kind === 'ORDINARY') startLocalBacktest('ENVELOPE', settings);
         else if (kind === 'SINGLE_STATS') startEnvelopeStatistics(settings);
+        else if (kind === 'VERIFICATION') startEnvelopeVerification({ source: 'SINGLE_STATS', sourceId: 'fixture', direction: 'PAST', months: 1, resultOptions: defaultEnvelopeResultOptions });
         else startEnvelopeBatch(kind, settings);
         expect(isAnalysisBusy()).toBe(true);
         TestWorker.latest!.idle();

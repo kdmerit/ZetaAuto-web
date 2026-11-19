@@ -229,6 +229,11 @@ button.envelope-best { background: transparent; text-align: left; font: inherit;
 .envelope-stat-row { display: flex; flex-direction: column; gap: 7px; width: 100%; padding: 14px; border: 1px solid #34435b; border-radius: 12px; background: #151f30; color: #cad5e5; text-align: left; font-size: 13px; line-height: 1.45; }
 .envelope-stat-row strong { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; color: #f4f7fb; font-size: 15px; }
 .envelope-stat-row small { color: #9db8ff; }
+.envelope-verification { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 14px; border: 1px solid #34435b; border-radius: 12px; }
+.envelope-verification h3, .envelope-verification p { margin: 0; }
+.envelope-verification .segmented button { padding-inline: 5px; }
+.verification-filters { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid #34435b; }
+.envelope-verification-summary { display: flex; flex-direction: column; gap: 4px; padding-top: 7px; border-top: 1px solid #34435b; color: #b6caf2; overflow-wrap: anywhere; }
 .envelope-stat-history .history-card-heading { flex-wrap: wrap; align-items: flex-start; gap: 4px 8px; }
 .envelope-mode-tabs button { padding: 6px 2px; font-size: clamp(12px, 3.5vw, 15px); min-height: 48px; }
 .envelope-stat-intervals button { padding: 6px 2px; font-size: clamp(12px, 3.5vw, 14px); white-space: nowrap; }

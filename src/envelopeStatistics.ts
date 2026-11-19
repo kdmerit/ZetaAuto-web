@@ -2,13 +2,12 @@
 import { intervalSeconds } from './api';
 import { lease, maintainCache, readValue, retentionMs, writeValue } from './database';
 import { saveEnvelopeStatisticsHistory } from './envelopeStatisticsHistory';
-import { envelopeEntryMayTouch, prepareSymbolBlock, type PreparedBar } from './engine';
+import { envelopeEntryMayTouch, prepareSymbolBlock } from './engine';
 import { bandFor, currentEnvelopeSettings, envelopePeriods, legacyEnvelopePeriods } from './envelope';
 import { analysisWindow, ensureCandles, instrumentEligibility, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument } from './marketData';
 import type { BacktestInterval, BacktestResult, BacktestSettings, Candle, ContractRisk, EnvelopeExitMode } from './types';
-import { fixedEnvelopeSettings, replayFixedEnvelope } from './envelopeReplay';
+import { fixedEnvelopeSettings, replayFixedEnvelope, validateEnvelopeMinuteRanges } from './envelopeReplay';
 import { betterFilteredEnvelopeSetting, defaultEnvelopeResultOptions, profitRatio, validateEnvelopeResultOptions } from './envelopeResults';
-import { validateLowerTimeframeCandles } from './intrabar';
 import { envelopeCandleDataStart } from './envelopeCandleFilter';
 
 export const statisticsIntervals: BacktestInterval[] = ['1h', '4h', '1d'];
@@ -243,7 +242,6 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
           return prepared;
         };
         let document = prepare();
-        const validatedMinuteOpenRanges = new WeakMap<PreparedBar, { low: number; high: number }>();
         const firstEntryTouch = document.bars.find(bar => envelopeEntryMayTouch(bar, baseParameters));
         if (firstEntryTouch) {
           const lowerFrom = envelopeCandleDataStart(directional, firstEntryTouch.candle.openTime);
@@ -255,22 +253,10 @@ export async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, check
             minuteHistory = undefined;
             document = prepare(await loadMinutes(lowerFrom));
           }
-          for (const bar of document.bars) {
-            const minutes = bar.envelopeIntrabarCandles;
-            if (!minutes) continue;
-            validateLowerTimeframeCandles(bar.candle, minutes, 60, '1분봉');
-            let low = Infinity;
-            let high = -Infinity;
-            for (const minute of minutes) {
-              low = Math.min(low, minute.open);
-              high = Math.max(high, minute.open);
-            }
-            validatedMinuteOpenRanges.set(bar, { low, high });
-          }
         }
         const key = `${interval}:${maPeriod}:${side}`;
         const maximum = job.maxSteps[key] ?? maximumTouchedStep(document, baseParameters.envelopeCloseOnlyEntryEnabled); job.maxSteps[key] = maximum;
-        const replayOptions = { shouldYield, validatedMinuteOpenRanges };
+        const replayOptions = { shouldYield, validatedMinuteOpenRanges: validateEnvelopeMinuteRanges(document) };
         while (job.step <= maximum) {
           const deviationPercent = job.step / 10;
           for (const bar of document.bars) if (bar.envelope) {
