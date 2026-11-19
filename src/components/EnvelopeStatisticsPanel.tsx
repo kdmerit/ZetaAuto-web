@@ -8,7 +8,7 @@ import { EnvelopeResultControls } from './EnvelopeResultControls';
 import { loadEnvelopeStatisticsHistory, loadEnvelopeStatisticsReport, type EnvelopeStatisticsHistoryEntry } from '../envelopeStatisticsHistory';
 import { ProgressBar } from './ProgressBar';
 import { formatBacktestHistorySettings } from '../backtestHistory';
-import { orderVerificationRows, verificationSummaryFor, type EnvelopeVerificationReport } from '../envelopeVerification';
+import { hasVerificationFilter, orderVerificationRows, verificationSummaryFor, type EnvelopeVerificationReport } from '../envelopeVerification';
 import { EnvelopeVerificationControls, EnvelopeVerificationSummary, useEnvelopeVerification } from './EnvelopeVerification';
 
 type Metric = 'returnPercent' | 'profitUsdt' | 'winCount' | 'winRatePercent' | 'entryCount';
@@ -141,10 +141,13 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
   }, [job, current, resultOptions]);
   const directional = !!job && isDirectionalStatisticsVersion(job.version);
   const activeSide = job?.settings.side === 'SHORT' ? 'SHORT' : job?.settings.side === 'LONG' ? 'LONG' : resultSide;
-  const rankedRows = useMemo(() => orderVerificationRows(rows, verificationOptions,
-    row => verificationSummaryFor(verificationReport, verificationSymbol, row)), [rows, verificationOptions, verificationReport, verificationSymbol]);
+  const fixedStopLossPercent = job?.settings.envelopeStopLossPercent;
+  const rankedRows = useMemo(() => orderVerificationRows(
+    rows, verificationOptions,
+    row => verificationSummaryFor(verificationReport, verificationSymbol, row), row => row, fixedStopLossPercent),
+  [rows, verificationOptions, verificationReport, verificationSymbol, fixedStopLossPercent]);
   const shownRows = useMemo(() => directional ? rankedRows.filter(row => row.side === activeSide) : rankedRows, [rankedRows, directional, activeSide]);
-  const usesVerificationRanking = Boolean(verificationOptions.sortBy || verificationOptions.threshold);
+  const usesVerificationRanking = Boolean(verificationOptions.sortBy) || hasVerificationFilter(verificationOptions);
   useEffect(() => setLimit(30), [verification.direction, verificationOptions]);
   const fixedTrade = !!job && isReclaimStatisticsVersion(job.version);
   const periods = statisticsPeriods(job?.version);

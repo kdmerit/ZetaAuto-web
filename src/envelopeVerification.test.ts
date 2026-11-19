@@ -71,7 +71,23 @@ describe('monthly verification windows and result metrics', () => {
     expect(verificationValue(summary, 'averageProfit')).toBe(30);
     expect(verificationValue(summary, 'averageLoss')).toBe(10);
     const rows = [{ summary: undefined }, { summary }, { summary: { ...summary, lossUsdt: 0 } }];
-    expect(orderVerificationRows(rows, { ...defaultVerificationResultOptions, sortBy: 'lossUsdt', sortOrder: 'LOW', filterBy: 'months', threshold: '4' }, row => row.summary)).toEqual([rows[2], rows[1]]);
+    expect(orderVerificationRows(rows, { ...defaultVerificationResultOptions, sortBy: 'lossUsdt', sortOrder: 'LOW', filterBy: 'months', threshold: '4' }, row => row.summary, () => undefined)).toEqual([rows[2], rows[1]]);
+  });
+
+  it('includes exact decimal matches and combines the deviation-to-SL filter with verification metrics', () => {
+    const good = { ...emptyVerificationSummary, months: 3, profitMonths: 3 };
+    const exact = { ...ordinaryRow, deviationPercent: 0.6, stopLossPercent: 0.2, summary: { ...good, profitMonths: 1 } };
+    const below = { ...exact, deviationPercent: 0.5, summary: good };
+    const fixedSl = { ...ordinaryRow, deviationPercent: 1.2, stopLossPercent: undefined, summary: good };
+    const belowFixedSl = { ...fixedSl, deviationPercent: 1.1 };
+    const noProfit = { ...exact, deviationPercent: 0.7, summary: { ...good, profitMonths: 0 } };
+    const rows = [exact, below, fixedSl, belowFixedSl, noProfit];
+    const rank = (options: typeof defaultVerificationResultOptions) => orderVerificationRows(rows, options, row => row.summary, row => row, '0.4');
+    const ratio = { ...defaultVerificationResultOptions, deviationSlEnabled: true, deviationSlMultiplier: '3' };
+
+    expect(rank(defaultVerificationResultOptions)).toBe(rows);
+    expect(rank(ratio)).toEqual([exact, fixedSl, noProfit]);
+    expect(rank({ ...ratio, sortBy: 'profitMonths', threshold: '1' })).toEqual([fixedSl, exact]);
   });
 });
 

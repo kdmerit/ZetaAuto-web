@@ -65,6 +65,7 @@ export function useEnvelopeVerification(source: VerificationSource, sourceId?: s
 
 type VerificationState = ReturnType<typeof useEnvelopeVerification>;
 const metricOptions = Object.entries(verificationMetrics).map(([value, label]) => <option key={value} value={value}>{label}</option>);
+const deviationSlMultiplierRange = { min: 0.1, max: 10 };
 
 function VerificationFilters({ options, onChange }: { options: VerificationResultOptions; onChange: (options: VerificationResultOptions) => void }) {
   const [draft, setDraft] = useState(options);
@@ -72,8 +73,14 @@ function VerificationFilters({ options, onChange }: { options: VerificationResul
   const apply = (): void => {
     const threshold = draft.threshold.trim();
     if (threshold && !Number.isFinite(Number(threshold))) { setError('필터 기준값을 숫자로 입력해 주세요.'); return; }
+    const multiplier = Number(draft.deviationSlMultiplier);
+    if (draft.deviationSlEnabled && !(multiplier >= deviationSlMultiplierRange.min && multiplier <= deviationSlMultiplierRange.max)) {
+      setError('N은 0.1~10.0으로 입력해 주세요.');
+      return;
+    }
     setError(null);
-    onChange({ ...options, filterBy: draft.filterBy, comparison: draft.comparison, threshold });
+    onChange({ ...options, filterBy: draft.filterBy, comparison: draft.comparison, threshold,
+      deviationSlEnabled: draft.deviationSlEnabled, deviationSlMultiplier: draft.deviationSlMultiplier });
   };
   return <fieldset className="analysis-fields verification-filters" aria-label="검증 결과 정렬 및 필터">
     <h3>검증 결과 정렬·필터</h3>
@@ -85,7 +92,13 @@ function VerificationFilters({ options, onChange }: { options: VerificationResul
       <label className="field-label">필터 기준<select value={draft.filterBy} onChange={event => setDraft({ ...draft, filterBy: event.target.value as VerificationMetric })}>{metricOptions}</select></label>
       <label className="field-label">조건<select value={draft.comparison} onChange={event => setDraft({ ...draft, comparison: event.target.value as VerificationResultOptions['comparison'] })}><option value="MIN">이상</option><option value="MAX">이하</option></select></label>
     </div>
-    <label className="field-label">기준값<input type="number" step="any" inputMode="decimal" placeholder="비우면 전체 표시" value={draft.threshold} onChange={event => setDraft({ ...draft, threshold: event.target.value })} /></label>
+    <label className="field-label">기준값<input type="number" step="any" inputMode="decimal" placeholder="비우면 이 조건 생략" value={draft.threshold} onChange={event => setDraft({ ...draft, threshold: event.target.value })} /></label>
+    <label className="checkbox-row"><input type="checkbox" checked={draft.deviationSlEnabled} onChange={event => setDraft({ ...draft, deviationSlEnabled: event.target.checked })} /><span>이격 ≥ SL × N</span></label>
+    <label className="field-label">N (배수)
+      <input type="number" inputMode="decimal" {...deviationSlMultiplierRange} step="any" disabled={!draft.deviationSlEnabled}
+        value={draft.deviationSlMultiplier} onChange={event => setDraft({ ...draft, deviationSlMultiplier: event.target.value })} />
+      <small>0.1~10.0</small>
+    </label>
     <button className="outline-button" type="button" onClick={apply}>검증 필터 적용</button>
     {error ? <p className="error" role="alert">{error}</p> : null}
   </fieldset>;

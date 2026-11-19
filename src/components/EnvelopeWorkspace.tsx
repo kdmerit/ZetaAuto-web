@@ -19,7 +19,7 @@ import { EnvelopeHalfCandleControl } from './EnvelopeHalfCandleControl';
 import { EnvelopeCandleFilterControl } from './EnvelopeCandleFilterControl';
 import { EnvelopeStopLossControl, EnvelopeTrailingStopControl } from './EnvelopeStopLossControl';
 import { formatBacktestHistorySettings } from '../backtestHistory';
-import { compareVerificationValues, defaultVerificationResultOptions, orderVerificationRows, verificationSummaryFor, type EnvelopeVerificationReport, type VerificationResultOptions } from '../envelopeVerification';
+import { compareVerificationValues, defaultVerificationResultOptions, hasVerificationFilter, orderVerificationRows, verificationSummaryFor, type EnvelopeVerificationReport, type VerificationResultOptions } from '../envelopeVerification';
 import { EnvelopeVerificationControls, EnvelopeVerificationSummary, useEnvelopeVerification } from './EnvelopeVerification';
 
 type View = 'SINGLE' | 'ALL' | 'SINGLE_STATS' | 'ALL_STATS';
@@ -109,7 +109,7 @@ export function EnvelopeSymbolSettings({ row, settings, disabled, onChoose, resu
   const choices = row.bestBySide ? selectedStatisticsSides(settings).map(side => ({ side, best: row.bestBySide?.[side] }))
     : [{ side: settings.side === 'BOTH' ? undefined : settings.side, best: row.best }];
   const shown = orderVerificationRows(choices.filter(choice => !resultOptions || choice.best), verificationOptions,
-    ({ best }) => best ? verificationSummaryFor(verification, row.symbol, best) : undefined);
+    ({ best }) => best ? verificationSummaryFor(verification, row.symbol, best) : undefined, ({ best }) => best, settings.envelopeStopLossPercent);
   return <article className="envelope-symbol-result" aria-label={`${row.symbol} 최적 세팅`}><h3>{row.symbol}</h3>{shown.map(({ side, best }) => <button className="envelope-stat-row" key={side ?? 'combined'} type="button" disabled={disabled || !best} onClick={() => onChoose(side)}>
     <strong>{side ? statisticsSideLabel(side) : '이전 롱 + 숏 합산'} 최고 {resultOptions ? resultSortLabel(resultOptions) : '수익률'} <span className={(best?.returnPercent ?? 0) >= 0 ? 'long-text' : 'short-text'}>{best ? `${num(best[resultOptions?.sort ?? 'returnPercent'])}%` : row.status === 'UNSUPPORTED' ? '지원 불가' : side && row.tradedSides?.[side] ? '최적 기준 미달' : '체결 없음'}</span></strong>
     {best ? <><span>{best.interval} · SMA{best.maPeriod} · 이격 {best.deviationPercent}%{best.stopLossPercent === undefined ? '' : ` · SL ${best.stopLossPercent.toFixed(1)}%`} · {best.leverage ?? settings.leverage}배</span><span>{envelopeExitLabels[best.exitMode]} · 수익률 {num(best.returnPercent)}% · 순손익 {num(best.profitUsdt)} USDT · 승률 {num(best.winRatePercent)}%</span><span>진입 {best.entryCount}회 · 승/패 {best.winCount}/{best.lossCount}{resultOptions ? ` · 수익비 ${num(best.profitRatioPercent)}%` : ''}</span><EnvelopeVerificationSummary report={verification} symbol={row.symbol} row={best} /><small>개별분석에 이 방향의 세팅 불러오기 ›</small></> : <span>{row.message ?? (side && row.tradedSides?.[side] ? optimalSettingCriteria : '기간 내 진입 가능한 세팅이 없습니다.')}</span>}
@@ -181,11 +181,11 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
   const sorted = useMemo(() => [...(view?.rows ?? [])].filter(row => !current || !!row.best)
     .sort((a, b) => current && a.best && b.best ? compareEnvelopeRows(a.best, b.best, options) : (b.best?.returnPercent ?? -Infinity) - (a.best?.returnPercent ?? -Infinity)), [view, current, options]);
   const shown = useMemo(() => {
-    if (!view || !verificationOptions.sortBy && !verificationOptions.threshold) return sorted;
+    if (!view || !verificationOptions.sortBy && !hasVerificationFilter(verificationOptions)) return sorted;
     return sorted.flatMap(row => {
       const lookup = (best: NonNullable<typeof row.best>) => verificationSummaryFor(verificationReport, row.symbol, best);
       const trainingOrder = envelopeBatchSettings(row, view.settings).sort((a, b) => compareEnvelopeRows(a, b, options));
-      const [best] = orderVerificationRows(trainingOrder, verificationOptions, lookup);
+      const [best] = orderVerificationRows(trainingOrder, verificationOptions, lookup, setting => setting, view.settings.envelopeStopLossPercent);
       return best ? [{ row, best, summary: lookup(best) }] : [];
     }).sort((a, b) => compareVerificationValues(a.summary, b.summary, verificationOptions) || compareEnvelopeRows(a.best, b.best, options)).map(item => item.row);
   }, [sorted, view, options, verificationReport, verificationOptions]);
@@ -226,7 +226,7 @@ function BatchPanel({ kind, settings, onRestore, selectedSource, onSelectSource,
       {view.status === 'PAUSED' ? <p className="notice">{view.message}</p> : null}
       {kind === 'ALL_STATS' ? <><p className="muted small">{isDirectionalStatisticsVersion(view.version) ? '종목·방향별 최적 세팅을 따로 표시합니다. 종목 순서는 각 종목의 최상위 세팅 기준입니다.' : '이전 방식의 종목별 세팅입니다.'} 비교 자금은 종목·방향별로 독립적이며 수익률을 합산하지 않습니다. {current ? '밴드 매수 · 반대 밴드 청산 · 체결가 기준 별도 SL' : '저장 당시의 매매 조건을 적용한 결과입니다.'}</p>
         {current && !sorted.length && view.status === 'COMPLETED' ? <p className="notice">입력한 필터를 충족한 결과가 없습니다. 필터를 낮추면 재분석 없이 다시 확인할 수 있습니다.</p> : null}
-        {verificationOptions.threshold && sorted.length > 0 ? <p className="notice small">검증 필터 통과 {shown.length}/{sorted.length}종목</p> : null}
+        {hasVerificationFilter(verificationOptions) && sorted.length > 0 ? <p className="notice small">검증 필터 통과 {shown.length}/{sorted.length}종목</p> : null}
         <div className="envelope-stat-rows">{shown.slice(0, limit).map(row => <EnvelopeSymbolSettings key={row.symbol} row={row} settings={view.settings} resultOptions={current ? options : undefined} disabled={busy || loading || view.status !== 'COMPLETED'}
           verification={verificationReport} verificationOptions={verificationOptions} onChoose={side => { void openSetting(row.symbol, side); }} />)}</div>{shown.length > limit ? <button className="outline-button" type="button" onClick={() => setLimit(value => value + 30)}>종목 더 보기 ({Math.min(limit, shown.length)}/{shown.length})</button> : null}</> : null}
       {kind === 'VIRTUAL' && view.result ? <div className="virtual-results" aria-label="가상매매 결과"><div className="result-heading"><h2>공유 계좌 수익률</h2><strong className={`big-number ${view.result.returnPercent >= 0 ? 'positive' : 'negative'}`}>{num(view.result.returnPercent)}%</strong></div><div className="metric-grid">

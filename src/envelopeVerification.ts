@@ -139,11 +139,16 @@ export interface VerificationResultOptions {
   filterBy: VerificationMetric;
   comparison: 'MIN' | 'MAX';
   threshold: string;
+  deviationSlEnabled: boolean;
+  deviationSlMultiplier: string;
 }
 
 export const defaultVerificationResultOptions: VerificationResultOptions = {
   sortBy: '', sortOrder: 'HIGH', filterBy: 'profitMonths', comparison: 'MIN', threshold: '',
+  deviationSlEnabled: false, deviationSlMultiplier: '1.0',
 };
+
+export const hasVerificationFilter = (options: VerificationResultOptions): boolean => Boolean(options.threshold || options.deviationSlEnabled);
 
 export function verificationValue(summary: VerificationSummary, metric: VerificationMetric): number {
   if (metric === 'flatMonths') return summary.months - summary.profitMonths - summary.lossMonths;
@@ -167,9 +172,24 @@ export function compareVerificationValues(a: VerificationSummary | undefined, b:
   return options.sortOrder === 'HIGH' ? difference : -difference;
 }
 
-export function orderVerificationRows<T>(rows: T[], options: VerificationResultOptions, summaryFor: (row: T) => VerificationSummary | undefined): T[] {
-  if (!options.sortBy && !options.threshold) return rows;
-  const selected = rows.map(row => ({ row, summary: summaryFor(row) })).filter(({ summary }) => matchesVerificationFilter(summary, options));
+export function orderVerificationRows<T>(
+  rows: T[], options: VerificationResultOptions, summaryFor: (row: T) => VerificationSummary | undefined,
+  settingFor: (row: T) => Pick<EnvelopeStatisticsRow, 'deviationPercent' | 'stopLossPercent'> | null | undefined,
+  fixedStopLossPercent = '3',
+): T[] {
+  if (!options.sortBy && !hasVerificationFilter(options)) return rows;
+  const multiplier = Number(options.deviationSlMultiplier);
+  const fixedStopLoss = Number(fixedStopLossPercent);
+  const matching = options.deviationSlEnabled ? rows.filter(row => {
+    const setting = settingFor(row);
+    if (!setting) return false;
+    const minimumDeviation = (setting.stopLossPercent ?? fixedStopLoss) * multiplier;
+    // Preserve equality when multiplying decimal values such as 0.2 × 3.
+    return Number.isFinite(minimumDeviation) && minimumDeviation > 0
+      && setting.deviationPercent >= minimumDeviation - 2 * Number.EPSILON * minimumDeviation;
+  }) : rows;
+  if (!options.sortBy && !options.threshold) return matching;
+  const selected = matching.map(row => ({ row, summary: summaryFor(row) })).filter(({ summary }) => matchesVerificationFilter(summary, options));
   if (options.sortBy) selected.sort((a, b) => compareVerificationValues(a.summary, b.summary, options));
   return selected.map(({ row }) => row);
 }

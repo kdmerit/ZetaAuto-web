@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { EnvelopeBestSettings, EnvelopeStatisticsStatus } from './EnvelopeStatisticsPanel';
 import { EnvelopeSymbolSettings, VirtualEvaluationFields, VirtualPeriodNotice } from './EnvelopeWorkspace';
 import { envelopeOptimizerVersion, type EnvelopeStatisticsJob } from '../envelopeStatistics';
+import { defaultVerificationResultOptions } from '../envelopeVerification';
 import type { BacktestSettings } from '../types';
 import { EnvelopeResultControls } from './EnvelopeResultControls';
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
@@ -64,6 +65,18 @@ describe('envelope fixed-leverage statistics status', () => {
     const html = renderToStaticMarkup(<EnvelopeBestSettings job={job({ version: '2.10.42', status: 'COMPLETED', settings: { side: 'BOTH' } as BacktestSettings, bestBySide: { LONG: null, SHORT: null } })} disabled={false} onChoose={() => {}} />);
     expect(html).toContain('롱 해당 기간 최고 수익률 —'); expect(html).toContain('숏 해당 기간 최고 수익률 —'); expect(html).not.toContain('0%');
     expect((html.match(/disabled/g) ?? []).length).toBe(2);
+  });
+  it('shows only the directions whose displayed envelope setting passes the verification ratio filter', () => {
+    const long = { side: 'LONG' as const, interval: '1h' as const, maPeriod: 3, deviationPercent: 1.5, stopLossPercent: 0.6, exitMode: 'OPPOSITE' as const,
+      returnPercent: 10, profitUsdt: 100, realizedProfitUsdt: 100, feesUsdt: 1, entryCount: 2, closedTradeCount: 2, winCount: 2, lossCount: 0,
+      winRatePercent: 100, maxDrawdownPercent: 1, openPositionCount: 0 };
+    const short = { ...long, side: 'SHORT' as const, stopLossPercent: 0.7 };
+    const row = { symbol: 'BTCUSDT', launchAt: 0, status: 'OK' as const, best: long, bestBySide: { LONG: long, SHORT: short } };
+    const settings = { side: 'BOTH', leverage: '5' } as BacktestSettings;
+    const verificationOptions = { ...defaultVerificationResultOptions, deviationSlEnabled: true, deviationSlMultiplier: '2.5' };
+    const html = renderToStaticMarkup(<EnvelopeSymbolSettings row={row} settings={settings} disabled={false} onChoose={() => {}} verificationOptions={verificationOptions} />);
+    expect(html).toContain('롱 최고 수익률');
+    expect(html).not.toContain('숏 최고 수익률');
   });
   it('shows the reduced fixed-exit total and the required trade/win-loss counts', () => {
     const current = job({ version: '2.10.43', settings: { side: 'BOTH', leverage: '5', envelopeStatisticsInterval: '1h' } as BacktestSettings });
