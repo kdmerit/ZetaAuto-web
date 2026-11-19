@@ -133,9 +133,7 @@ export const verificationMetrics = {
 };
 
 export type VerificationMetric = keyof typeof verificationMetrics;
-export interface VerificationResultOptions {
-  sortBy: VerificationMetric | '';
-  sortOrder: 'HIGH' | 'LOW';
+export interface VerificationFilterOptions {
   filterBy: VerificationMetric;
   comparison: 'MIN' | 'MAX';
   threshold: string;
@@ -143,10 +141,26 @@ export interface VerificationResultOptions {
   deviationSlMultiplier: string;
 }
 
-export const defaultVerificationResultOptions: VerificationResultOptions = {
-  sortBy: '', sortOrder: 'HIGH', filterBy: 'profitMonths', comparison: 'MIN', threshold: '',
+export interface VerificationResultOptions extends VerificationFilterOptions {
+  sortBy: VerificationMetric | '';
+  sortOrder: 'HIGH' | 'LOW';
+}
+
+export const defaultVerificationFilterOptions: VerificationFilterOptions = {
+  filterBy: 'profitMonths', comparison: 'MIN', threshold: '',
   deviationSlEnabled: false, deviationSlMultiplier: '1.0',
 };
+
+export const defaultVerificationResultOptions: VerificationResultOptions = {
+  ...defaultVerificationFilterOptions, sortBy: '', sortOrder: 'HIGH',
+};
+
+export const verificationDeviationSlMultiplierRange = { min: 0.1, max: 10 };
+
+export function isVerificationDeviationSlMultiplier(value: string): boolean {
+  const multiplier = Number(value);
+  return multiplier >= verificationDeviationSlMultiplierRange.min && multiplier <= verificationDeviationSlMultiplierRange.max;
+}
 
 export const hasVerificationFilter = (options: VerificationResultOptions): boolean => Boolean(options.threshold || options.deviationSlEnabled);
 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { defaultVerificationResultOptions, parseVerificationMonths, verificationKey, verificationMetrics, verificationSummaryFor, verificationValue, type EnvelopeVerificationReport, type VerificationDirection, type VerificationMetric, type VerificationResultOptions, type VerificationSource } from '../envelopeVerification';
+import { defaultVerificationResultOptions, isVerificationDeviationSlMultiplier, parseVerificationMonths, verificationDeviationSlMultiplierRange, verificationKey, verificationMetrics, verificationSummaryFor, verificationValue, type EnvelopeVerificationReport, type VerificationDirection, type VerificationFilterOptions, type VerificationMetric, type VerificationResultOptions, type VerificationSource } from '../envelopeVerification';
 import { isEnvelopeVerificationRunning, pauseEnvelopeVerification, restoreEnvelopeVerification, startEnvelopeVerification, subscribeEnvelopeVerification } from '../envelopeVerificationClient';
+import { loadEnvelopeVerificationPreferences, saveEnvelopeVerificationPreferences, type EnvelopeVerificationPreferences } from '../envelopeVerificationPreferences';
 import type { EnvelopeStatisticsRow } from '../envelopeStatistics';
 import type { EnvelopeResultOptions } from '../types';
 import { ProgressBar } from './ProgressBar';
@@ -9,14 +10,19 @@ const directionLabel = (direction: VerificationDirection): string => direction =
 const format = (value: number): string => value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
 
 export function useEnvelopeVerification(source: VerificationSource, sourceId?: string) {
-  const [direction, setDirection] = useState<VerificationDirection>('PAST');
-  const [months, setMonths] = useState('12');
+  const [preferences, setPreferences] = useState(() => loadEnvelopeVerificationPreferences(source));
+  const { direction, months, options } = preferences;
   const [view, setView] = useState<EnvelopeVerificationReport | null>(null);
   const [activeKey, setActiveKey] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [options, setOptions] = useState(defaultVerificationResultOptions);
   const target = useMemo(() => sourceId ? { source, sourceId, direction } : null, [source, sourceId, direction]);
   const key = target ? verificationKey(target) : '';
+
+  const updatePreferences = (changes: Partial<EnvelopeVerificationPreferences>): void => {
+    const next = { ...preferences, ...changes };
+    setPreferences(next);
+    saveEnvelopeVerificationPreferences(source, next);
+  };
 
   useEffect(() => {
     setError(null);
@@ -59,28 +65,26 @@ export function useEnvelopeVerification(source: VerificationSource, sourceId?: s
       setError(error instanceof Error ? error.message : '검증을 시작하지 못했습니다.');
     }
   };
-  return { target, direction, setDirection, months, setMonths, running, report, results, hasVerificationData, error, start, options, setOptions,
+  return { ...preferences, updatePreferences, target, running, report, results, hasVerificationData, error, start,
     resultOptions: hasVerificationData ? options : defaultVerificationResultOptions };
 }
 
 type VerificationState = ReturnType<typeof useEnvelopeVerification>;
 const metricOptions = Object.entries(verificationMetrics).map(([value, label]) => <option key={value} value={value}>{label}</option>);
-const deviationSlMultiplierRange = { min: 0.1, max: 10 };
-
-function VerificationFilters({ options, onChange }: { options: VerificationResultOptions; onChange: (options: VerificationResultOptions) => void }) {
-  const [draft, setDraft] = useState(options);
+function VerificationFilters({ options, draft, onChange, onDraftChange }: {
+  options: VerificationResultOptions; draft: VerificationFilterOptions;
+  onChange: (options: VerificationResultOptions) => void; onDraftChange: (draft: VerificationFilterOptions) => void;
+}) {
   const [error, setError] = useState<string | null>(null);
   const apply = (): void => {
     const threshold = draft.threshold.trim();
     if (threshold && !Number.isFinite(Number(threshold))) { setError('필터 기준값을 숫자로 입력해 주세요.'); return; }
-    const multiplier = Number(draft.deviationSlMultiplier);
-    if (draft.deviationSlEnabled && !(multiplier >= deviationSlMultiplierRange.min && multiplier <= deviationSlMultiplierRange.max)) {
+    if (draft.deviationSlEnabled && !isVerificationDeviationSlMultiplier(draft.deviationSlMultiplier)) {
       setError('N은 0.1~10.0으로 입력해 주세요.');
       return;
     }
     setError(null);
-    onChange({ ...options, filterBy: draft.filterBy, comparison: draft.comparison, threshold,
-      deviationSlEnabled: draft.deviationSlEnabled, deviationSlMultiplier: draft.deviationSlMultiplier });
+    onChange({ ...options, ...draft, threshold });
   };
   return <fieldset className="analysis-fields verification-filters" aria-label="검증 결과 정렬 및 필터">
     <h3>검증 결과 정렬·필터</h3>
@@ -89,14 +93,14 @@ function VerificationFilters({ options, onChange }: { options: VerificationResul
       <label className="field-label">정렬 순서<select value={options.sortOrder} disabled={!options.sortBy} onChange={event => onChange({ ...options, sortOrder: event.target.value as VerificationResultOptions['sortOrder'] })}><option value="HIGH">높은 순</option><option value="LOW">낮은 순</option></select></label>
     </div>
     <div className="field-grid two">
-      <label className="field-label">필터 기준<select value={draft.filterBy} onChange={event => setDraft({ ...draft, filterBy: event.target.value as VerificationMetric })}>{metricOptions}</select></label>
-      <label className="field-label">조건<select value={draft.comparison} onChange={event => setDraft({ ...draft, comparison: event.target.value as VerificationResultOptions['comparison'] })}><option value="MIN">이상</option><option value="MAX">이하</option></select></label>
+      <label className="field-label">필터 기준<select value={draft.filterBy} onChange={event => onDraftChange({ ...draft, filterBy: event.target.value as VerificationMetric })}>{metricOptions}</select></label>
+      <label className="field-label">조건<select value={draft.comparison} onChange={event => onDraftChange({ ...draft, comparison: event.target.value as VerificationFilterOptions['comparison'] })}><option value="MIN">이상</option><option value="MAX">이하</option></select></label>
     </div>
-    <label className="field-label">기준값<input type="number" step="any" inputMode="decimal" placeholder="비우면 이 조건 생략" value={draft.threshold} onChange={event => setDraft({ ...draft, threshold: event.target.value })} /></label>
-    <label className="checkbox-row"><input type="checkbox" checked={draft.deviationSlEnabled} onChange={event => setDraft({ ...draft, deviationSlEnabled: event.target.checked })} /><span>이격 ≥ SL × N</span></label>
+    <label className="field-label">기준값<input type="number" step="any" inputMode="decimal" placeholder="비우면 이 조건 생략" value={draft.threshold} onChange={event => onDraftChange({ ...draft, threshold: event.target.value })} /></label>
+    <label className="checkbox-row"><input type="checkbox" checked={draft.deviationSlEnabled} onChange={event => onDraftChange({ ...draft, deviationSlEnabled: event.target.checked })} /><span>이격 ≥ SL × N</span></label>
     <label className="field-label">N (배수)
-      <input type="number" inputMode="decimal" {...deviationSlMultiplierRange} step="any" disabled={!draft.deviationSlEnabled}
-        value={draft.deviationSlMultiplier} onChange={event => setDraft({ ...draft, deviationSlMultiplier: event.target.value })} />
+      <input type="number" inputMode="decimal" {...verificationDeviationSlMultiplierRange} step="any" disabled={!draft.deviationSlEnabled}
+        value={draft.deviationSlMultiplier} onChange={event => onDraftChange({ ...draft, deviationSlMultiplier: event.target.value })} />
       <small>0.1~10.0</small>
     </label>
     <button className="outline-button" type="button" onClick={apply}>검증 필터 적용</button>
@@ -107,16 +111,16 @@ function VerificationFilters({ options, onChange }: { options: VerificationResul
 export function EnvelopeVerificationControls({ verification, candidates, resultOptions, disabled, incompatible }: {
   verification: VerificationState; candidates: number; resultOptions: EnvelopeResultOptions; disabled: boolean; incompatible?: boolean;
 }) {
-  const { direction, setDirection, months, setMonths, target, running, report, hasVerificationData, error, start, options, setOptions } = verification;
+  const { direction, months, target, running, report, hasVerificationData, error, start, options, filterDraft, updatePreferences } = verification;
   const reportCompleted = report?.status === 'COMPLETED';
   return <section className="envelope-verification" aria-label="월별 검증">
     <h3>월별 검증</h3>
     <fieldset className="analysis-fields" disabled={running}>
       <div className="field-grid two">
         <div className="field-label">검증 방향<div className="segmented" role="group" aria-label="검증 방향">
-          {(['PAST', 'FUTURE'] as const).map(value => <button key={value} type="button" className={direction === value ? 'selected' : ''} aria-pressed={value === direction} onClick={() => setDirection(value)}>{directionLabel(value)}</button>)}
+          {(['PAST', 'FUTURE'] as const).map(value => <button key={value} type="button" className={direction === value ? 'selected' : ''} aria-pressed={value === direction} onClick={() => updatePreferences({ direction: value })}>{directionLabel(value)}</button>)}
         </div></div>
-        <label className="field-label">검증 개월 수<input type="number" inputMode="numeric" min="1" step="1" value={months} onChange={event => setMonths(event.target.value)} /></label>
+        <label className="field-label">검증 개월 수<input type="number" inputMode="numeric" min="1" step="1" value={months} onChange={event => updatePreferences({ months: event.target.value })} /></label>
       </div>
       <p className="muted small">{direction === 'PAST' ? '통계 시작일 전' : '통계 종료일 후'}부터 완전한 한 달씩 검증합니다. 월마다 초기자금과 포지션을 초기 상태로 되돌립니다.</p>
       {target && candidates > 0 ? <p className="muted small">{target.source === 'SINGLE_STATS' ? '통계 필터를 통과한' : '표시된 종목·방향별'} 설정 {candidates.toLocaleString()}개</p> : null}
@@ -130,7 +134,8 @@ export function EnvelopeVerificationControls({ verification, candidates, resultO
       {reportCompleted && report.plan.limit ? <p className="muted small">{report.plan.limit === 'PRESENT' ? '현재까지 채워진 마지막 한 달에서 검증을 끝냈습니다.' : '최근 5년 안의 완전한 달까지만 검증했습니다.'}</p> : null}
       {report.dataStops > 0 ? <p className="muted small">{report.dataStops.toLocaleString()}개 종목·주기는 완전한 캔들 데이터를 확보하지 못한 달에서 멈췄습니다.</p> : null}
     </> : running ? <p className="notice" role="status">검증 준비 중</p> : null}
-    {hasVerificationData ? <VerificationFilters options={options} onChange={setOptions} /> : null}
+    {hasVerificationData ? <VerificationFilters options={options} draft={filterDraft}
+      onChange={options => updatePreferences({ options })} onDraftChange={filterDraft => updatePreferences({ filterDraft })} /> : null}
     {error ? <p className="error" role="alert">{error}</p> : null}
   </section>;
 }

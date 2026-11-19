@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { defaultSettings, StrategyBacktest } from './StrategyBacktest';
 import { EnvelopeWorkspace } from './EnvelopeWorkspace';
 import { envelopeCandleFilterCopyText } from './EnvelopeCandleFilterControl';
+import { defaultVerificationFilterOptions, defaultVerificationResultOptions } from '../envelopeVerification';
+import { loadEnvelopeVerificationPreferences, saveEnvelopeVerificationPreferences, type EnvelopeVerificationPreferences } from '../envelopeVerificationPreferences';
 import { saveSettings } from '../storage';
 
 const context = { apiBaseUrl: 'https://example.invalid', accessToken: 'fixture-only' };
@@ -162,5 +164,43 @@ describe('envelope input defaults and arrangement', () => {
     const html = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
     expect(html).toMatch(/aria-pressed="true" class="selected">4H</);
     expect(options(html)[0]).not.toContain('checked=""');
+  });
+
+  it('restores each statistics screen with its own verification inputs and preserves unapplied filter edits', () => {
+    const single: EnvelopeVerificationPreferences = {
+      direction: 'FUTURE', months: '24',
+      options: { sortBy: 'netUsdt', sortOrder: 'LOW', filterBy: 'lossMonths', comparison: 'MAX', threshold: '2', deviationSlEnabled: true, deviationSlMultiplier: '2.5' },
+      filterDraft: { filterBy: 'averageProfit', comparison: 'MIN', threshold: '', deviationSlEnabled: false, deviationSlMultiplier: '' },
+    };
+    const all: EnvelopeVerificationPreferences = {
+      direction: 'PAST', months: '6', options: defaultVerificationResultOptions, filterDraft: defaultVerificationFilterOptions,
+    };
+    saveEnvelopeVerificationPreferences('SINGLE_STATS', single);
+    saveEnvelopeVerificationPreferences('ALL_STATS', all);
+
+    expect(loadEnvelopeVerificationPreferences('SINGLE_STATS')).toEqual(single);
+    expect(loadEnvelopeVerificationPreferences('ALL_STATS')).toEqual(all);
+    values.set('zetaauto.web.envelope.view', 'SINGLE_STATS');
+    const individual = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
+    expect(individual).toMatch(/aria-pressed="true">미래<\/button>/);
+    expect(individual).toMatch(/검증 개월 수<input[^>]*value="24"/);
+    values.set('zetaauto.web.envelope.view', 'ALL_STATS');
+    const whole = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
+    expect(whole).toMatch(/aria-pressed="true">과거<\/button>/);
+    expect(whole).toMatch(/검증 개월 수<input[^>]*value="6"/);
+  });
+
+  it('restores editable inputs without activating invalid stored filter values', () => {
+    values.set('zetaauto.web.envelope.SINGLE_STATS.verification', JSON.stringify({
+      months: '', options: { sortBy: 'toString', threshold: 'Infinity', deviationSlEnabled: true, deviationSlMultiplier: '0' },
+    }));
+    const saved = loadEnvelopeVerificationPreferences('SINGLE_STATS');
+    expect(saved.months).toBe('');
+    expect(saved.options).toMatchObject({ sortBy: '', threshold: '', deviationSlEnabled: false });
+    expect(saved.filterDraft).toMatchObject({ deviationSlEnabled: true, deviationSlMultiplier: '0' });
+    values.set('zetaauto.web.envelope.SINGLE_STATS.verification', '{');
+    expect(loadEnvelopeVerificationPreferences('SINGLE_STATS')).toEqual({
+      direction: 'PAST', months: '12', options: defaultVerificationResultOptions, filterDraft: defaultVerificationFilterOptions,
+    });
   });
 });
