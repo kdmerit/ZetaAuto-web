@@ -300,6 +300,8 @@ export interface Signal {
   /** Optional continuous ATR trailing stop for NEW_HIGH positions. */
   newHighTrailingStopEnabled?: boolean;
   newHighTrailingStopMultiplier?: number;
+  /** ATR available before the candle-breakout entry bar opened, fixed until exit. */
+  candleBreakoutEntryAtr?: number;
   volatilityTpEnabled?: boolean;
   volatilityNextCloseEnabled?: boolean;
   breakoutRangePercent?: number;

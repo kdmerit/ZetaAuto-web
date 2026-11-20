@@ -67,6 +67,7 @@ export function candleBreakoutSignals(candles: Candle[], settings: BacktestSetti
       initialStop: stop,
       target,
       initialTarget: target,
+      candleBreakoutEntryAtr: atr,
       exitMode: 'CANDLE_BREAKOUT_TP',
     });
   }

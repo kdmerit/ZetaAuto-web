@@ -196,7 +196,12 @@ function cancelSecond(state: PortfolioState, p: Holding): void {
 
 function close(state: PortfolioState, p: Holding, price: number, quantity: number, reason: string, candle: Candle, opening = false): void {
   cancelSecond(state, p);
-  const market = ['SL', 'TRAILING_STOP', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE', 'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'VOLATILITY_WICK_EXIT', 'NEXT_CANDLE_CLOSE', 'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION', 'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE', 'ENVELOPE_CLOSE_CONFIRM', 'ENVELOPE_CENTER_RETURN'].includes(reason);
+  const market = [
+    'SL', 'TRAILING_STOP', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE',
+    'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'VOLATILITY_WICK_EXIT', 'NEXT_CANDLE_CLOSE',
+    'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION',
+    'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE', 'ENVELOPE_CLOSE_CONFIRM', 'ENVELOPE_CENTER_RETURN', 'CANDLE_BREAKOUT_ATR_CLOSE',
+  ].includes(reason);
   const minuteMarket = p.signal.envelopeExecutionModel === 'MINUTE_POLL'
     && (reason === 'ENVELOPE_OPPOSITE' || reason === 'ENVELOPE_15M_WICK');
   const fill = market || minuteMarket ? price * (p.signal.side === 'LONG' ? 1 - slippage : 1 + slippage) : price;
@@ -212,7 +217,8 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   p.qty -= qty;
   state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + 1;
   recordFill(p, reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE', fill, qty, candle, opening,
-    reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT' || reason === 'VOLATILITY_CANDLE_EXIT' || reason === 'VOLATILITY_WICK_EXIT' || reason === 'ENVELOPE_MA20_CLOSE' || reason === 'ENVELOPE_CLOSE_CONFIRM');
+    reason === 'CANDLE_BREAKOUT_ATR_CLOSE' || reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT'
+    || reason === 'VOLATILITY_CANDLE_EXIT' || reason === 'VOLATILITY_WICK_EXIT' || reason === 'ENVELOPE_MA20_CLOSE' || reason === 'ENVELOPE_CLOSE_CONFIRM');
   const withoutAtrStop = p.signal.strategy === 'ATR_ENVELOPE' && !hasFixedStop(p.signal);
   state.trades.push({
     tradeId: `local:${p.symbol}:${p.opened}:${candle.openTime}:${p.executions.length}`,
@@ -1227,6 +1233,15 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
   mergePath(state, worstPath(candidates), symbol);
   closeEnvelopeOnConfirmedClose(state, symbol, bar.candle);
   const remaining = state.positions[symbol];
+  if (remaining?.signal.strategy === 'CANDLE_BREAKOUT' && remaining.signal.candleBreakoutEntryAtr !== undefined
+    && bar.candle.openTime >= remaining.opened) {
+    const { candle } = bar;
+    const atr = remaining.signal.candleBreakoutEntryAtr;
+    const reached = remaining.signal.side === 'LONG'
+      ? candle.close >= remaining.entry + atr
+      : candle.close <= remaining.entry - atr;
+    if (reached) close(state, remaining, candle.close, remaining.qty, 'CANDLE_BREAKOUT_ATR_CLOSE', candle);
+  }
   if (remaining?.signal.strategy === 'PULLBACK' && remaining.signal.exitMode === 'PULLBACK_ENVELOPE') {
     const long = remaining.signal.side === 'LONG';
     const aligned = bar.ma20 !== null && bar.ma20 !== undefined && bar.ma60 !== null && bar.ma60 !== undefined

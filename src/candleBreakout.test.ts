@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildLocalChart, prepareSymbolBlock, runBacktest } from './engine';
+import { initialPortfolio, replayPortfolioBlock } from './portfolio';
 import type { BacktestSettings, Candle } from './types';
 
 const origin = Date.UTC(2026, 0, 1) / 1000;
@@ -34,6 +35,9 @@ function mirror(rows: Candle[]): Candle[] {
   return rows.map((row, index) => candle(index, 300 - row.open, 300 - row.low, 300 - row.high, 300 - row.close));
 }
 
+// Of the 480 hours before the entry candle, 479 have a true range of 4 and one has 11.
+const entryAtr = (479 * 4 + 11) / 480;
+
 describe('candle breakout backtest', () => {
   it('creates the long setup at the close and uses the next candle for TP', () => {
     const rows = longFixture();
@@ -54,6 +58,48 @@ describe('candle breakout backtest', () => {
     const result = runBacktest(rows, { ...settings, side: 'SHORT' }, 'CANDLE_BREAKOUT');
     expect(result.signalCount).toBe(1);
     expect(result.recentTrades[0]).toMatchObject({ reason: 'CANDLE_BREAKOUT_TP', exitPrice: 166 });
+  });
+
+  it.each(['LONG', 'SHORT'] as const)('closes %s on the first following candle when its close equals the ATR threshold', side => {
+    const direction = side === 'LONG' ? 1 : -1;
+    const rows = side === 'LONG' ? longFixture() : mirror(longFixture());
+    const entryClose = rows[500]!.close;
+    const entryPrice = entryClose * (1 + direction * 0.0002);
+    const threshold = entryPrice + direction * entryAtr;
+    const exit = candle(501, entryClose, Math.max(entryClose, threshold) + 1, Math.min(entryClose, threshold) - 1, threshold);
+    rows[501] = exit;
+
+    const result = runBacktest(rows, { ...settings, side }, 'CANDLE_BREAKOUT');
+    expect(result.exitReasons).toEqual({ CANDLE_BREAKOUT_ATR_CLOSE: 1 });
+    const trade = result.recentTrades[0]!;
+    expect(trade).toMatchObject({ entryPrice, exitPrice: threshold * (1 - direction * 0.0002), exitAt: exit.closeTime, exitIndex: 501 });
+    expect(trade.executions.at(-1)).toMatchObject({ kind: 'CLOSE', timing: 'BAR_CLOSE', candleOpenAt: exit.openTime });
+  });
+
+  it('waits through a wick touch and carries the entry ATR into the next replay block', () => {
+    const rows = longFixture();
+    const threshold = rows[500]!.close * 1.0002 + entryAtr;
+    rows[501] = candle(501, 112, 125, 110, threshold - 0.01);
+    const exit = candle(502, rows[501]!.close, 126, 110, threshold + 0.02);
+    rows.push(exit);
+    const start = rows[0]!.openTime;
+    const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'CANDLE_BREAKOUT', start, exit.closeTime);
+    const state = initialPortfolio(Number(settings.initialCapitalUsdt));
+
+    replayPortfolioBlock(state, [document], settings, start, exit.openTime, 3600);
+    expect(state.closed).toBe(0);
+    expect(state.positions.BTCUSDT?.signal.candleBreakoutEntryAtr).toBeCloseTo(entryAtr);
+    const restored = structuredClone(state);
+    replayPortfolioBlock(restored, [document], settings, exit.openTime, exit.closeTime, 3600);
+    expect(restored.trades[0]).toMatchObject({ reason: 'CANDLE_BREAKOUT_ATR_CLOSE', exitAt: exit.closeTime, exitPrice: exit.close * 0.9998 });
+  });
+
+  it('uses the existing stop loss when it executes before a qualifying close', () => {
+    const rows = longFixture();
+    rows[501] = candle(501, 112, 125, 95, 118);
+    const result = runBacktest(rows, settings, 'CANDLE_BREAKOUT');
+    expect(result.exitReasons).toEqual({ SL: 1 });
+    expect(result.recentTrades[0]).toMatchObject({ reason: 'SL', exitPrice: 96 * 0.9998 });
   });
 
   it('requires a completed twenty-day ATR and a body crossing MA5', () => {
