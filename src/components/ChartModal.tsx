@@ -156,7 +156,7 @@ function ChartSvg({
       const first = chart.candles[rangeStart]?.openTime ?? 0;
       const last = chart.candles[rangeEnd]?.openTime ?? 0;
       let low = range.min; let high = range.max;
-      for (const band of [...(chart.envelope?.bands ?? []), ...(chart.atrEnvelope?.bands ?? []), ...(chart.bollinger?.bands ?? [])]) if (band.openTime >= first && band.openTime <= last) {
+      for (const band of [...(chart.envelope?.bands ?? []), ...(chart.envelope2?.bands ?? []), ...(chart.atrEnvelope?.bands ?? []), ...(chart.bollinger?.bands ?? [])]) if (band.openTime >= first && band.openTime <= last) {
         low = Math.min(low, band.lower); high = Math.max(high, band.upper);
       }
       const padding = (high - low) * 0.02;
@@ -168,6 +168,7 @@ function ChartSvg({
   const drawEnd = Math.min(chart.candles.length - 1, rangeEnd + 1);
   const drawnCandles = chart.candles.slice(drawStart, drawEnd + 1);
   const envelopeByTime = useMemo(() => new Map(chart.envelope?.bands.map(band => [band.openTime, band]) ?? []), [chart.envelope]);
+  const envelope2ByTime = useMemo(() => new Map(chart.envelope2?.bands.map(band => [band.openTime, band]) ?? []), [chart.envelope2]);
   const atrByTime = useMemo(() => new Map(chart.atrEnvelope?.bands.map(band => [band.openTime, band]) ?? []), [chart.atrEnvelope]);
   const bollingerByTime = useMemo(() => new Map(chart.bollinger?.bands.map(band => [band.openTime, band]) ?? []), [chart.bollinger]);
   const reportViewTime = (): void => {
@@ -376,6 +377,13 @@ function ChartSvg({
           }).join(' ')} fill="none" stroke="#CFB1FF" strokeWidth={key === 'center' ? 1 : 1.8} opacity={key === 'center' ? 0.6 : 0.95} strokeDasharray={key === 'center' ? '3 4' : undefined}>
           <title>{`엔벨로프 ${key === 'upper' ? '상단' : key === 'lower' ? '하단' : '중심선'} · ${chart.envelope!.interval} SMA${chart.envelope!.period} ±${chart.envelope!.deviationPercent}%`}</title>
         </polyline>) : null}
+        {chart.envelope2 ? (['upper', 'center', 'lower'] as const).map(key => <polyline key={`envelope2-${key}`} className={`envelope2-band envelope2-${key}`}
+          points={drawnCandles.flatMap((candle, offset) => {
+            const band = envelope2ByTime.get(candle.openTime);
+            return band ? [`${(drawStart + offset + 0.5) * step},${yFor(band[key])}`] : [];
+          }).join(' ')} fill="none" stroke="#7EA2FF" strokeWidth={key === 'center' ? 1 : 1.8} opacity={key === 'center' ? 0.6 : 0.95} strokeDasharray={key === 'center' ? '3 4' : undefined}>
+          <title>{`엔벨로프 2 ${key === 'upper' ? '상단' : key === 'lower' ? '하단' : '중심선'} · ${chart.envelope2!.interval} SMA${chart.envelope2!.period} ±${chart.envelope2!.deviationPercent}%`}</title>
+        </polyline>) : null}
         {chart.atrEnvelope ? (['upper', 'center', 'lower'] as const).map(key => <polyline key={`atr-${key}`} className={`atr-band atr-${key}`}
           points={drawnCandles.flatMap((candle, offset) => { const band = atrByTime.get(candle.openTime); return band ? [`${(drawStart + offset + .5) * step},${yFor(band[key])}`] : []; }).join(' ')}
           fill="none" stroke={key === 'center' ? '#F2C66D' : '#64D8E8'} strokeWidth={key === 'center' ? 1.2 : 1.8} opacity=".95" strokeDasharray={key === 'center' ? '3 4' : undefined}>
@@ -539,6 +547,9 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
   const infoEnvelopeBand = infoCandle
     ? chart.envelope?.bands.find(band => band.openTime === infoCandle.openTime) ?? null
     : null;
+  const infoEnvelope2Band = infoCandle
+    ? chart.envelope2?.bands.find(band => band.openTime === infoCandle.openTime) ?? null
+    : null;
   const infoAtrBand = infoCandle
     ? chart.atrEnvelope?.bands.find(band => band.openTime === infoCandle.openTime) ?? null
     : null;
@@ -613,6 +624,7 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
               <span>시가 {formatPrice(infoCandle.open)} · 고가 {formatPrice(infoCandle.high)}</span>
               <span>저가 {formatPrice(infoCandle.low)} · 종가 {formatPrice(infoCandle.close)}</span>
               {infoEnvelopeBand ? <span className="candle-envelope-prices">엔벨 상단 {formatBandPrice(infoEnvelopeBand.upper)} · 하단 {formatBandPrice(infoEnvelopeBand.lower)}</span> : null}
+              {infoEnvelope2Band ? <span className="candle-envelope2-prices">엔벨 2 상단 {formatBandPrice(infoEnvelope2Band.upper)} · 하단 {formatBandPrice(infoEnvelope2Band.lower)}</span> : null}
               {infoAtrBand ? <span className="candle-atr-prices">ATR 엔벨 상단 {formatBandPrice(infoAtrBand.upper)} · 하단 {formatBandPrice(infoAtrBand.lower)}</span> : null}
               {infoBollingerBand ? <span className="candle-bollinger-prices">볼린저 상단 {formatBandPrice(infoBollingerBand.upper)} · 하단 {formatBandPrice(infoBollingerBand.lower)}</span> : null}
               <div className="candle-change-row"><span>몸통 <em className={infoCandle.close >= infoCandle.open ? 'positive' : 'negative'}>{signedPercent(bodyPercent(infoCandle))}</em></span><span>최대 {signedPercent(rangePercent(infoCandle))}</span></div>

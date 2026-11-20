@@ -31,10 +31,11 @@ describe('standalone market chart presentation', () => {
     expect(html).toContain('aria-label="BTCUSDT 팝업 닫기"');
     expect(html).toContain('ATR 10 (10.00%)'); expect(html).not.toContain('>TR '); expect(html).toContain('market-true-range positive'); expect(html).toContain('거래량 1,000 / 500 (200.0%)');
     expect(html).toContain('atr-upper'); expect(html).toContain('bollinger-upper'); expect(html).toContain('#64D8E8'); expect(html).toContain('#F2C66D'); expect(html).toContain('볼린저밴드'); expect(html).not.toContain('envelope-upper');
+    expect(html).toContain('envelope2-upper'); expect(html).toContain('#7EA2FF'); expect(html).toContain('엔벨로프 2');
   });
   it('renders independent validated controls with the selected EMA20/ATR14/2.0 and Bollinger20/2.0 defaults', () => {
     const html = renderToStaticMarkup(<MarketIndicatorControls value={defaultMarketIndicators} onApply={() => {}} />);
-    for (const label of ['엔벨로프 SMA', '엔벨로프 이격 (%)', 'ATR 중심 EMA', 'ATR 기간', 'ATR 승수', '볼린저밴드 기간', '볼린저밴드 표준편차 배수']) expect(html).toContain(label);
+    for (const label of ['엔벨로프 SMA', '엔벨로프 이격 (%)', '엔벨로프 2 SMA', '엔벨로프 2 이격 (%)', 'ATR 중심 EMA', 'ATR 기간', 'ATR 승수', '볼린저밴드 기간', '볼린저밴드 표준편차 배수']) expect(html).toContain(label);
     expect(html).toContain('value="14"'); expect(html).toContain('value="2.0"'); expect(html).toContain('value="20"'); expect(html).not.toContain('입력 후'); expect(html).not.toContain('market-indicator-hint');
   });
   it('leaves backtest chart controls, entry/exit links and title intact', () => {

@@ -46,6 +46,12 @@ describe('editable SMA envelope and EMA/Wilder ATR envelope', () => {
     expect(result.envelope!.bands).toHaveLength(1);
     expect(result.envelope!.bands[0]!.center).toBe(101); expect(result.envelope!.bands[0]!.upper).toBeCloseTo(101.505, 10); expect(result.envelope!.bands[0]!.lower).toBeCloseTo(100.495, 10);
   });
+  it('draws a second independent SMA envelope at the same time', () => {
+    const result = withMarketIndicators(chart([candle(0, 100), candle(1, 102)]), { ...defaultMarketIndicators, smaPeriod: '2', deviationPercent: '0.5', sma2Period: '2', deviation2Percent: '1.0' });
+    expect(result.envelope!.bands).toHaveLength(1);
+    expect(result.envelope2!.bands).toHaveLength(1);
+    expect(result.envelope2!.bands[0]!.center).toBe(101); expect(result.envelope2!.bands[0]!.upper).toBeCloseTo(102.01, 10); expect(result.envelope2!.bands[0]!.lower).toBeCloseTo(99.99, 10);
+  });
   it('matches EMA span and TR.ewm(alpha=1/M, adjust=False), seeded with first values rather than an SMA', () => {
     const rows = [candle(0, 100), { ...candle(1, 110), high: 112, low: 109 }, { ...candle(2, 100), high: 101, low: 98 }];
     const result = withMarketIndicators(chart(rows), { ...defaultMarketIndicators, emaPeriod: '2', atrPeriod: '2', atrMultiplier: '2.0' });
@@ -65,6 +71,9 @@ describe('editable SMA envelope and EMA/Wilder ATR envelope', () => {
     for (const key of ['smaPeriod', 'deviationPercent'] as const) {
       const result = withMarketIndicators(source, { ...p, [key]: '0' }); expect(result.envelope).toBeUndefined(); expect(result.atrEnvelope).toBeDefined();
     }
+    for (const key of ['sma2Period', 'deviation2Percent'] as const) {
+      const result = withMarketIndicators(source, { ...p, [key]: '0' }); expect(result.envelope2).toBeUndefined(); expect(result.envelope).toBeDefined();
+    }
     for (const key of ['emaPeriod', 'atrPeriod', 'atrMultiplier'] as const) {
       const result = withMarketIndicators(source, { ...p, [key]: '0' }); expect(result.atrEnvelope).toBeUndefined(); expect(result.envelope).toBeDefined();
     }
@@ -81,8 +90,8 @@ describe('editable SMA envelope and EMA/Wilder ATR envelope', () => {
     const trade = { ...source, market: undefined }; expect(withMarketIndicators(trade, defaultMarketIndicators)).toBe(trade);
   });
   it('accepts inclusive input limits and rejects invalid, fractional-period or overprecision inputs', () => {
-    expect(() => marketIndicatorParameters({ ...defaultMarketIndicators, smaPeriod: '120', deviationPercent: '20.0', emaPeriod: '0', atrPeriod: '120', atrMultiplier: '20.0', bollingerPeriod: '120', bollingerMultiplier: '10.0' })).not.toThrow();
-    for (const invalid of [{ smaPeriod: '121' }, { smaPeriod: '1.5' }, { smaPeriod: '-1' }, { smaPeriod: '' }, { deviationPercent: '20.1' }, { deviationPercent: '1.01' }, { emaPeriod: '121' }, { atrPeriod: '-1' }, { atrMultiplier: 'Infinity' }, { atrMultiplier: '20.1' }, { bollingerPeriod: '121' }, { bollingerPeriod: '1.5' }, { bollingerMultiplier: '10.1' }, { bollingerMultiplier: '1.01' }]) {
+    expect(() => marketIndicatorParameters({ ...defaultMarketIndicators, smaPeriod: '120', deviationPercent: '20.0', sma2Period: '120', deviation2Percent: '20.0', emaPeriod: '0', atrPeriod: '120', atrMultiplier: '20.0', bollingerPeriod: '120', bollingerMultiplier: '10.0' })).not.toThrow();
+    for (const invalid of [{ smaPeriod: '121' }, { smaPeriod: '1.5' }, { smaPeriod: '-1' }, { smaPeriod: '' }, { deviationPercent: '20.1' }, { deviationPercent: '1.01' }, { sma2Period: '121' }, { sma2Period: '1.5' }, { deviation2Percent: '20.1' }, { deviation2Percent: '1.01' }, { emaPeriod: '121' }, { atrPeriod: '-1' }, { atrMultiplier: 'Infinity' }, { atrMultiplier: '20.1' }, { bollingerPeriod: '121' }, { bollingerPeriod: '1.5' }, { bollingerMultiplier: '10.1' }, { bollingerMultiplier: '1.01' }]) {
       expect(() => marketIndicatorParameters({ ...defaultMarketIndicators, ...invalid })).toThrow();
     }
   });

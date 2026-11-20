@@ -203,6 +203,12 @@ export interface ChartData {
     deviationPercent: number;
     bands: { openTime: number; center: number; upper: number; lower: number }[];
   };
+  envelope2?: {
+    interval: BacktestInterval;
+    period: number;
+    deviationPercent: number;
+    bands: { openTime: number; center: number; upper: number; lower: number }[];
+  };
   /** Standalone public-market chart, never a trade or simulated account. */
   market?: { sourceCandles: Candle[] };
   atrEnvelope?: AtrEnvelopeParameters & {

@@ -6,12 +6,14 @@ import type { AtrEnvelopeInputs, AtrEnvelopeParameters, BacktestInterval, Candle
 export interface MarketIndicatorSettings extends AtrEnvelopeInputs {
   smaPeriod: string;
   deviationPercent: string;
+  sma2Period: string;
+  deviation2Percent: string;
   bollingerPeriod: string;
   bollingerMultiplier: string;
 }
 export const marketIndicatorStorageKey = 'zetaauto.web.marketChart.indicators.v1';
 export const defaultAtrEnvelopeInputs: AtrEnvelopeInputs = { emaPeriod: '20', atrPeriod: '14', atrMultiplier: '2.0' };
-export const defaultMarketIndicators: MarketIndicatorSettings = { smaPeriod: '20', deviationPercent: '0.0', ...defaultAtrEnvelopeInputs, bollingerPeriod: '20', bollingerMultiplier: '2.0' };
+export const defaultMarketIndicators: MarketIndicatorSettings = { smaPeriod: '20', deviationPercent: '0.0', sma2Period: '3', deviation2Percent: '3.0', ...defaultAtrEnvelopeInputs, bollingerPeriod: '20', bollingerMultiplier: '2.0' };
 export const volumeWindowSeconds = 120 * 86400;
 
 const maximumPeriod = 120;
@@ -43,6 +45,7 @@ export function atrEnvelopeParameters(settings: AtrEnvelopeInputs): AtrEnvelopeP
 
 export function marketIndicatorParameters(settings: MarketIndicatorSettings) {
   return { sma: period(settings.smaPeriod, 'SMA'), deviation: decimal(settings.deviationPercent, '엔벨로프 이격'),
+    sma2: period(settings.sma2Period, 'SMA2'), deviation2: decimal(settings.deviation2Percent, '엔벨로프 2 이격'),
     atrEnvelope: atrEnvelopeParameters(settings),
     bollingerPeriod: period(settings.bollingerPeriod, '볼린저밴드 기간'), bollingerMultiplier: decimal(settings.bollingerMultiplier, '볼린저밴드 표준편차 배수', 10) };
 }
@@ -130,18 +133,21 @@ export function withMarketIndicators(chart: ChartData, settings: MarketIndicator
   if (!chart.market) return chart;
   const p = marketIndicatorParameters(settings);
   const envelope: NonNullable<ChartData['envelope']> = { interval: chart.interval, period: p.sma, deviationPercent: p.deviation, bands: [] };
+  const envelope2: NonNullable<ChartData['envelope2']> = { interval: chart.interval, period: p.sma2, deviationPercent: p.deviation2, bands: [] };
   const atrEnvelope: NonNullable<ChartData['atrEnvelope']> = { ...p.atrEnvelope, bands: [] };
   const bollinger: NonNullable<ChartData['bollinger']> = { period: p.bollingerPeriod, multiplier: p.bollingerMultiplier, bands: [] };
   const rows = chart.market.sourceCandles;
   const first = chart.candles[0]?.openTime ?? Infinity; const last = chart.candles.at(-1)?.openTime ?? -Infinity;
   const smaEnabled = p.sma > 0 && p.deviation > 0;
+  const sma2Enabled = p.sma2 > 0 && p.deviation2 > 0;
   const atrEnabled = atrEnvelopeEnabled(p.atrEnvelope);
   const bollingerEnabled = p.bollingerPeriod > 0 && p.bollingerMultiplier > 0;
-  let sum = 0; let bollingerSum = 0; let bollingerSquareSum = 0;
+  let sum = 0; let sum2 = 0; let bollingerSum = 0; let bollingerSquareSum = 0;
   let atrState: AtrEnvelopeState | undefined;
   for (let index = 0; index < rows.length; index += 1) {
     const candle = rows[index]!;
     if (smaEnabled) { sum += candle.close; if (index >= p.sma) sum -= rows[index - p.sma]!.close; }
+    if (sma2Enabled) { sum2 += candle.close; if (index >= p.sma2) sum2 -= rows[index - p.sma2]!.close; }
     if (bollingerEnabled) {
       bollingerSum += candle.close; bollingerSquareSum += candle.close * candle.close;
       if (index >= p.bollingerPeriod) {
@@ -155,6 +161,10 @@ export function withMarketIndicators(chart: ChartData, settings: MarketIndicator
       const center = sum / p.sma;
       envelope.bands.push({ openTime: candle.openTime, center, upper: center * (1 + p.deviation / 100), lower: center * (1 - p.deviation / 100) });
     }
+    if (sma2Enabled && index + 1 >= p.sma2) {
+      const center = sum2 / p.sma2;
+      envelope2.bands.push({ openTime: candle.openTime, center, upper: center * (1 + p.deviation2 / 100), lower: center * (1 - p.deviation2 / 100) });
+    }
     if (atrState) atrEnvelope.bands.push({ openTime: candle.openTime, ...atrEnvelopeBand(atrState, p.atrEnvelope) });
     if (bollingerEnabled && index + 1 >= p.bollingerPeriod) {
       const center = bollingerSum / p.bollingerPeriod;
@@ -163,5 +173,7 @@ export function withMarketIndicators(chart: ChartData, settings: MarketIndicator
       bollinger.bands.push({ openTime: candle.openTime, center, upper: center + width, lower: center - width });
     }
   }
-  return { ...chart, side: null, markers: [], executions: [], waves: [], priceLines: [], envelope: smaEnabled ? envelope : undefined, atrEnvelope: atrEnabled ? atrEnvelope : undefined, bollinger: bollingerEnabled ? bollinger : undefined };
+  return { ...chart, side: null, markers: [], executions: [], waves: [], priceLines: [],
+    envelope: smaEnabled ? envelope : undefined, envelope2: sma2Enabled ? envelope2 : undefined,
+    atrEnvelope: atrEnabled ? atrEnvelope : undefined, bollinger: bollingerEnabled ? bollinger : undefined };
 }
