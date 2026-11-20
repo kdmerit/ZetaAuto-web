@@ -780,13 +780,13 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>6. 선택 시 현재 캔들의 종가가 MA20 위일 때만 롱으로 진입합니다.</p>
                 <p>7. 선택 시 현재 캔들의 종가가 MA20 아래일 때만 롱으로 진입합니다.</p>
                 <p>8. 선택 시 현재 캔들의 종가가 MA60 위일 때만 롱으로 진입합니다.</p>
-                <p>9. 선택 시 현재 캔들의 종가와 MA20의 이격이 1% 이상일 때만 롱으로 진입합니다.</p>
+                <p>9. 선택 시 현재 캔들의 종가가 MA20보다 1% 이상 아래일 때만 롱으로 진입합니다.</p>
                 <p>10. 선택 시 MA20이 MA60보다 높을 때만 롱으로 진입합니다.</p>
                 <p>11. 현재 캔들의 종가에 롱으로 진입합니다.</p>
                 <p>12. `SL은 매수가 - ATR`을 선택하면 실제 매수가에서 ATR을 뺀 가격, 선택하지 않으면 현재 캔들의 저가를 SL로 사용합니다.</p>
                 <p>13. 진입 다음 캔들부터 종가가 실제 매수가 + ATR 이상이면 종가 기준으로 청산합니다.</p>
                 <strong>숏 포지션</strong>
-                <p>위 조건을 반대로 적용합니다. 전전·전 캔들은 양봉, 종가는 전전 캔들이 더 낮고, 현재 캔들은 음봉으로 두 몸통 하단보다 낮게 마감해야 합니다. 두 이전 몸통은 MA5 위에 있고 현재 캔들은 MA5를 위에서 아래로 돌파합니다. 선택한 종가 MA20 위·아래 조건은 각각 해당 이동평균선 아래·위, 종가 MA60 조건은 MA60 아래, 이격 조건은 MA20보다 1% 이상 낮은 경우, MA20·MA60 조건은 MA20이 MA60보다 낮은 경우로 적용합니다. 현재 캔들 종가에 숏으로 진입하며 SL은 현재 캔들의 고가입니다.</p>
+                <p>위 조건을 반대로 적용합니다. 전전·전 캔들은 양봉, 종가는 전전 캔들이 더 낮고, 현재 캔들은 음봉으로 두 몸통 하단보다 낮게 마감해야 합니다. 두 이전 몸통은 MA5 위에 있고 현재 캔들은 MA5를 위에서 아래로 돌파합니다. 선택한 종가 MA20 위·아래 조건은 각각 해당 이동평균선 아래·위, 종가 MA60 조건은 MA60 아래, 이격 조건은 MA20보다 1% 이상 높은 경우, MA20·MA60 조건은 MA20이 MA60보다 낮은 경우로 적용합니다. 현재 캔들 종가에 숏으로 진입하며 SL은 현재 캔들의 고가입니다.</p>
                 <p>진입 다음 캔들부터 종가가 실제 매수가 − ATR 이하이면 종가 기준으로 청산합니다.</p>
                 <p>손절은 진입 다음 캔들부터 확인하며, 봉 안에서 손절가에 닿으면 손절이 우선합니다. ATR은 진입봉 시작 전에 확정된 최근 20일의 평균 진폭으로 고정합니다. 종가 청산에는 시장가 슬리피지를 반영합니다.</p>
               </div>
@@ -939,7 +939,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <label className="checkbox-row"><input type="checkbox" checked={settings.candleBreakoutCloseMa20Enabled === true} onChange={event => update('candleBreakoutCloseMa20Enabled', event.target.checked)} /><span>종가가 MA20 위일때만 매수</span></label>
               <label className="checkbox-row"><input type="checkbox" checked={settings.candleBreakoutCloseMa20BelowEnabled === true} onChange={event => update('candleBreakoutCloseMa20BelowEnabled', event.target.checked)} /><span>MA20 아래에서만 매수</span></label>
               <label className="checkbox-row"><input type="checkbox" checked={settings.candleBreakoutCloseMa60Enabled === true} onChange={event => update('candleBreakoutCloseMa60Enabled', event.target.checked)} /><span>종가가 MA60 위일때만 매수</span></label>
-              <label className="checkbox-row"><input type="checkbox" checked={settings.candleBreakoutMa20DistanceEnabled === true} onChange={event => update('candleBreakoutMa20DistanceEnabled', event.target.checked)} /><span>종가와 MA20과의 이격 1% 이상인 경우만 매수</span></label>
+              <label className="checkbox-row"><input type="checkbox" checked={settings.candleBreakoutMa20DistanceEnabled === true} onChange={event => update('candleBreakoutMa20DistanceEnabled', event.target.checked)} /><span>종가가 MA20보다 1% 이상 아래인 경우만 매수</span></label>
               <label className="checkbox-row"><input type="checkbox" checked={settings.candleBreakoutMa20AboveMa60Enabled === true} onChange={event => update('candleBreakoutMa20AboveMa60Enabled', event.target.checked)} /><span>MA20 &gt; MA60일때만 매수</span></label>
               <label className="checkbox-row"><input type="checkbox" checked={settings.candleBreakoutAtrStopEnabled === true} onChange={event => update('candleBreakoutAtrStopEnabled', event.target.checked)} /><span>SL은 매수가 - ATR</span></label>
               <p className="notice small">롱은 체크한 문구 그대로 적용하고, 숏은 MA20 위·MA60 아래·MA20보다 1% 이상 높은 상태·MA20 &lt; MA60으로 반대로 적용합니다. SL 항목을 체크하면 롱은 실제 매수가−ATR, 숏은 실제 매수가+ATR을 사용하고, 해제하면 진입봉 저가·고가를 사용합니다.</p>

@@ -25,7 +25,7 @@ export interface LocalRunOptions {
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
   if (strategy === 'ATR_ENVELOPE') return '2.10.100';
-  if (strategy === 'CANDLE_BREAKOUT') return '2.10.105';
+  if (strategy === 'CANDLE_BREAKOUT') return '2.10.106';
   return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.93' : strategy === 'ENVELOPE' ? envelopeLocalJobVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {

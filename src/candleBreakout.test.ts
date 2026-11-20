@@ -146,7 +146,6 @@ describe('candle breakout backtest', () => {
       ...settings,
       candleBreakoutCloseMa20Enabled: true,
       candleBreakoutCloseMa60Enabled: true,
-      candleBreakoutMa20DistanceEnabled: true,
       candleBreakoutMa20AboveMa60Enabled: true,
     };
     const longRows = trendingLongFixture();
@@ -165,6 +164,11 @@ describe('candle breakout backtest', () => {
     ma60Rows[500] = candle(500, 101, 114, 96, 109.5);
     expect(prepareSymbolBlock('BTCUSDT', ma60Rows, { ...settings, candleBreakoutCloseMa60Enabled: true }, 'CANDLE_BREAKOUT', ma60Rows[0]!.openTime, ma60Rows.at(-1)!.closeTime).bars[500]!.signal).toBeNull();
     expect(prepareSymbolBlock('BTCUSDT', ma60Rows, { ...settings, candleBreakoutMa20DistanceEnabled: true }, 'CANDLE_BREAKOUT', ma60Rows[0]!.openTime, ma60Rows.at(-1)!.closeTime).bars[500]!.signal).toBeNull();
+    const ma20DistanceRows = longFixture();
+    ma20DistanceRows[500] = candle(500, 101, 114, 96, 106);
+    expect(prepareSymbolBlock('BTCUSDT', ma20DistanceRows, { ...settings, candleBreakoutMa20DistanceEnabled: true }, 'CANDLE_BREAKOUT', ma20DistanceRows[0]!.openTime, ma20DistanceRows.at(-1)!.closeTime).bars[500]!.signal).toMatchObject({ side: 'LONG', entry: 106 });
+    const mirroredMa20Distance = mirror(ma20DistanceRows);
+    expect(prepareSymbolBlock('BTCUSDT', mirroredMa20Distance, { ...settings, side: 'SHORT', candleBreakoutMa20DistanceEnabled: true }, 'CANDLE_BREAKOUT', mirroredMa20Distance[0]!.openTime, mirroredMa20Distance.at(-1)!.closeTime).bars[500]!.signal).toMatchObject({ side: 'SHORT', entry: 194 });
     expect(prepareSymbolBlock('BTCUSDT', longFixture(), { ...settings, candleBreakoutMa20AboveMa60Enabled: true }, 'CANDLE_BREAKOUT', longRows[0]!.openTime, longRows.at(-1)!.closeTime).bars[500]!.signal).toBeNull();
 
     const ma20BelowRows = longFixture();

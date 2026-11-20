@@ -105,7 +105,7 @@ export function formatBacktestHistorySettings(
     addEnabled(values, settings.candleBreakoutCloseMa20Enabled === true, '종가 MA20 위 필터');
     addEnabled(values, settings.candleBreakoutCloseMa20BelowEnabled === true, 'MA20 아래 필터');
     addEnabled(values, settings.candleBreakoutCloseMa60Enabled === true, '종가 MA60 위 필터');
-    addEnabled(values, settings.candleBreakoutMa20DistanceEnabled === true, '종가·MA20 이격 1% 이상');
+    addEnabled(values, settings.candleBreakoutMa20DistanceEnabled === true, '종가 MA20보다 1% 아래');
     addEnabled(values, settings.candleBreakoutMa20AboveMa60Enabled === true, 'MA20 > MA60 필터');
     addEnabled(values, settings.candleBreakoutAtrStopEnabled === true, 'SL 매수가−ATR');
     addEnabled(values, settings.partialTpEnabled, '부분 TP 50%');

@@ -42,12 +42,12 @@ export function candleBreakoutSignals(candles: Candle[], settings: BacktestSetti
     const longCloseFilters = (!ma20CloseEnabled || current.close > currentMa20)
       && (!ma20BelowEnabled || current.close < currentMa20)
       && (!ma60CloseEnabled || current.close > currentMa60)
-      && (!ma20DistanceEnabled || current.close >= currentMa20 * 1.01)
+      && (!ma20DistanceEnabled || current.close <= currentMa20 * 0.99)
       && (!ma20AboveMa60Enabled || currentMa20 > currentMa60);
     const shortCloseFilters = (!ma20CloseEnabled || current.close < currentMa20)
       && (!ma20BelowEnabled || current.close > currentMa20)
       && (!ma60CloseEnabled || current.close < currentMa60)
-      && (!ma20DistanceEnabled || current.close <= currentMa20 * 0.99)
+      && (!ma20DistanceEnabled || current.close >= currentMa20 * 1.01)
       && (!ma20AboveMa60Enabled || currentMa20 < currentMa60);
 
     const olderBody = Math.abs(older.close - older.open);
