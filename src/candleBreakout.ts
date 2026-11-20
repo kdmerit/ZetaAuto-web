@@ -54,10 +54,8 @@ export function candleBreakoutSignals(candles: Candle[], settings: BacktestSetti
     if (!long && !short) continue;
     const side: Signal['side'] = long ? 'LONG' : 'SHORT';
     if (settings.side !== 'BOTH' && settings.side !== side) continue;
-    const body = Math.abs(current.close - current.open);
-    const target = side === 'LONG' ? current.close + body * 2 : current.close - body * 2;
     const stop = side === 'LONG' ? current.low : current.high;
-    if (!Number.isFinite(body) || body <= 0 || !Number.isFinite(target) || target <= 0 || !Number.isFinite(stop) || stop <= 0) continue;
+    if (!Number.isFinite(current.close) || current.close <= 0 || !Number.isFinite(stop) || stop <= 0) continue;
     signals.push({
       strategy: 'CANDLE_BREAKOUT',
       side,
@@ -65,10 +63,9 @@ export function candleBreakoutSignals(candles: Candle[], settings: BacktestSetti
       entry: current.close,
       stop,
       initialStop: stop,
-      target,
-      initialTarget: target,
+      target: 0,
+      initialTarget: 0,
       candleBreakoutEntryAtr: atr,
-      exitMode: 'CANDLE_BREAKOUT_TP',
     });
   }
   return signals;

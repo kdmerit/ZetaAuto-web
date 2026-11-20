@@ -164,7 +164,6 @@ function priceLines(p: Holding): PriceLine[] {
   if (p.signal.strategy === 'CANDLE_BREAKOUT') return [
     { kind: 'ENTRY', price: p.first },
     { kind: 'SL', price: p.stop },
-    { kind: 'TP', price: p.target },
   ];
   if (p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE') return [{ kind: 'ENTRY', price: p.first }];
   const split = p.signal.strategy === 'PULLBACK';
@@ -276,7 +275,8 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   if (state.cash + 1e-10 < bet * (1 + leverage * feeRate)) { state.insufficientFunds += 1; return; }
   const target = signal.exitMode === 'VOLATILITY_TP' ? entry + direction * signal.breakoutRange! * signal.volatilityK1!
     : signal.exitMode === 'VOLATILITY_CLOSE' ? entry + direction * signal.breakoutRange! : signal.target;
-  const targetRequired = !(signal.strategy === 'NEW_HIGH' && signal.newHighTpEnabled === false);
+  const targetRequired = signal.strategy !== 'CANDLE_BREAKOUT'
+    && !(signal.strategy === 'NEW_HIGH' && signal.newHighTpEnabled === false);
   // A wide ATR band may put a short's lower target below zero until the next source candle.
   const requiresPositiveTarget = signal.strategy !== 'ATR_ENVELOPE' && (signal.exitMode !== 'VOLATILITY_TP' || signal.volatilityTpEnabled !== false);
   if (targetRequired && signal.exitMode !== 'ENVELOPE_MA20_CLOSE'
@@ -418,6 +418,16 @@ function hasFixedStop(signal: Signal): boolean {
     && (signal.exitMode !== 'VOLATILITY_CLOSE' || signal.volatilityStopEnabled === true);
 }
 
+function hasIntrabarTarget(p: Holding): boolean {
+  const { signal } = p;
+  if (signal.strategy === 'CANDLE_BREAKOUT' || signal.envelopeExecutionModel === 'MINUTE_POLL') return false;
+  if (signal.exitMode === 'VOLATILITY_TP') return signal.volatilityTpEnabled !== false;
+  if (signal.exitMode === 'VOLATILITY_MA5'
+    || (isEnvelopeStrategy(signal.strategy) && signal.envelopeCloseOnConfirmedBreakout === true)) return false;
+  if (signal.exitMode === 'VOLATILITY_CANDLE_RULE' || signal.exitMode === 'VOLATILITY_WICK_RULE') return p.target > 0;
+  return true;
+}
+
 function atPrice(state: PortfolioState, symbol: string, price: number, candle: Candle, settings: BacktestSettings, opening = false): void {
   const p = state.positions[symbol];
   if (!p) return;
@@ -468,18 +478,12 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
     if (p.signal.strategy === 'DISPARITY') p.stop = p.first;
     close(state, p, p.partial, p.qty / 2, 'PARTIAL_TP', candle, opening);
   }
-  const confirmedEnvelopeExit = isEnvelopeStrategy(p.signal.strategy) && p.signal.envelopeCloseOnConfirmedBreakout === true;
-  const targetEnabled = !confirmedEnvelopeExit && p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
-    && (p.signal.exitMode !== 'VOLATILITY_CANDLE_RULE' || p.target > 0)
-    && (p.signal.exitMode !== 'VOLATILITY_WICK_RULE' || p.target > 0)
-    || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
-  if (p.signal.envelopeExecutionModel !== 'MINUTE_POLL' && targetEnabled && (long ? price >= p.target : price <= p.target)) {
+  if (hasIntrabarTarget(p) && (long ? price >= p.target : price <= p.target)) {
     const disparity = p.signal.strategy === 'DISPARITY';
     const reason = isEnvelopeStrategy(p.signal.strategy) ? 'ENVELOPE_OPPOSITE'
       : p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE' ? 'PULLBACK_ENVELOPE'
       : p.signal.strategy === 'REFERENCE' ? 'REFERENCE_TP'
-        : p.signal.strategy === 'CANDLE_BREAKOUT' ? 'CANDLE_BREAKOUT_TP'
-        : disparity ? 'MA60_TOUCH' : 'FULL_TP';
+      : disparity ? 'MA60_TOUCH' : 'FULL_TP';
     close(state, p, disparity ? price : p.target, p.qty, reason, candle, opening);
   }
 }
@@ -491,12 +495,7 @@ function holdingPriceLevels(p: Holding, settings: BacktestSettings): number[] {
     const liq = estimatedLiquidation(p.signal.side, p.entry, p.qty, p.margin, p.risk);
     if (liq !== null) levels.add(liq);
   }
-  const confirmedEnvelopeExit = isEnvelopeStrategy(p.signal.strategy) && p.signal.envelopeCloseOnConfirmedBreakout === true;
-  const targetEnabled = !confirmedEnvelopeExit && p.signal.exitMode !== 'VOLATILITY_TP' && p.signal.exitMode !== 'VOLATILITY_MA5'
-    && (p.signal.exitMode !== 'VOLATILITY_CANDLE_RULE' || p.target > 0)
-    && (p.signal.exitMode !== 'VOLATILITY_WICK_RULE' || p.target > 0)
-    || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false;
-  if (p.signal.envelopeExecutionModel !== 'MINUTE_POLL' && targetEnabled) levels.add(p.target);
+  if (hasIntrabarTarget(p)) levels.add(p.target);
   if (hasFixedStop(p.signal)) levels.add(p.stop);
   if (p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE' && p.pullbackMa60Exit !== undefined) levels.add(p.pullbackMa60Exit);
   if (p.pending) levels.add(p.second);

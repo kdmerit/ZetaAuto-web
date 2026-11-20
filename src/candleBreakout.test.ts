@@ -39,25 +39,35 @@ function mirror(rows: Candle[]): Candle[] {
 const entryAtr = (479 * 4 + 11) / 480;
 
 describe('candle breakout backtest', () => {
-  it('creates the long setup at the close and uses the next candle for TP', () => {
+  it('enters at the breakout close and exits at the following close when the old TP is crossed intrabar', () => {
     const rows = longFixture();
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'CANDLE_BREAKOUT', rows[0]!.openTime, rows.at(-1)!.closeTime);
     const signal = document.bars[500]!.signal;
-    expect(signal).toMatchObject({ strategy: 'CANDLE_BREAKOUT', side: 'LONG', entry: 112, stop: 96, target: 134, exitMode: 'CANDLE_BREAKOUT_TP' });
+    expect(signal).toMatchObject({ strategy: 'CANDLE_BREAKOUT', side: 'LONG', entry: 112, stop: 96, target: 0 });
     const result = runBacktest(rows, settings, 'CANDLE_BREAKOUT');
     expect(result.signalCount).toBe(1);
     expect(result.entryCount).toBe(1);
-    expect(result.recentTrades[0]).toMatchObject({ reason: 'CANDLE_BREAKOUT_TP', entryPrice: 112 * 1.0002, exitPrice: 134 });
-    expect(buildLocalChart(result, result.recentTrades[0]!, settings).priceLines.map(line => line.kind)).toEqual(['ENTRY', 'SL', 'TP', 'EXIT']);
+    const trade = result.recentTrades[0]!;
+    expect(trade).toMatchObject({ reason: 'CANDLE_BREAKOUT_ATR_CLOSE', entryPrice: 112 * 1.0002, exitPrice: 130 * 0.9998 });
+    expect(trade.priceLines?.map(line => line.kind)).toEqual(['ENTRY', 'SL', 'EXIT']);
+    expect(buildLocalChart(result, trade, settings).priceLines.map(line => line.kind)).toEqual(['ENTRY', 'SL', 'EXIT']);
   });
 
   it('mirrors every directional condition for a short setup', () => {
     const rows = mirror(longFixture());
     const document = prepareSymbolBlock('BTCUSDT', rows, { ...settings, side: 'SHORT' }, 'CANDLE_BREAKOUT', rows[0]!.openTime, rows.at(-1)!.closeTime);
-    expect(document.bars[500]!.signal).toMatchObject({ strategy: 'CANDLE_BREAKOUT', side: 'SHORT', entry: 188, stop: 204, target: 166, exitMode: 'CANDLE_BREAKOUT_TP' });
+    expect(document.bars[500]!.signal).toMatchObject({ strategy: 'CANDLE_BREAKOUT', side: 'SHORT', entry: 188, stop: 204, target: 0 });
     const result = runBacktest(rows, { ...settings, side: 'SHORT' }, 'CANDLE_BREAKOUT');
     expect(result.signalCount).toBe(1);
-    expect(result.recentTrades[0]).toMatchObject({ reason: 'CANDLE_BREAKOUT_TP', exitPrice: 166 });
+    expect(result.recentTrades[0]).toMatchObject({ reason: 'CANDLE_BREAKOUT_ATR_CLOSE', exitPrice: 170 * 1.0002 });
+  });
+
+  it('enters a short even if the removed body-based target would have been negative', () => {
+    const rows = mirror(longFixture());
+    rows[500] = candle(500, 199, 204, 58, 60);
+    const result = runBacktest(rows, { ...settings, side: 'SHORT' }, 'CANDLE_BREAKOUT');
+    expect(result.entryCount).toBe(1);
+    expect(result.openPositionCount).toBe(1);
   });
 
   it.each(['LONG', 'SHORT'] as const)('closes %s on the first following candle when its close equals the ATR threshold', side => {
@@ -76,10 +86,10 @@ describe('candle breakout backtest', () => {
     expect(trade.executions.at(-1)).toMatchObject({ kind: 'CLOSE', timing: 'BAR_CLOSE', candleOpenAt: exit.openTime });
   });
 
-  it('waits through a wick touch and carries the entry ATR into the next replay block', () => {
+  it('waits through a wick beyond the old TP and carries the entry ATR into the next replay block', () => {
     const rows = longFixture();
     const threshold = rows[500]!.close * 1.0002 + entryAtr;
-    rows[501] = candle(501, 112, 125, 110, threshold - 0.01);
+    rows[501] = candle(501, 112, 136, 110, threshold - 0.01);
     const exit = candle(502, rows[501]!.close, 126, 110, threshold + 0.02);
     rows.push(exit);
     const start = rows[0]!.openTime;
