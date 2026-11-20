@@ -51,9 +51,11 @@ describe('one-month backtest start defaults', () => {
   it('starts candle-breakout MA filters disabled', () => {
     expect(defaultSettings('CANDLE_BREAKOUT')).toMatchObject({
       candleBreakoutCloseMa20Enabled: false,
+      candleBreakoutCloseMa20BelowEnabled: false,
       candleBreakoutCloseMa60Enabled: false,
       candleBreakoutMa20DistanceEnabled: false,
       candleBreakoutMa20AboveMa60Enabled: false,
+      candleBreakoutAtrStopEnabled: false,
     });
   });
 });

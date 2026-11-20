@@ -105,9 +105,11 @@ export interface BacktestSettings {
   referenceTpPercent?: string;
   referenceMa10Enabled?: boolean;
   candleBreakoutCloseMa20Enabled?: boolean;
+  candleBreakoutCloseMa20BelowEnabled?: boolean;
   candleBreakoutCloseMa60Enabled?: boolean;
   candleBreakoutMa20DistanceEnabled?: boolean;
   candleBreakoutMa20AboveMa60Enabled?: boolean;
+  candleBreakoutAtrStopEnabled?: boolean;
 }
 
 export interface Candle {
@@ -306,6 +308,8 @@ export interface Signal {
   newHighTrailingStopMultiplier?: number;
   /** ATR available before the candle-breakout entry bar opened, fixed until exit. */
   candleBreakoutEntryAtr?: number;
+  /** When enabled, the candle-breakout stop is fixed at the filled entry price ± ATR. */
+  candleBreakoutAtrStopDistance?: number;
   volatilityTpEnabled?: boolean;
   volatilityNextCloseEnabled?: boolean;
   breakoutRangePercent?: number;

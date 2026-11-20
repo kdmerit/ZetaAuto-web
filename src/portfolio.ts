@@ -288,6 +288,9 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   let activeStop = signal.stop;
   if (signal.atrEnvelopeStopDistance !== undefined) {
     activeStop = entry - direction * signal.atrEnvelopeStopDistance;
+  } else if (signal.candleBreakoutAtrStopDistance !== undefined) {
+    activeStop = entry - direction * signal.candleBreakoutAtrStopDistance;
+    if (!Number.isFinite(activeStop) || activeStop <= 0) return;
   } else if (signal.strategy === 'VOLATILITY'
     && signal.exitMode !== 'VOLATILITY_CANDLE_RULE'
     && signal.exitMode !== 'VOLATILITY_WICK_RULE'

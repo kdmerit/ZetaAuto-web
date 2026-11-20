@@ -119,6 +119,20 @@ describe('candle breakout backtest', () => {
     expect(result.recentTrades[0]).toMatchObject({ reason: 'SL', exitPrice: 96 * 0.9998 });
   });
 
+  it.each(['LONG', 'SHORT'] as const)('uses the filled entry price plus or minus ATR as the SL when enabled for %s', side => {
+    const direction = side === 'LONG' ? 1 : -1;
+    const base = longFixture();
+    base[501] = candle(501, 112, 125, 107, 118);
+    const rows = side === 'LONG' ? base : mirror(base);
+    const filteredSettings = { ...settings, side, candleBreakoutAtrStopEnabled: true };
+    const result = runBacktest(rows, filteredSettings, 'CANDLE_BREAKOUT');
+    const entryPrice = rows[500]!.close * (1 + direction * 0.0002);
+    const expectedStop = entryPrice - direction * entryAtr;
+    expect(result.exitReasons).toEqual({ SL: 1 });
+    expect(result.recentTrades[0]).toMatchObject({ reason: 'SL' });
+    expect(result.recentTrades[0]!.signal.stop).toBeCloseTo(expectedStop);
+  });
+
   it('requires a completed twenty-day ATR and a body crossing MA5', () => {
     const rows = longFixture().slice(0, 300);
     expect(prepareSymbolBlock('BTCUSDT', rows, settings, 'CANDLE_BREAKOUT', rows[0]!.openTime, rows.at(-1)!.closeTime).bars.every(bar => bar.signal === null)).toBe(true);
@@ -152,5 +166,12 @@ describe('candle breakout backtest', () => {
     expect(prepareSymbolBlock('BTCUSDT', ma60Rows, { ...settings, candleBreakoutCloseMa60Enabled: true }, 'CANDLE_BREAKOUT', ma60Rows[0]!.openTime, ma60Rows.at(-1)!.closeTime).bars[500]!.signal).toBeNull();
     expect(prepareSymbolBlock('BTCUSDT', ma60Rows, { ...settings, candleBreakoutMa20DistanceEnabled: true }, 'CANDLE_BREAKOUT', ma60Rows[0]!.openTime, ma60Rows.at(-1)!.closeTime).bars[500]!.signal).toBeNull();
     expect(prepareSymbolBlock('BTCUSDT', longFixture(), { ...settings, candleBreakoutMa20AboveMa60Enabled: true }, 'CANDLE_BREAKOUT', longRows[0]!.openTime, longRows.at(-1)!.closeTime).bars[500]!.signal).toBeNull();
+
+    const ma20BelowRows = longFixture();
+    ma20BelowRows[500] = candle(500, 101, 114, 96, 108);
+    expect(prepareSymbolBlock('BTCUSDT', ma20BelowRows, { ...settings, candleBreakoutCloseMa20BelowEnabled: true }, 'CANDLE_BREAKOUT', ma20BelowRows[0]!.openTime, ma20BelowRows.at(-1)!.closeTime).bars[500]!.signal).toMatchObject({ side: 'LONG', entry: 108 });
+    expect(prepareSymbolBlock('BTCUSDT', ma20BelowRows, { ...settings, candleBreakoutCloseMa20Enabled: true, candleBreakoutCloseMa20BelowEnabled: true }, 'CANDLE_BREAKOUT', ma20BelowRows[0]!.openTime, ma20BelowRows.at(-1)!.closeTime).bars[500]!.signal).toBeNull();
+    const mirroredMa20Below = mirror(ma20BelowRows);
+    expect(prepareSymbolBlock('BTCUSDT', mirroredMa20Below, { ...settings, side: 'SHORT', candleBreakoutCloseMa20BelowEnabled: true }, 'CANDLE_BREAKOUT', mirroredMa20Below[0]!.openTime, mirroredMa20Below.at(-1)!.closeTime).bars[500]!.signal).toMatchObject({ side: 'SHORT', entry: 192 });
   });
 });

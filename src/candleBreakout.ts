@@ -24,10 +24,11 @@ export function candleBreakoutSignals(candles: Candle[], settings: BacktestSetti
     const ma20 = enriched[index]?.ma20;
     const ma60 = enriched[index]?.ma60;
     const ma20CloseEnabled = settings.candleBreakoutCloseMa20Enabled === true;
+    const ma20BelowEnabled = settings.candleBreakoutCloseMa20BelowEnabled === true;
     const ma60CloseEnabled = settings.candleBreakoutCloseMa60Enabled === true;
     const ma20DistanceEnabled = settings.candleBreakoutMa20DistanceEnabled === true;
     const ma20AboveMa60Enabled = settings.candleBreakoutMa20AboveMa60Enabled === true;
-    const needsMa20 = ma20CloseEnabled || ma20DistanceEnabled || ma20AboveMa60Enabled;
+    const needsMa20 = ma20CloseEnabled || ma20BelowEnabled || ma20DistanceEnabled || ma20AboveMa60Enabled;
     const needsMa60 = ma60CloseEnabled || ma20AboveMa60Enabled;
     if (!atrRow?.complete || atr === null || atr === undefined || !Number.isFinite(atr) || atr <= 0
       || ma5 === null || ma5 === undefined || !Number.isFinite(ma5)
@@ -39,10 +40,12 @@ export function candleBreakoutSignals(candles: Candle[], settings: BacktestSetti
     const currentMa20 = ma20 ?? Number.NaN;
     const currentMa60 = ma60 ?? Number.NaN;
     const longCloseFilters = (!ma20CloseEnabled || current.close > currentMa20)
+      && (!ma20BelowEnabled || current.close < currentMa20)
       && (!ma60CloseEnabled || current.close > currentMa60)
       && (!ma20DistanceEnabled || current.close >= currentMa20 * 1.01)
       && (!ma20AboveMa60Enabled || currentMa20 > currentMa60);
     const shortCloseFilters = (!ma20CloseEnabled || current.close < currentMa20)
+      && (!ma20BelowEnabled || current.close > currentMa20)
       && (!ma60CloseEnabled || current.close < currentMa60)
       && (!ma20DistanceEnabled || current.close <= currentMa20 * 0.99)
       && (!ma20AboveMa60Enabled || currentMa20 < currentMa60);
@@ -89,6 +92,7 @@ export function candleBreakoutSignals(candles: Candle[], settings: BacktestSetti
       target: 0,
       initialTarget: 0,
       candleBreakoutEntryAtr: atr,
+      ...(settings.candleBreakoutAtrStopEnabled === true ? { candleBreakoutAtrStopDistance: atr } : {}),
     });
   }
   return signals;
