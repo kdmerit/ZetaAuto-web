@@ -21,10 +21,31 @@ export function candleBreakoutSignals(candles: Candle[], settings: BacktestSetti
     const ma5 = enriched[index]?.ma5;
     const olderMa5 = enriched[index - 2]?.ma5;
     const previousMa5 = enriched[index - 1]?.ma5;
+    const ma20 = enriched[index]?.ma20;
+    const ma60 = enriched[index]?.ma60;
+    const ma20CloseEnabled = settings.candleBreakoutCloseMa20Enabled === true;
+    const ma60CloseEnabled = settings.candleBreakoutCloseMa60Enabled === true;
+    const ma20DistanceEnabled = settings.candleBreakoutMa20DistanceEnabled === true;
+    const ma20AboveMa60Enabled = settings.candleBreakoutMa20AboveMa60Enabled === true;
+    const needsMa20 = ma20CloseEnabled || ma20DistanceEnabled || ma20AboveMa60Enabled;
+    const needsMa60 = ma60CloseEnabled || ma20AboveMa60Enabled;
     if (!atrRow?.complete || atr === null || atr === undefined || !Number.isFinite(atr) || atr <= 0
       || ma5 === null || ma5 === undefined || !Number.isFinite(ma5)
       || olderMa5 === null || olderMa5 === undefined || !Number.isFinite(olderMa5)
-      || previousMa5 === null || previousMa5 === undefined || !Number.isFinite(previousMa5)) continue;
+      || previousMa5 === null || previousMa5 === undefined || !Number.isFinite(previousMa5)
+      || (needsMa20 && (ma20 === null || ma20 === undefined || !Number.isFinite(ma20)))
+      || (needsMa60 && (ma60 === null || ma60 === undefined || !Number.isFinite(ma60)))) continue;
+
+    const currentMa20 = ma20 ?? Number.NaN;
+    const currentMa60 = ma60 ?? Number.NaN;
+    const longCloseFilters = (!ma20CloseEnabled || current.close > currentMa20)
+      && (!ma60CloseEnabled || current.close > currentMa60)
+      && (!ma20DistanceEnabled || current.close >= currentMa20 * 1.01)
+      && (!ma20AboveMa60Enabled || currentMa20 > currentMa60);
+    const shortCloseFilters = (!ma20CloseEnabled || current.close < currentMa20)
+      && (!ma60CloseEnabled || current.close < currentMa60)
+      && (!ma20DistanceEnabled || current.close <= currentMa20 * 0.99)
+      && (!ma20AboveMa60Enabled || currentMa20 < currentMa60);
 
     const olderBody = Math.abs(older.close - older.open);
     const previousBody = Math.abs(previous.close - previous.open);
@@ -40,7 +61,8 @@ export function candleBreakoutSignals(candles: Candle[], settings: BacktestSetti
       && bodyHigh(older) < olderMa5
       && bodyHigh(previous) < previousMa5
       // “돌파” means the current body starts below MA5 and closes above it.
-      && current.open < ma5 && current.close > ma5;
+      && current.open < ma5 && current.close > ma5
+      && longCloseFilters;
 
     const short = olderBullish && previousBullish
       && olderBody < atr && previousBody < atr
@@ -49,7 +71,8 @@ export function candleBreakoutSignals(candles: Candle[], settings: BacktestSetti
       && current.close < Math.min(bodyLow(older), bodyLow(previous))
       && bodyLow(older) > olderMa5
       && bodyLow(previous) > previousMa5
-      && current.open > ma5 && current.close < ma5;
+      && current.open > ma5 && current.close < ma5
+      && shortCloseFilters;
 
     if (!long && !short) continue;
     const side: Signal['side'] = long ? 'LONG' : 'SHORT';

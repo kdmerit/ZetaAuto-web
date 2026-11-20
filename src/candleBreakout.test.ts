@@ -31,6 +31,13 @@ function longFixture(): Candle[] {
   return rows;
 }
 
+function trendingLongFixture(): Candle[] {
+  const rows = longFixture();
+  for (let index = 481; index <= 497; index += 1) rows[index] = candle(index, 119, 121, 118, 120);
+  rows[500] = candle(500, 101, 130, 96, 125);
+  return rows;
+}
+
 function mirror(rows: Candle[]): Candle[] {
   return rows.map((row, index) => candle(index, 300 - row.open, 300 - row.low, 300 - row.high, 300 - row.close));
 }
@@ -118,5 +125,32 @@ describe('candle breakout backtest', () => {
     const full = longFixture();
     full[500] = candle(500, 107, 114, 96, 112);
     expect(prepareSymbolBlock('BTCUSDT', full, settings, 'CANDLE_BREAKOUT', full[0]!.openTime, full.at(-1)!.closeTime).bars[500]!.signal).toBeNull();
+  });
+
+  it('applies optional MA position, distance, and MA20/MA60 filters in both directions', () => {
+    const filtered = {
+      ...settings,
+      candleBreakoutCloseMa20Enabled: true,
+      candleBreakoutCloseMa60Enabled: true,
+      candleBreakoutMa20DistanceEnabled: true,
+      candleBreakoutMa20AboveMa60Enabled: true,
+    };
+    const longRows = trendingLongFixture();
+    const longDocument = prepareSymbolBlock('BTCUSDT', longRows, filtered, 'CANDLE_BREAKOUT', longRows[0]!.openTime, longRows.at(-1)!.closeTime);
+    expect(longDocument.bars[500]!.signal).toMatchObject({ side: 'LONG', entry: 125 });
+
+    const shortRows = mirror(longRows);
+    const shortDocument = prepareSymbolBlock('BTCUSDT', shortRows, { ...filtered, side: 'SHORT' }, 'CANDLE_BREAKOUT', shortRows[0]!.openTime, shortRows.at(-1)!.closeTime);
+    expect(shortDocument.bars[500]!.signal).toMatchObject({ side: 'SHORT', entry: 175 });
+
+    const ma20Rows = longFixture();
+    ma20Rows[500] = candle(500, 101, 114, 96, 108);
+    expect(prepareSymbolBlock('BTCUSDT', ma20Rows, { ...settings, candleBreakoutCloseMa20Enabled: true }, 'CANDLE_BREAKOUT', ma20Rows[0]!.openTime, ma20Rows.at(-1)!.closeTime).bars[500]!.signal).toBeNull();
+
+    const ma60Rows = longFixture();
+    ma60Rows[500] = candle(500, 101, 114, 96, 109.5);
+    expect(prepareSymbolBlock('BTCUSDT', ma60Rows, { ...settings, candleBreakoutCloseMa60Enabled: true }, 'CANDLE_BREAKOUT', ma60Rows[0]!.openTime, ma60Rows.at(-1)!.closeTime).bars[500]!.signal).toBeNull();
+    expect(prepareSymbolBlock('BTCUSDT', ma60Rows, { ...settings, candleBreakoutMa20DistanceEnabled: true }, 'CANDLE_BREAKOUT', ma60Rows[0]!.openTime, ma60Rows.at(-1)!.closeTime).bars[500]!.signal).toBeNull();
+    expect(prepareSymbolBlock('BTCUSDT', longFixture(), { ...settings, candleBreakoutMa20AboveMa60Enabled: true }, 'CANDLE_BREAKOUT', longRows[0]!.openTime, longRows.at(-1)!.closeTime).bars[500]!.signal).toBeNull();
   });
 });

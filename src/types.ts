@@ -104,6 +104,10 @@ export interface BacktestSettings {
   newHighRiskAmount?: string;
   referenceTpPercent?: string;
   referenceMa10Enabled?: boolean;
+  candleBreakoutCloseMa20Enabled?: boolean;
+  candleBreakoutCloseMa60Enabled?: boolean;
+  candleBreakoutMa20DistanceEnabled?: boolean;
+  candleBreakoutMa20AboveMa60Enabled?: boolean;
 }
 
 export interface Candle {

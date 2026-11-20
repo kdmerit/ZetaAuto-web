@@ -147,6 +147,10 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     newHighRiskAmount: '100',
     referenceTpPercent: '80',
     referenceMa10Enabled: false,
+    candleBreakoutCloseMa20Enabled: false,
+    candleBreakoutCloseMa60Enabled: false,
+    candleBreakoutMa20DistanceEnabled: false,
+    candleBreakoutMa20AboveMa60Enabled: false,
   };
 }
 
@@ -771,11 +775,15 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>3. 현재 캔들이 양봉이고, 종가가 전전·전 캔들의 몸통 상단보다 높습니다.</p>
                 <p>4. 전전·전 캔들의 몸통 전체가 각각 해당 캔들의 MA5 아래에 있습니다.</p>
                 <p>5. 현재 캔들이 MA5를 아래에서 위로 돌파하고 종가가 MA5 위에서 마감합니다.</p>
-                <p>6. 현재 캔들의 종가에 롱으로 진입합니다.</p>
-                <p>7. SL은 현재 캔들의 저가입니다.</p>
-                <p>8. 진입 다음 캔들부터 종가가 실제 매수가 + ATR 이상이면 종가 기준으로 청산합니다.</p>
+                <p>6. 선택 시 현재 캔들의 종가가 MA20 위일 때만 롱으로 진입합니다.</p>
+                <p>7. 선택 시 현재 캔들의 종가가 MA60 위일 때만 롱으로 진입합니다.</p>
+                <p>8. 선택 시 현재 캔들의 종가와 MA20의 이격이 1% 이상일 때만 롱으로 진입합니다.</p>
+                <p>9. 선택 시 MA20이 MA60보다 높을 때만 롱으로 진입합니다.</p>
+                <p>10. 현재 캔들의 종가에 롱으로 진입합니다.</p>
+                <p>11. SL은 현재 캔들의 저가입니다.</p>
+                <p>12. 진입 다음 캔들부터 종가가 실제 매수가 + ATR 이상이면 종가 기준으로 청산합니다.</p>
                 <strong>숏 포지션</strong>
-                <p>위 조건을 반대로 적용합니다. 전전·전 캔들은 양봉, 종가는 전전 캔들이 더 낮고, 현재 캔들은 음봉으로 두 몸통 하단보다 낮게 마감해야 합니다. 두 이전 몸통은 MA5 위에 있고 현재 캔들은 MA5를 위에서 아래로 돌파합니다. 현재 캔들 종가에 숏으로 진입하며 SL은 현재 캔들의 고가입니다.</p>
+                <p>위 조건을 반대로 적용합니다. 전전·전 캔들은 양봉, 종가는 전전 캔들이 더 낮고, 현재 캔들은 음봉으로 두 몸통 하단보다 낮게 마감해야 합니다. 두 이전 몸통은 MA5 위에 있고 현재 캔들은 MA5를 위에서 아래로 돌파합니다. 선택한 종가 MA20·MA60 조건은 각각 해당 이동평균선 아래, 이격 조건은 MA20보다 1% 이상 낮은 경우, MA20·MA60 조건은 MA20이 MA60보다 낮은 경우로 적용합니다. 현재 캔들 종가에 숏으로 진입하며 SL은 현재 캔들의 고가입니다.</p>
                 <p>진입 다음 캔들부터 종가가 실제 매수가 − ATR 이하이면 종가 기준으로 청산합니다.</p>
                 <p>손절은 진입 다음 캔들부터 확인하며, 봉 안에서 손절가에 닿으면 손절이 우선합니다. ATR은 진입봉 시작 전에 확정된 최근 20일의 평균 진폭으로 고정합니다. 종가 청산에는 시장가 슬리피지를 반영합니다.</p>
               </div>
@@ -924,7 +932,13 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             <p className="notice small">현재 봉 종가에서 이전 N봉을 처음 돌파할 때 1회 진입 · 체크한 돌파봉 크기·SL·TP·트레일링 조건을 다음 봉부터 15분봉으로 확인</p>
             <p className="muted small">ATR은 직전 20일 TR의 단순평균입니다. 매수는 현재 선택 주기 봉이 완전히 끝난 종가에서만 하고, 매수한 봉 안에서는 체크한 청산 조건을 소급하지 않습니다. 돌파봉 크기 필터는 고가−저가를 현재 확정 ATR과 비교하며, 최소·최대 조건은 각각 독립적으로 적용됩니다. 1h·4h·1d 모두 다음 봉부터 15분봉을 함께 확인합니다. SL과 TP는 각각 체크된 경우에만 적용되며, 트레일링 스탑은 별도 선택 항목입니다. SL을 끄면 고정 손실액 기준을 사용할 수 없어 고정 베팅액으로 전환됩니다. 1d MA20 필터를 켜면 선택 주기와 관계없이 진입 전에 확정된 1d 캔들의 전체 범위가 1d MA20 위인 경우에만 롱, 전체 범위가 아래인 경우에만 숏으로 진입합니다. MA20에 닿거나 걸친 캔들은 진입하지 않습니다. 종목당 한 번만 진입합니다. 단계형 트레일링, 다음 캔들 진입봉 이탈 청산, 별도 MA5·MA20 청산은 사용하지 않습니다.</p>
           </> : strategy === 'CANDLE_BREAKOUT' ? (
-            <p className="notice small">전전·전 캔들의 작은 반대색 몸통과 종가 방향을 확인한 뒤 현재 캔들이 MA5를 돌파하면 종가에 진입합니다. 진입봉 저가(롱)·고가(숏)를 손절가로 사용합니다.</p>
+            <>
+              <label className="checkbox-row"><input type="checkbox" checked={settings.candleBreakoutCloseMa20Enabled === true} onChange={event => update('candleBreakoutCloseMa20Enabled', event.target.checked)} /><span>종가가 MA20 위일때만 매수</span></label>
+              <label className="checkbox-row"><input type="checkbox" checked={settings.candleBreakoutCloseMa60Enabled === true} onChange={event => update('candleBreakoutCloseMa60Enabled', event.target.checked)} /><span>종가가 MA60 위일때만 매수</span></label>
+              <label className="checkbox-row"><input type="checkbox" checked={settings.candleBreakoutMa20DistanceEnabled === true} onChange={event => update('candleBreakoutMa20DistanceEnabled', event.target.checked)} /><span>종가와 MA20과의 이격 1% 이상인 경우만 매수</span></label>
+              <label className="checkbox-row"><input type="checkbox" checked={settings.candleBreakoutMa20AboveMa60Enabled === true} onChange={event => update('candleBreakoutMa20AboveMa60Enabled', event.target.checked)} /><span>MA20 &gt; MA60일때만 매수</span></label>
+              <p className="notice small">롱은 체크한 문구 그대로 적용하고, 숏은 종가가 각 이동평균선 아래·MA20보다 1% 이상 낮은 상태·MA20 &lt; MA60으로 반대로 적용합니다. 진입봉 저가(롱)·고가(숏)를 손절가로 사용합니다.</p>
+            </>
           ) : strategy === 'REFERENCE' ? (
             <>
               <label className="field-label">TP 비율 (%)<input type="number" inputMode="decimal" min="51" max="200" step="1" value={settings.referenceTpPercent ?? '80'} onChange={event => update('referenceTpPercent', event.target.value)} /><small>51~200 · 기본 80 · SL라인과 기준봉 고가/저가 사이 간격 기준</small></label>

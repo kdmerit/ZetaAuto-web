@@ -47,4 +47,13 @@ describe('one-month backtest start defaults', () => {
     values.set(`zetaauto.web.envelope.${view}.settings`, JSON.stringify({ startDate: '2025-02-03', startTime: '13:45' }));
     expect(renderToStaticMarkup(<EnvelopeWorkspace context={context} />)).toMatch(/시작일<input[^>]*value="2025-02-03"/);
   });
+
+  it('starts candle-breakout MA filters disabled', () => {
+    expect(defaultSettings('CANDLE_BREAKOUT')).toMatchObject({
+      candleBreakoutCloseMa20Enabled: false,
+      candleBreakoutCloseMa60Enabled: false,
+      candleBreakoutMa20DistanceEnabled: false,
+      candleBreakoutMa20AboveMa60Enabled: false,
+    });
+  });
 });
