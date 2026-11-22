@@ -166,7 +166,7 @@ describe('saved statistics verification', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('verifies different TP values independently and retains band exits in the older fixed-TP report', async () => {
+  it('verifies fixed TP and center exits from the saved statistics settings', async () => {
     const tight = { ...ordinaryRow, takeProfitPercent: 2 };
     const wide = { ...ordinaryRow, takeProfitPercent: 6 };
     const sourceSettings = { ...settings, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6' };
@@ -185,6 +185,12 @@ describe('saved statistics verification', () => {
     expect(current).toMatchObject({ status: 'COMPLETED', targetCount: 2 });
     expect(current.summaries[verificationRowKey('BTCUSDT', tight)]).toMatchObject({ months: 1, profitMonths: 1 });
     expect(current.summaries[verificationRowKey('BTCUSDT', wide)]).toMatchObject({ months: 1, lossMonths: 1 });
+
+    const center = { ...wide, exitMode: 'CENTER' as const };
+    await saveSingle([center], 0, { ...sourceSettings, envelopeCloseOnCenterTouch: true });
+    await executeEnvelopeVerification(oneMonth, () => {}, signal);
+    const withCenter = (await loadEnvelopeVerification(oneMonth))!;
+    expect(withCenter.summaries[verificationRowKey('BTCUSDT', center)]).toMatchObject({ months: 1, profitMonths: 1 });
 
     await saveSingle([ordinaryRow], 0, sourceSettings, '2.11.1');
     await executeEnvelopeVerification(oneMonth, () => {}, signal);

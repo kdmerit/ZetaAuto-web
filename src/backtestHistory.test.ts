@@ -30,9 +30,11 @@ describe('backtest history setting summaries', () => {
     expect(summary).not.toContain('12:34');
     expect(summary).not.toContain('23:45');
     expect(summary).not.toContain('중심선 터치후 이탈시 매도');
+    expect(summary).not.toContain('중심선 터치시 청산');
     expect(summary).not.toContain('매수금지 캔들 필터');
     expect(summary).not.toContain('TP');
     expect(summary).not.toContain('트레일링 스탑');
+    expect(formatBacktestHistorySettings({ ...settings, envelopeCloseOnCenterTouch: true }, 'ENVELOPE')).toContain('중심선 터치시 청산 적용');
     expect(formatBacktestHistorySettings({ ...settings, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6' }, 'ENVELOPE')).toContain('TP 6%');
   });
 

@@ -18,7 +18,10 @@ const colors = ['#88aaff', '#51d4a3', '#eea757', '#cf9bff'];
 const number = (value: number | null | undefined): string => value == null ? '—' : value.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
 
 function exitLabel(row: EnvelopeStatisticsRow, settings: BacktestSettings): string {
-  if (row.takeProfitPercent !== undefined) return `고정 TP ${row.takeProfitPercent.toFixed(1)}%`;
+  if (row.takeProfitPercent !== undefined) {
+    const fixedTarget = `고정 TP ${row.takeProfitPercent.toFixed(1)}%`;
+    return row.exitMode === 'CENTER' ? `${envelopeExitLabels.CENTER} · ${fixedTarget}` : fixedTarget;
+  }
   const savedTarget = settings.envelopeTakeProfitEnabled === true ? ` · 고정 TP ${settings.envelopeTakeProfitPercent ?? defaultEnvelopeTakeProfitPercent}%` : '';
   return `${envelopeExitLabels[row.exitMode]}${savedTarget}`;
 }
@@ -146,7 +149,11 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
   const current = !!job && usesCurrentEnvelopeExecution(job.version);
   const optimizedStopLoss = !!job && usesOptimizedEnvelopeStopLoss(job.version);
   const searchesTakeProfit = job?.settings.envelopeTakeProfitEnabled === true && isCurrentEnvelopeStatisticsVersion(job.version);
-  const exitSummary = searchesTakeProfit ? '고정 TP 청산' : job?.settings.envelopeTakeProfitEnabled === true ? '반대 밴드·고정 TP 청산' : '반대 밴드 청산';
+  const centerExit = job?.settings.envelopeCloseOnCenterTouch === true;
+  const bandExit = centerExit ? '중심선 터치' : '반대 밴드';
+  const exitSummary = job?.settings.envelopeTakeProfitEnabled === true
+    ? searchesTakeProfit && !centerExit ? '고정 TP 청산' : `${bandExit}·고정 TP 청산`
+    : `${bandExit} 청산`;
   const verification = useEnvelopeVerification('SINGLE_STATS', current && job.status === 'COMPLETED' ? job.id : undefined);
   const verificationSymbol = job?.instrument?.symbol ?? `${job?.settings.symbol.toUpperCase().replace(/USDT$/, '') ?? ''}USDT`;
   const { results: verificationReport, resultOptions: verificationOptions } = verification;
@@ -167,7 +174,8 @@ export function EnvelopeStatisticsPanel({ settings, disabled, validate, onChoose
   const fixedTrade = !!job && isReclaimStatisticsVersion(job.version);
   const periods = statisticsPeriods(job?.version, job?.settings);
   const graphPeriod = period !== undefined && periods.includes(period) ? period : shownRows[0]?.maPeriod ?? periods[0]!;
-  const graphExit = job?.version === '2.10.73' ? 'MA20' : fixedTrade ? 'OPPOSITE' : exit;
+  const fixedExit = centerExit ? 'CENTER' : 'OPPOSITE';
+  const graphExit = job?.version === '2.10.73' ? 'MA20' : fixedTrade ? fixedExit : exit;
   const graphPeriodRows = useMemo(() => shownRows.filter(row => row.maPeriod === graphPeriod && row.exitMode === graphExit), [shownRows, graphPeriod, graphExit]);
   const graphTargets = useMemo(() => [...new Set(graphPeriodRows.flatMap(row => row.takeProfitPercent === undefined ? [] : [row.takeProfitPercent]))].sort((a, b) => a - b), [graphPeriodRows]);
   const selectedGraphTarget = graphTakeProfit !== undefined && graphTargets.includes(graphTakeProfit) ? graphTakeProfit : graphTargets[0];

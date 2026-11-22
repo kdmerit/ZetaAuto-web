@@ -125,13 +125,13 @@ describe('envelope breakout statistics', () => {
     expect(fetch).not.toHaveBeenCalled();
   }, 30000);
 
-  it('replays distinct TP combinations and resumes from the saved TP and SL indices', async () => {
+  it.each([false, true])('replays distinct TP combinations with center exit %s and resumes at the saved TP/SL indices', async centerExit => {
     const candles = rows('1h').slice(0, 210).map((row, index) => index === 200
       ? { ...row, open: 98.9, low: 98.9, high: 101.5, close: 100 }
       : { ...row, open: 100, low: 100, high: 100, close: 100 });
     await cacheCandles('BTCUSDT', '1h', candles);
     await cacheCandles('BTCUSDT', '1m', minuteRows(candles.slice(200)));
-    const input: BacktestSettings = { ...settings, side: 'LONG', endDate: settings.startDate, endTime: '19:00',
+    const input: BacktestSettings = { ...settings, side: 'LONG', endDate: settings.startDate, endTime: '19:00', envelopeCloseOnCenterTouch: centerExit,
       envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: 'invalid', envelopeStatisticsRanges: {
         center: { start: '1', end: '1', increment: '1' },
         deviation: { start: '1', end: '1', increment: '0.1' },
@@ -143,10 +143,12 @@ describe('envelope breakout statistics', () => {
     const job = (await loadEnvelopeStatistics())!;
     expect(job.status).toBe('COMPLETED');
     expect(statisticsTotalFor(job.settings)).toBe(6);
+    expect(job.rows.every(row => row.exitMode === (centerExit ? 'CENTER' : 'OPPOSITE'))).toBe(true);
     expect(job.rows.map(row => [row.takeProfitPercent, row.stopLossPercent, row.closedTradeCount])).toEqual([
-      [2, 0.5, 1], [2, 1, 1], [3, 0.5, 0], [3, 1, 0], [4, 0.5, 0], [4, 1, 0],
+      [2, 0.5, 1], [2, 1, 1], [3, 0.5, Number(centerExit)], [3, 1, Number(centerExit)],
+      [4, 0.5, Number(centerExit)], [4, 1, Number(centerExit)],
     ]);
-    expect(settingsForStatisticsRow(job.settings, job.rows[4]!)).toMatchObject({ envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '4.0' });
+    expect(settingsForStatisticsRow(job.settings, job.rows[4]!)).toMatchObject({ envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '4.0', envelopeCloseOnCenterTouch: centerExit });
     const paused = { ...job, status: 'PAUSED' as const, intervalIndex: 0, periodIndex: 0, sideIndex: 0,
       step: 1, stopStep: 2, takeProfitIndex: 1, rows: job.rows.slice(0, 3) };
     expect(statisticsProgress(paused)).toBe(3);

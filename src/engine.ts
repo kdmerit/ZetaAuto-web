@@ -1252,7 +1252,7 @@ export function buildLocalChart(
     } else if (signal.strategy !== 'ENVELOPE' || signal.exitMode !== 'ENVELOPE_MA20_CLOSE') {
       if (signal.strategy !== 'NEW_HIGH' || signal.newHighSlEnabled !== false) lines.push(line('SL', signal.activeStop ?? signal.stop));
       if (signal.strategy === 'ENVELOPE') {
-        if (signal.envelopeTakeProfitReplacesBand !== true) lines.push(line('TP', signal.target));
+        if (signal.envelopeTakeProfitReplacesBand !== true || signal.envelopeExitMode === 'CENTER') lines.push(line('TP', signal.target));
         lines.push(...(trade.priceLines ?? []).filter(value => value.kind === 'FIXED_TP'));
       }
     }

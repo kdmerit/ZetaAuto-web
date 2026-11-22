@@ -39,6 +39,7 @@ import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvel
 import { atrEnvelopeFields, atrEnvelopeMultiplierInput, defaultAtrEnvelopeInputs } from '../marketIndicators';
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
+import { EnvelopeCenterTouchControl } from './EnvelopeCenterTouchControl';
 import { EnvelopeSideRatioControl } from './EnvelopeSideRatioControl';
 import { EnvelopeHalfCandleControl } from './EnvelopeHalfCandleControl';
 import { EnvelopeCandleFilterControl } from './EnvelopeCandleFilterControl';
@@ -122,6 +123,7 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     envelopeMa20BelowEnabled: false,
     envelopeCloseOnConfirmedBreakout: false,
     envelopeCloseOnCenterReturn: false,
+    envelopeCloseOnCenterTouch: strategy === 'ENVELOPE' ? false : undefined,
     envelopeSideRatio50Enabled: false,
     envelopeStopLossPercent: strategy === 'ENVELOPE' ? '3' : undefined,
     envelopeTakeProfitEnabled: strategy === 'ENVELOPE' ? false : undefined,
@@ -839,8 +841,9 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 {!usesAtrEnvelope ? <p>‘TP사용’을 켜면 실제 체결가에서 입력한 비율만큼 위(롱) 또는 아래(숏)에 전량 익절 지정가를 둡니다. 가격이 지정가에 닿으면 해당 가격에 청산하고, 반대 밴드 터치 청산은 적용하지 않습니다.</p> : null}
                 <p>‘종가에서만 매수’를 켜면 장중 밴드 터치는 무시하고, 롱은 기준 캔들 종가가 하단 이하·숏은 상단 이상으로 확정될 때 해당 캔들 종가에 진입합니다.</p>
                 <p>MA20·선택한 캔들 절반 엔벨·매수금지 캔들 필터는 매수 점검 시점까지의 고가·저가와 현재가로 판단합니다. MA20은 직전 완료 19봉 종가와 현재가의 평균입니다. 이후 확정될 일봉 고저가·종가는 앞선 매수에 사용하지 않습니다. MA20에 닿거나 걸친 캔들은 제외하며, ‘캔들 절반 엔벨 이내’를 켜면 1d 고저 중간값이 롱은 하단 이하·숏은 상단 이상인 캔들을 제외합니다.</p>
-                <p>1분봉을 시간순으로 읽어 각 분 시작 가격으로 점검합니다. {usesAtrEnvelope ? '' : '‘TP사용’을 끄면 '}현재가가 반대 밴드에 도달하거나, 매수한 15분봉 다음 봉부터 현재 15분봉의 관측된 고가(롱)·저가(숏)가 반대 밴드에 닿으면 점검 시점 현재가에 시장가 슬리피지를 반영해 청산합니다. 과거 터치 가격으로 소급 체결하지 않습니다. {usesAtrEnvelope ? '선택한 트레일링 스탑' : 'SL·트레일링 스탑'}은 1분봉 내부의 두 가격 순서 중 보수적인 결과를 적용합니다.</p>
+                <p>1분봉을 시간순으로 읽어 각 분 시작 가격으로 점검합니다. {usesAtrEnvelope ? '' : '‘TP사용’과 ‘중심선 터치시 청산’을 모두 끄면 '}현재가가 반대 밴드에 도달하거나, 매수한 15분봉 다음 봉부터 현재 15분봉의 관측된 고가(롱)·저가(숏)가 반대 밴드에 닿으면 점검 시점 현재가에 시장가 슬리피지를 반영해 청산합니다. 과거 터치 가격으로 소급 체결하지 않습니다. {usesAtrEnvelope ? '선택한 트레일링 스탑' : 'SL·트레일링 스탑'}은 1분봉 내부의 두 가격 순서 중 보수적인 결과를 적용합니다.</p>
                 <p>‘중심선 터치후 이탈시 매도’를 켜면 매수 후 1분 점검 가격으로 중심선 도달을 기록하고, 이후 점검에서 롱은 하단·숏은 상단에 되돌아오면 전량 시장가 청산합니다. 점검 사이에 생겼다가 사라진 중심선 꼬리는 기록하지 않습니다. 중심선과 밴드는 매 봉 갱신합니다.</p>
+                {!usesAtrEnvelope ? <p>‘중심선 터치시 청산’을 켜면 진입 후 1분봉 고가(롱)·저가(숏)가 중심선에 닿는 순간 전량 청산합니다. 중심선 터치 가격에 시장가 슬리피지를 반영하고, 1분봉 시가가 중심선을 넘어서 시작하면 시가를 기준으로 합니다. 손절·트레일링 스탑·고정 TP도 켜져 있으면 체결 순서를 비교합니다.</p> : null}
                 <p>‘롱/숏 비율 50%’를 켜면 매수 시점의 총 평가자산 대비 롱·숏 평가자산을 각각 최대 50%로 제한합니다. 평가자산은 증거금에 평가손익과 수수료를 반영한 금액이며, 계약 명목금액은 사용하지 않습니다. 새 매수를 포함해 한도를 넘으면 그 주문 전체를 건너뛰고, 기존 포지션을 강제로 줄이지는 않습니다.</p>
                 <p>한 종목은 봉당 한 번만 진입하고 봉 시작에 보유했다면 같은 봉에 재진입하지 않습니다. 전체종목은 종목명 순서·봉 시작 가용자금 한도로 배분하며 미래 청산 자금을 재사용하지 않습니다. 기간 말 미청산분은 평가액에 포함합니다.</p>
                 {!usesAtrEnvelope ? <><p>개별통계는 중심선·이격·SL과 ‘TP사용’으로 켠 TP를 각각 입력한 범위에서 비교합니다. SL이 이격의 2배 이하인 조합을 계산합니다. 통계 필터를 통과한 결과는 월별 검증할 수 있습니다.</p>
@@ -968,6 +971,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             <>
               <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
               <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
+              {!usesAtrEnvelope ? <EnvelopeCenterTouchControl enabled={settings.envelopeCloseOnCenterTouch === true} onChange={enabled => update('envelopeCloseOnCenterTouch', enabled)} /> : null}
               <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
               <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnlyEntryEnabled === true} onChange={event => update('envelopeCloseOnlyEntryEnabled', event.target.checked)} /><span>종가에서만 매수</span></label>
               <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />

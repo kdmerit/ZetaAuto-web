@@ -11,6 +11,7 @@ import { defaultSettings, formatDateInput, formatTimeInput, StrategyBacktest } f
 import { EnvelopeStatisticsPanel } from './EnvelopeStatisticsPanel';
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
+import { EnvelopeCenterTouchControl } from './EnvelopeCenterTouchControl';
 import { EnvelopeSideRatioControl } from './EnvelopeSideRatioControl';
 import { EnvelopeHalfCandleControl } from './EnvelopeHalfCandleControl';
 import { EnvelopeCandleFilterControl } from './EnvelopeCandleFilterControl';
@@ -41,14 +42,19 @@ function SearchFields({ settings, onChange, disabled }: { settings: BacktestSett
   const update = <K extends keyof BacktestSettings>(key: K, value: BacktestSettings[K]): void => onChange({ ...settings, [key]: value });
   const ranges = statisticsRanges(settings);
   const takeProfitEnabled = settings.envelopeTakeProfitEnabled === true;
+  const centerExitEnabled = settings.envelopeCloseOnCenterTouch === true;
+  const bandExit = centerExitEnabled ? '중심선 터치' : '반대 밴드 터치';
+  const exitNotice = takeProfitEnabled && centerExitEnabled ? '중심선 터치와 고정 TP 중 먼저 체결되는 조건으로 청산합니다.'
+    : takeProfitEnabled ? '조합별 고정 TP로 익절합니다.' : `${bandExit}로 청산합니다.`;
   return <section className="surface-card form-card"><fieldset className="analysis-fields" disabled={disabled}>
     <label className="field-label">종목명<span className="suffix-field"><input value={settings.symbol} onChange={event => update('symbol', event.target.value.toUpperCase().replace(/USDT/g, '').replace(/[^A-Z0-9]/g, '').slice(0, 36))} /><b>USDT</b></span></label>
     <h2>분석 방향</h2><div className="segmented three" role="group" aria-label="통계 분석 방향">{(['BOTH', 'LONG', 'SHORT'] as const).map(side => <button key={side} type="button" aria-pressed={settings.side === side} className={settings.side === side ? 'selected' : ''} onClick={() => update('side', side)}>{side === 'BOTH' ? '롱 + 숏' : side === 'LONG' ? '롱' : '숏'}</button>)}</div>
     <p className="muted small">롱 + 숏은 방향별로 독립 분석해 필터·정렬 기준의 최적 세팅을 각각 찾습니다.</p>
     <h2>통계 캔들 주기</h2><div className="segmented interval-selector">{statisticsIntervals.map(interval => <button key={interval} type="button" aria-pressed={settings.envelopeStatisticsInterval === interval} className={settings.envelopeStatisticsInterval === interval ? 'selected' : ''} onClick={() => update('envelopeStatisticsInterval', interval)}>{interval.toUpperCase()}</button>)}</div>
-    <p className="notice small">롱은 하단, 숏은 상단에서 진입합니다. {takeProfitEnabled ? '조합별 고정 TP로 익절합니다.' : '반대 밴드 터치로 청산합니다.'}</p>
+    <p className="notice small">롱은 하단, 숏은 상단에서 진입합니다. {exitNotice}</p>
     <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
     <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
+    <EnvelopeCenterTouchControl enabled={centerExitEnabled} onChange={enabled => update('envelopeCloseOnCenterTouch', enabled)} />
     <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
     <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnlyEntryEnabled === true} onChange={event => update('envelopeCloseOnlyEntryEnabled', event.target.checked)} /><span>종가에서만 매수</span></label>
     <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />

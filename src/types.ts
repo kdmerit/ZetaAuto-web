@@ -95,6 +95,7 @@ export interface BacktestSettings {
   envelopeMa20Enabled?: boolean;
   envelopeMa20BelowEnabled?: boolean;
   envelopeCloseOnConfirmedBreakout?: boolean;
+  envelopeCloseOnCenterTouch?: boolean;
   envelopeCloseOnCenterReturn?: boolean;
   envelopeSideRatio50Enabled?: boolean;
   envelopeDailyTrend?: boolean;

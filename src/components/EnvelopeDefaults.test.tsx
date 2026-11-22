@@ -41,19 +41,21 @@ describe('envelope input defaults and arrangement', () => {
       expect(html).toMatch(/disabled=""[^>]*>검증<\/button>/);
     }
     const rows = options(html);
-    expect(rows).toHaveLength(8);
+    expect(rows).toHaveLength(9);
     expect(rows[0]).toContain('MA20 위에서만 매수 (롱)');
     expect(rows[0]).toContain('checked=""');
     expect(rows[1]).toContain('중심선 터치후 이탈시 매도');
     expect(rows[1]).not.toContain('checked=""');
-    expect(rows[2]).toContain('롱/숏 비율 50%');
+    expect(rows[2]).toContain('중심선 터치시 청산');
     expect(rows[2]).not.toContain('checked=""');
-    expect(rows[3]).toContain('종가에서만 매수');
+    expect(rows[3]).toContain('롱/숏 비율 50%');
     expect(rows[3]).not.toContain('checked=""');
-    expect(rows[4]).toContain('캔들 절반 엔벨 이내');
-    expect(rows[4]).toContain('checked=""');
-    expect(rows[5]).toContain('매수금지 캔들 필터 적용');
-    expect(rows[5]).not.toContain('checked=""');
+    expect(rows[4]).toContain('종가에서만 매수');
+    expect(rows[4]).not.toContain('checked=""');
+    expect(rows[5]).toContain('캔들 절반 엔벨 이내');
+    expect(rows[5]).toContain('checked=""');
+    expect(rows[6]).toContain('매수금지 캔들 필터 적용');
+    expect(rows[6]).not.toContain('checked=""');
     const tp = rows.find(row => row.includes('TP사용'));
     const trailing = rows.find(row => row.includes('트레일링 스탑 적용'));
     expect(tp).toBeDefined(); expect(tp).not.toContain('checked=""');
@@ -79,7 +81,7 @@ describe('envelope input defaults and arrangement', () => {
     expect(html).toContain('<h1>ATR 엔벨로프 백테스트</h1>');
     expect(html).toContain('>개별분석</button>');
     expect(html).toContain('>전체분석</button>');
-    for (const label of ['개별통계', '전체통계', '가상매매', '엔벨로프 중심선 봉수', '엔벨로프 이격 (%)', 'SL (%)', 'TP사용']) expect(html).not.toContain(label);
+    for (const label of ['개별통계', '전체통계', '가상매매', '엔벨로프 중심선 봉수', '엔벨로프 이격 (%)', 'SL (%)', 'TP사용', '중심선 터치시 청산']) expect(html).not.toContain(label);
     for (const label of ['MA20 위에서만 매수 (롱)', '중심선 터치후 이탈시 매도', '롱/숏 비율 50%', '종가에서만 매수', '캔들 절반 엔벨 이내', '매수금지 캔들 필터 적용', '트레일링 스탑 적용']) {
       expect(html).toContain(label);
     }
@@ -145,26 +147,29 @@ describe('envelope input defaults and arrangement', () => {
     expect(html).toMatch(/엔벨로프 중심선 봉수\s*<input[^>]*value="137"/);
     expect(html).toMatch(/엔벨로프 이격 \(%\)[\s\S]*?<input[^>]*value="7.5"/);
     expect(options(html)[0]).not.toContain('checked=""');
-    expect(options(html)[3]).toContain('종가에서만 매수');
-    expect(options(html)[3]).not.toContain('checked=""');
+    expect(options(html)[4]).toContain('종가에서만 매수');
     expect(options(html)[4]).not.toContain('checked=""');
-    expect(options(html)[5]).toContain('checked=""');
+    expect(options(html)[5]).not.toContain('checked=""');
+    expect(options(html)[6]).toContain('checked=""');
     expect(html).toMatch(/SL \(%\)[\s\S]*?<input[^>]*value="1.5"/);
   });
 
-  it('restores the saved center-return exit in ordinary analysis and statistics', () => {
-    saveSettings('ENVELOPE', { ...defaultSettings('ENVELOPE'), envelopeCloseOnCenterReturn: true, envelopeSideRatio50Enabled: true, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6.25' });
+  it('restores the saved center exits in ordinary analysis and statistics', () => {
+    saveSettings('ENVELOPE', { ...defaultSettings('ENVELOPE'), envelopeCloseOnCenterReturn: true, envelopeCloseOnCenterTouch: true, envelopeSideRatio50Enabled: true, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6.25' });
     const ordinary = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
     expect(options(ordinary)[1]).toContain('checked=""');
     expect(options(ordinary)[2]).toContain('checked=""');
-    expect(options(ordinary)[6]).toContain('checked=""');
+    expect(options(ordinary)[3]).toContain('checked=""');
+    expect(options(ordinary).find(row => row.includes('TP사용'))).toContain('checked=""');
     expect(ordinary).toMatch(/TP \(%\)[\s\S]*?<input[^>]*value="6\.25"/);
     expect(ordinary).not.toMatch(/TP \(%\)[\s\S]*?<input(?=[^>]*value="6\.25")[^>]*disabled=""/);
     values.set('zetaauto.web.envelope.view', 'SINGLE_STATS');
-    values.set('zetaauto.web.envelope.SINGLE_STATS.settings', JSON.stringify({ envelopeCloseOnCenterReturn: true, envelopeSideRatio50Enabled: true, envelopeTakeProfitEnabled: false, envelopeTakeProfitPercent: '7' }));
+    values.set('zetaauto.web.envelope.SINGLE_STATS.settings', JSON.stringify({ envelopeCloseOnCenterReturn: true, envelopeCloseOnCenterTouch: true, envelopeSideRatio50Enabled: true, envelopeTakeProfitEnabled: false, envelopeTakeProfitPercent: '7' }));
     const statistics = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
     expect(options(statistics)[1]).toContain('checked=""');
     expect(options(statistics)[2]).toContain('checked=""');
+    expect(options(statistics)[3]).toContain('checked=""');
+    expect(statistics).toContain('중심선 터치로 청산합니다.');
     expect(statistics).toContain('TP사용');
     expect(statistics).not.toContain('aria-label="TP 시작값"');
   });

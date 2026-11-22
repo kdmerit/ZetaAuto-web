@@ -1,6 +1,6 @@
 /** Shared virtual account replay, with conservative OHLC paths and resumable JSON state. */
 import type { PreparedBar, PreparedSymbol } from './engine';
-import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, ContractRisk, Execution, PriceLine, Signal } from './types';
+import type { BacktestResult, BacktestSettings, BacktestTrade, Candle, ContractRisk, EnvelopeBand, Execution, PriceLine, Signal } from './types';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
 import { envelopeEntryBandReached, envelopeHalfCandleAllowsEntry, envelopeParameters, envelopeTrailingStopPercent, isEnvelopeStrategy } from './envelope';
 import { envelopeCandleAllowsEntry, type EnvelopeCandleContext } from './envelopeCandleFilter';
@@ -139,7 +139,7 @@ function priceLines(p: Holding): PriceLine[] {
       ...(p.secondFill !== undefined ? [{ kind: 'AVERAGE_ENTRY' as const, price: p.entry }] : []),
       ...(hasFixedStop(p.signal) ? [{ kind: 'SL' as const, price: p.stop }] : []),
       ...(p.envelopeTrailingStop === undefined ? [] : [{ kind: 'TRAILING_SL' as const, price: p.envelopeTrailingStop }]),
-      ...(p.signal.envelopeTakeProfitReplacesBand === true ? [] : [{ kind: 'TP' as const, price: p.target }]),
+      ...(p.signal.envelopeTakeProfitReplacesBand !== true || p.signal.envelopeExitMode === 'CENTER' ? [{ kind: 'TP' as const, price: p.target }] : []),
       ...(p.envelopeTakeProfitPrice === undefined ? [] : [{ kind: 'FIXED_TP' as const, price: p.envelopeTakeProfitPrice }]),
     ];
     return lines.filter(line => Number.isFinite(line.price) && line.price > 0);
@@ -201,7 +201,7 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
     'SL', 'TRAILING_STOP', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE',
     'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'VOLATILITY_WICK_EXIT', 'NEXT_CANDLE_CLOSE',
     'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION',
-    'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE', 'ENVELOPE_CLOSE_CONFIRM', 'ENVELOPE_CENTER_RETURN', 'CANDLE_BREAKOUT_ATR_CLOSE',
+    'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE', 'ENVELOPE_CLOSE_CONFIRM', 'ENVELOPE_CENTER', 'ENVELOPE_CENTER_RETURN', 'CANDLE_BREAKOUT_ATR_CLOSE',
   ].includes(reason);
   const minuteMarket = p.signal.envelopeExecutionModel === 'MINUTE_POLL'
     && (reason === 'ENVELOPE_OPPOSITE' || reason === 'ENVELOPE_15M_WICK');
@@ -428,6 +428,7 @@ function hasFixedStop(signal: Signal): boolean {
 
 function hasIntrabarTarget(p: Holding): boolean {
   const { signal } = p;
+  if (signal.envelopeExitMode === 'CENTER') return true;
   if (signal.strategy === 'CANDLE_BREAKOUT' || signal.envelopeExecutionModel === 'MINUTE_POLL' || signal.envelopeTakeProfitReplacesBand === true) return false;
   if (signal.exitMode === 'VOLATILITY_TP') return signal.volatilityTpEnabled !== false;
   if (signal.exitMode === 'VOLATILITY_MA5'
@@ -492,6 +493,10 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
     close(state, p, p.partial, p.qty / 2, 'PARTIAL_TP', candle, opening);
   }
   if (hasIntrabarTarget(p) && (long ? price >= p.target : price <= p.target)) {
+    if (p.signal.envelopeExitMode === 'CENTER') {
+      close(state, p, opening ? price : p.target, p.qty, 'ENVELOPE_CENTER', candle, opening);
+      return;
+    }
     const disparity = p.signal.strategy === 'DISPARITY';
     const reason = isEnvelopeStrategy(p.signal.strategy) ? 'ENVELOPE_OPPOSITE'
       : p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE' ? 'PULLBACK_ENVELOPE'
@@ -734,22 +739,29 @@ function envelopeEntryDefinitions(bar: PreparedBar, settings: BacktestSettings,
 
 type EnvelopeEntryDefinition = ReturnType<typeof envelopeEntryDefinitions>[number];
 
+function envelopeTarget(band: EnvelopeBand, side: Signal['side'], exitMode: Signal['envelopeExitMode']): number {
+  if (exitMode === 'CENTER') return band.center;
+  return side === 'LONG' ? band.upper : band.lower;
+}
+
 function envelopeEntrySignal(definition: EnvelopeEntryDefinition, price: number, parent: Candle): Signal {
   const { side, band, parameters } = definition;
   const atr = band.atrEnvelope;
   const sma = atr ? undefined : envelopeParameters(parameters);
-  const target = side === 'LONG' ? band.upper : band.lower;
+  const centerExit = sma !== undefined && parameters.envelopeCloseOnCenterTouch === true;
+  const exitMode = centerExit ? 'CENTER' : 'OPPOSITE';
+  const target = envelopeTarget(band, side, exitMode);
   return {
     strategy: atr ? 'ATR_ENVELOPE' : 'ENVELOPE', side, index: parent.openTime, entry: price,
     stop: sma ? price * (1 + (side === 'LONG' ? -1 : 1) * sma.stopPercent / 100) : 0,
-    target, initialTarget: target, exitMode: 'ENVELOPE_TOUCH', envelopeExitMode: 'OPPOSITE',
+    target, initialTarget: target, exitMode: 'ENVELOPE_TOUCH', envelopeExitMode: exitMode,
     ...(sma ? { envelopeDeviationPercent: sma.percent, envelopeStopLossPercent: sma.stopPercent, envelopeMaPeriod: sma.period } : { atrEnvelope: atr }),
     ...(sma?.takeProfitPercent === undefined ? {} : { envelopeTakeProfitPercent: sma.takeProfitPercent }),
     ...(sma?.takeProfitPercent !== undefined && parameters.envelopeTakeProfitReplacesBand !== false ? { envelopeTakeProfitReplacesBand: true } : {}),
     ...(band.atrEnvelopeStopDistance === undefined ? {} : { atrEnvelopeStopDistance: band.atrEnvelopeStopDistance }),
     ...(parameters.envelopeTrailingStopEnabled === true ? { envelopeTrailingStopPercent: envelopeTrailingStopPercent(parameters) } : {}),
-    envelopeCloseOnConfirmedBreakout: parameters.envelopeCloseOnConfirmedBreakout === true,
-    envelopeCloseOnCenterReturn: parameters.envelopeCloseOnCenterReturn === true,
+    envelopeCloseOnConfirmedBreakout: !centerExit && parameters.envelopeCloseOnConfirmedBreakout === true,
+    envelopeCloseOnCenterReturn: !centerExit && parameters.envelopeCloseOnCenterReturn === true,
     envelopeCenter: band.center, envelopeMoveSlOnCenter: false,
     envelopeEntryMode: 'BAND_TOUCH',
     ...(parameters.envelopeExecutionModel ? { envelopeExecutionModel: parameters.envelopeExecutionModel } : {}),
@@ -837,7 +849,7 @@ function* envelopeMinuteFrames(rows: (EnvelopeMinuteRow & { children: Candle[] }
   for (const [, entries] of [...frames].sort((a, b) => a[0] - b[0])) yield entries;
 }
 
-/** Local emulation of the live one-minute worker, with intraminute fills for resting SL, TS and TP orders. */
+/** One-minute polling with intraminute fills for SL, TS, fixed TP, and the optional center target. */
 function replayEnvelopeMinutes(state: PortfolioState, rows: { symbol: string; bar: PreparedBar }[], settings: BacktestSettings,
   openingBudget: number, options: ReplayOptions, occupiedAtOpen: Set<string>): number {
   const activeRows: (EnvelopeMinuteRow & { children: Candle[] })[] = [];
@@ -875,13 +887,16 @@ function replayEnvelopeMinutes(state: PortfolioState, rows: { symbol: string; ba
       const p = state.positions[symbol];
       if (!p) continue;
       const parameters = options.settingsForSymbolSide?.[symbol]?.[p.signal.side] ?? row.parameters;
+      const band = bar.envelopeBySide?.[p.signal.side] ?? bar.envelope;
+      const centerExit = p.signal.envelopeExitMode === 'CENTER';
+      if (centerExit && band) p.target = band.center;
       atPrice(state, symbol, minute.open, minute, parameters, true);
       if (!state.positions[symbol]) continue;
-      const band = bar.envelopeBySide?.[p.signal.side] ?? bar.envelope;
       if (!band) throw new Error(`${symbol}의 엔벨로프 계산에 필요한 캔들이 부족합니다.`);
+      if (centerExit) continue;
       const long = p.signal.side === 'LONG';
       const oppositeBandExit = p.signal.envelopeTakeProfitReplacesBand !== true;
-      p.target = long ? band.upper : band.lower;
+      p.target = envelopeTarget(band, p.signal.side, p.signal.envelopeExitMode);
       let reason: string | null = oppositeBandExit && (long ? minute.open >= p.target : minute.open <= p.target) ? 'ENVELOPE_OPPOSITE' : null;
       if (p.signal.envelopeCloseOnCenterReturn) {
         const returned = long ? minute.open <= band.lower : minute.open >= band.upper;
@@ -917,7 +932,8 @@ function replayEnvelopeMinutes(state: PortfolioState, rows: { symbol: string; ba
           || trail !== undefined && (long ? row.minute.low <= trail : row.minute.high >= trail);
         const takeProfit = p.envelopeTakeProfitPrice;
         const mayTakeProfit = takeProfit !== undefined && (long ? row.minute.high >= takeProfit : row.minute.low <= takeProfit);
-        if (mayStop || mayTakeProfit || p.risk) {
+        const mayTouchCenter = p.signal.envelopeExitMode === 'CENTER' && (long ? row.minute.high >= p.target : row.minute.low <= p.target);
+        if (mayStop || mayTakeProfit || mayTouchCenter || p.risk) {
           const childBar = { ...row.bar, candle: row.minute, signal: null };
           mergePath(state, worstPath([replayPath(p, childBar, parameters, true), replayPath(p, childBar, parameters, false)]), row.symbol);
         } else {
@@ -1230,7 +1246,7 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
         validateLowerTimeframeCandles(bar.candle, bar.envelopeIntrabarCandles ?? (bar.candle.closeTime - bar.candle.openTime === 900 ? [bar.candle] : []), 900, '15분봉');
       }
       if (!bar.envelope) throw new Error(`${symbol}의 엔벨로프 계산에 필요한 캔들이 부족합니다.`);
-      position.target = position.signal.side === 'LONG' ? bar.envelope.upper : bar.envelope.lower;
+      position.target = envelopeTarget(bar.envelope, position.signal.side, position.signal.envelopeExitMode);
       if (position.signal.envelopeCloseOnCenterReturn === true) {
         position.envelopeCenter = bar.envelope.center;
         position.envelopeReturnBand = position.signal.side === 'LONG' ? bar.envelope.lower : bar.envelope.upper;
@@ -1471,7 +1487,7 @@ function replayEnvelopeSideLimitedRows(state: PortfolioState, rows: { symbol: st
         const band = row.bar.envelopeBySide?.[position.signal.side] ?? row.bar.envelope;
         if (!band) throw new Error(`${row.symbol}의 엔벨로프 계산에 필요한 캔들이 부족합니다.`);
         position.mark = row.candle.open;
-        position.target = position.signal.side === 'LONG' ? band.upper : band.lower;
+        position.target = envelopeTarget(band, position.signal.side, position.signal.envelopeExitMode);
         if (position.signal.envelopeCloseOnCenterReturn === true) {
           position.envelopeCenter = band.center;
           position.envelopeReturnBand = position.signal.side === 'LONG' ? band.lower : band.upper;

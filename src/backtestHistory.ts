@@ -113,6 +113,7 @@ export function formatBacktestHistorySettings(
   if (strategy === 'ENVELOPE' || strategy === 'ATR_ENVELOPE') {
     addEnabled(values, settings.envelopeMa20Enabled === true, 'MA20 위·아래 방향 필터');
     addEnabled(values, settings.envelopeCloseOnCenterReturn === true, '중심선 터치후 이탈시 매도');
+    addEnabled(values, strategy === 'ENVELOPE' && settings.envelopeCloseOnCenterTouch === true, '중심선 터치시 청산');
     addEnabled(values, settings.envelopeSideRatio50Enabled === true, '롱·숏 비율 50%');
     addEnabled(values, settings.envelopeCloseOnlyEntryEnabled === true, '종가에서만 매수');
     addEnabled(values, settings.envelopeHalfCandleEnabled === true, '캔들 절반 엔벨 이내');

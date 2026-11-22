@@ -198,8 +198,8 @@ export async function loadEnvelopeStatistics(): Promise<EnvelopeStatisticsJob | 
   return { ...job, status: job.status === 'RUNNING' ? 'PAUSED' : job.status };
 }
 
-function resultRow(result: BacktestResult, interval: BacktestInterval, maPeriod: number, deviationPercent: number): EnvelopeStatisticsRow {
-  return { interval, maPeriod, deviationPercent, exitMode: 'OPPOSITE',
+function resultRow(result: BacktestResult, interval: BacktestInterval, maPeriod: number, deviationPercent: number, exitMode: EnvelopeExitMode): EnvelopeStatisticsRow {
+  return { interval, maPeriod, deviationPercent, exitMode,
     returnPercent: result.returnPercent, profitUsdt: result.finalEquityUsdt - result.initialCapitalUsdt,
     realizedProfitUsdt: result.realizedProfitUsdt, feesUsdt: result.feesUsdt, entryCount: result.entryCount,
     closedTradeCount: result.closedTradeCount, winCount: result.winCount, lossCount: result.lossCount,
@@ -235,6 +235,7 @@ async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, checkpoint: 
   delete job.risk;
   const intervals = selectedStatisticsIntervals(job.settings);
   const sides = selectedStatisticsSides(job.settings);
+  const exitMode = job.settings.envelopeCloseOnCenterTouch === true ? 'CENTER' : 'OPPOSITE';
   const { periods, deviations, stopSteps, takeProfitPercents } = compileStatisticsGrid(job.settings, isCurrentEnvelopeStatisticsVersion(job.version));
   const warmupBars = Math.max(envelopeWarmupBars, periods.at(-1)!);
   const firstDeviation = (deviations[0]!.step / 10).toFixed(1);
@@ -326,7 +327,7 @@ async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, checkpoint: 
                 job.message = `${label} · ${phase}`;
                 await checkpoint();
               }, replayOptions);
-              const metrics = { ...resultRow(result, interval, maPeriod, deviationPercent), side, leverage: Number(parameters.leverage),
+              const metrics = { ...resultRow(result, interval, maPeriod, deviationPercent, exitMode), side, leverage: Number(parameters.leverage),
                 ...(takeProfitPercent === undefined ? {} : { takeProfitPercent }) };
               // Once the fixed stop goes unused, wider stops for this TP replay identically.
               const lastEquivalentStep = result.exitReasons.SL ? job.stopStep : stopCount;

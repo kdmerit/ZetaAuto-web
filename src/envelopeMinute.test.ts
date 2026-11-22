@@ -70,7 +70,7 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
   });
 
   it('waits for the selected candle close when close-only entry is enabled', () => {
-    const input = { ...parameters, envelopeCloseOnlyEntryEnabled: true, envelopeTakeProfitEnabled: true };
+    const input = { ...parameters, envelopeCloseOnlyEntryEnabled: true, envelopeCloseOnCenterTouch: true, envelopeTakeProfitEnabled: true };
     const state = replay(fixture({ 0: [100, 100, 97, 100], 1439: [100, 106, 97, 97] }, input), input);
     expect(state.entries).toBe(1);
     expect(state.positions.BTCUSDT!.opened).toBe(start + day);
@@ -142,6 +142,48 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
     const latched = replay(fixture({ ...entry, 2: [100, 100, 100, 100], 3: [97, 97, 97, 97] }, input), input);
     expect(latched.exitReasons).toEqual({ ENVELOPE_CENTER_RETURN: 1 });
     expect(latched.trades[0]!.exitAt).toBe(start + 3 * 60);
+  });
+
+  it('exits on the exact post-entry center wick only when center-touch exit is enabled', () => {
+    const input = { ...parameters, envelopeCloseOnCenterTouch: true, envelopeCloseOnCenterReturn: true };
+    const beforeEntry: Record<number, Prices> = { 0: [100, 104, 97, 97] };
+    const before = replay(fixture(beforeEntry, input), input);
+    expect(before.entries).toBe(1);
+    expect(before.closed).toBe(0);
+
+    const document = fixture({ ...beforeEntry, 1: [97, 100, 97, 97] }, input);
+    expect(replay(document, { ...input, envelopeCloseOnCenterTouch: false }).closed).toBe(0);
+    const state = replay(document, input);
+    expect(state.exitReasons).toEqual({ ENVELOPE_CENTER: 1 });
+    expect(state.positions).toEqual({});
+    expect(state.trades[0]).toMatchObject({ entryAt: start + 60, exitAt: start + 60, signal: { envelopeExitMode: 'CENTER', target: 100 } });
+    expect(state.trades[0]!.exitPrice).toBeCloseTo(side === 'LONG' ? 100 * .9998 : 100 * 1.0002, 10);
+  });
+
+  it('uses the conservative stop result when the same minute touches both SL and the center', () => {
+    const input = { ...parameters, envelopeCloseOnCenterTouch: true };
+    const state = replay(fixture({ ...entry, 2: [97, 100, 93, 97] }, input), input);
+    expect(state.exitReasons).toEqual({ SL: 1 });
+  });
+
+  it.each([['2', 'ENVELOPE_TP'], ['6', 'ENVELOPE_CENTER']])('honors the first touched level when fixed TP is %s%%', (tp, reason) => {
+    const input = { ...parameters, envelopeCloseOnCenterTouch: true, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: tp };
+    const state = replay(fixture({ ...entry, 2: [97, 107, 97, 97] }, input), input);
+    expect(state.exitReasons).toEqual({ [reason]: 1 });
+    expect(state.trades[0]!.priceLines).toContainEqual({ kind: 'TP', price: 100 });
+    expect(state.trades[0]!.priceLines?.some(line => line.kind === 'FIXED_TP')).toBe(true);
+  });
+
+  it('uses the new center at the next parent open after resuming', () => {
+    const input = { ...parameters, envelopeCloseOnCenterTouch: true };
+    const document = fixture({ ...entry, 1440: [99.5, 99.5, 99.5, 99.5] }, input, 2);
+    const first = replay(document, input, initialPortfolio(1000), start, start + day);
+    expect(first.positions.BTCUSDT!.target).toBe(100);
+    const resumed = replay(document, input, JSON.parse(JSON.stringify(first)) as PortfolioState, start + day);
+    expect(resumed).toEqual(replay(document, input));
+    expect(resumed.exitReasons).toEqual({ ENVELOPE_CENTER: 1 });
+    expect(resumed.trades[0]).toMatchObject({ exitAt: start + day, signal: { target: side === 'LONG' ? 99 : 101 } });
+    expect(resumed.trades[0]!.exitPrice).toBeCloseTo(side === 'LONG' ? 99.5 * .9998 : 100.5 * 1.0002, 10);
   });
 
   it('continues exchange-side trailing stops within a minute without using pre-entry highs/lows', () => {
