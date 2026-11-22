@@ -166,6 +166,33 @@ describe('saved statistics verification', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('verifies different TP values independently and retains band exits in the older fixed-TP report', async () => {
+    const tight = { ...ordinaryRow, takeProfitPercent: 2 };
+    const wide = { ...ordinaryRow, takeProfitPercent: 6 };
+    const sourceSettings = { ...settings, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6' };
+    await saveSingle([wide, tight], 0, sourceSettings);
+    const candles = dailyCandles(at('2026-04-30'), at('2026-06-01')).map((candle, index) => {
+      if (index === 0) return candle;
+      if (index === 1) return { ...candle, open: 98.9, low: 98.9, high: 102 };
+      return { ...candle, open: 98.9, low: 98.9, high: 98.9, close: 98.9 };
+    });
+    await cacheCandles('BTCUSDT', '1d', candles);
+    await cacheCandles('BTCUSDT', '1m', minuteRows(candles.slice(1)));
+    const oneMonth = { ...request, months: 1 };
+    const signal = new AbortController().signal;
+    await executeEnvelopeVerification(oneMonth, () => {}, signal);
+    const current = (await loadEnvelopeVerification(oneMonth))!;
+    expect(current).toMatchObject({ status: 'COMPLETED', targetCount: 2 });
+    expect(current.summaries[verificationRowKey('BTCUSDT', tight)]).toMatchObject({ months: 1, profitMonths: 1 });
+    expect(current.summaries[verificationRowKey('BTCUSDT', wide)]).toMatchObject({ months: 1, lossMonths: 1 });
+
+    await saveSingle([ordinaryRow], 0, sourceSettings, '2.11.1');
+    await executeEnvelopeVerification(oneMonth, () => {}, signal);
+    const archived = (await loadEnvelopeVerification(oneMonth))!;
+    expect(archived.summaries[verificationRowKey('BTCUSDT', ordinaryRow)]).toMatchObject({ months: 1, profitMonths: 1 });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('skips market requests when a full month after the saved end is unavailable', async () => {
     await saveSingle([ordinaryRow]);
     const future: VerificationRequest = { ...request, direction: 'FUTURE', months: 24 };

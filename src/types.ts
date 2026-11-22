@@ -31,7 +31,9 @@ export interface EnvelopeStatisticsRange {
   end: string;
   increment: string;
 }
-export type EnvelopeStatisticsRanges = Record<'center' | 'deviation' | 'stopLoss', EnvelopeStatisticsRange>;
+export type EnvelopeStatisticsRanges = Record<'center' | 'deviation' | 'stopLoss', EnvelopeStatisticsRange> & {
+  takeProfit?: EnvelopeStatisticsRange;
+};
 export interface EnvelopeResultOptions {
   minTrades: string;
   minReturnPercent: string;
@@ -74,6 +76,8 @@ export interface BacktestSettings {
   envelopeStopLossPercent?: string;
   envelopeTakeProfitEnabled?: boolean;
   envelopeTakeProfitPercent?: string;
+  /** Saved with the job so an earlier fixed-TP analysis can retain its original band exits. */
+  envelopeTakeProfitReplacesBand?: boolean;
   envelopeTrailingStopEnabled?: boolean;
   envelopeTrailingStopPercent?: string;
   envelopeCloseOnlyEntryEnabled?: boolean;
@@ -335,6 +339,7 @@ export interface Signal {
   atrEnvelopeStopDistance?: number;
   envelopeStopLossPercent?: number;
   envelopeTakeProfitPercent?: number;
+  envelopeTakeProfitReplacesBand?: true;
   envelopeTrailingStopPercent?: number;
   envelopeExitMode?: EnvelopeExitMode;
   envelopeMaPeriod?: number;

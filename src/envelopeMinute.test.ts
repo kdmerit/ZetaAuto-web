@@ -94,11 +94,25 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
     expect(trade.exitPrice).not.toBe(trade.signal.target);
   });
 
-  it.each([false, true])('keeps earlier current-price band exits active, fixed TP enabled=%s', enabled => {
-    const input = { ...parameters, envelopeTakeProfitEnabled: enabled, envelopeTakeProfitPercent: '20' };
+  it.each([false, true])('keeps current-price band exits for TP off and archived TP jobs (enabled=%s)', enabled => {
+    const input = { ...parameters, envelopeTakeProfitEnabled: enabled, envelopeTakeProfitPercent: '20', envelopeTakeProfitReplacesBand: !enabled };
     const state = replay(fixture({ ...entry, 2: [104, 104, 104, 104] }, input), input);
     expect(state.exitReasons).toEqual({ ENVELOPE_OPPOSITE: 1 });
     expect(state.trades[0]!.exitPrice).toBeCloseTo(side === 'LONG' ? 104 * .9998 : 96 * 1.0002, 10);
+  });
+
+  it('holds past both a current price and a later 15m wick at the opposite band until fixed TP fills', () => {
+    const input = { ...parameters, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '10' };
+    const bandTouches: Record<number, Prices> = { 2: [104, 104, 104, 104], 15: [100, 104, 100, 100] };
+    const stillOpen = replay(fixture({ ...entry, ...bandTouches }, input), input);
+    expect(stillOpen.entries).toBe(1);
+    expect(stillOpen.closed).toBe(0);
+
+    const state = replay(fixture({ ...entry, ...bandTouches, 20: [100, 110, 100, 100] }, input), input);
+    expect(state.exitReasons).toEqual({ ENVELOPE_TP: 1 });
+    expect(state.trades[0]!.exitAt).toBe(start + 20 * 60);
+    expect(state.trades[0]!.priceLines?.map(line => line.kind)).toContain('FIXED_TP');
+    expect(state.trades[0]!.priceLines?.map(line => line.kind)).not.toContain('TP');
   });
 
   it('fills a fixed 6% TP at its order price on an intraminute touch after entry', () => {
@@ -121,8 +135,8 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
     expect(state.exitReasons).toEqual({ SL: 1 });
   });
 
-  it('observes center-return state only at polls, excluding an unobserved center wick', () => {
-    const input = { ...parameters, envelopeCloseOnCenterReturn: true };
+  it.each([false, true])('observes center-return state only at polls (fixed TP enabled=%s)', enabled => {
+    const input = { ...parameters, envelopeCloseOnCenterReturn: true, envelopeTakeProfitEnabled: enabled, envelopeTakeProfitPercent: '20' };
     const noLatch = replay(fixture({ ...entry, 2: [97, 101, 97, 97] }, input), input);
     expect(noLatch.closed).toBe(0);
     const latched = replay(fixture({ ...entry, 2: [100, 100, 100, 100], 3: [97, 97, 97, 97] }, input), input);
@@ -131,7 +145,7 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
   });
 
   it('continues exchange-side trailing stops within a minute without using pre-entry highs/lows', () => {
-    const input = { ...parameters, envelopeTrailingStopEnabled: true };
+    const input = { ...parameters, envelopeTrailingStopEnabled: true, envelopeTakeProfitEnabled: true };
     const state = replay(fixture({ 0: [100, 120, 97, 97], 2: [97, 102, 97, 100] }, input), input);
     expect(state.exitReasons).toEqual({ TRAILING_STOP: 1 });
     expect(state.trades[0]!.exitAt).toBe(start + 2 * 60);
@@ -200,8 +214,8 @@ describe('shared minute execution and entry filters', () => {
   });
 
   it('keeps fixed/statistics replay identical to ordinary replay', async () => {
-    const input = { ...settings, interval: '1h' as const, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6' };
-    const document = fixture({ 0: [100, 100, 97, 97], 15: [100, 104, 100, 100] }, input);
+    const input = { ...settings, interval: '1h' as const, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '10' };
+    const document = fixture({ 0: [100, 100, 97, 97], 15: [100, 104, 100, 100], 20: [100, 110, 100, 100] }, input);
     const direct = replay(document, input);
     const result = await replayFixedEnvelope(document, input, 3600, new AbortController().signal, async () => {});
     expect(result.entryCount).toBe(direct.entries);

@@ -139,7 +139,7 @@ function priceLines(p: Holding): PriceLine[] {
       ...(p.secondFill !== undefined ? [{ kind: 'AVERAGE_ENTRY' as const, price: p.entry }] : []),
       ...(hasFixedStop(p.signal) ? [{ kind: 'SL' as const, price: p.stop }] : []),
       ...(p.envelopeTrailingStop === undefined ? [] : [{ kind: 'TRAILING_SL' as const, price: p.envelopeTrailingStop }]),
-      { kind: 'TP', price: p.target },
+      ...(p.signal.envelopeTakeProfitReplacesBand === true ? [] : [{ kind: 'TP' as const, price: p.target }]),
       ...(p.envelopeTakeProfitPrice === undefined ? [] : [{ kind: 'FIXED_TP' as const, price: p.envelopeTakeProfitPrice }]),
     ];
     return lines.filter(line => Number.isFinite(line.price) && line.price > 0);
@@ -428,7 +428,7 @@ function hasFixedStop(signal: Signal): boolean {
 
 function hasIntrabarTarget(p: Holding): boolean {
   const { signal } = p;
-  if (signal.strategy === 'CANDLE_BREAKOUT' || signal.envelopeExecutionModel === 'MINUTE_POLL') return false;
+  if (signal.strategy === 'CANDLE_BREAKOUT' || signal.envelopeExecutionModel === 'MINUTE_POLL' || signal.envelopeTakeProfitReplacesBand === true) return false;
   if (signal.exitMode === 'VOLATILITY_TP') return signal.volatilityTpEnabled !== false;
   if (signal.exitMode === 'VOLATILITY_MA5'
     || (isEnvelopeStrategy(signal.strategy) && signal.envelopeCloseOnConfirmedBreakout === true)) return false;
@@ -538,7 +538,8 @@ function replaySegment(state: PortfolioState, p: Holding, before: number, after:
 /** Close an envelope position only when the selected parent candle confirms a breakout. */
 function closeEnvelopeOnConfirmedClose(state: PortfolioState, symbol: string, candle: Candle): void {
   const position = state.positions[symbol];
-  if (!position || !isEnvelopeStrategy(position.signal.strategy) || position.signal.envelopeCloseOnConfirmedBreakout !== true) return;
+  if (!position || !isEnvelopeStrategy(position.signal.strategy) || position.signal.envelopeCloseOnConfirmedBreakout !== true
+    || position.signal.envelopeTakeProfitReplacesBand === true) return;
   const confirmed = position.signal.side === 'LONG' ? candle.close > position.target : candle.close < position.target;
   if (confirmed) close(state, position, candle.close, position.qty, 'ENVELOPE_CLOSE_CONFIRM', candle);
 }
@@ -744,6 +745,7 @@ function envelopeEntrySignal(definition: EnvelopeEntryDefinition, price: number,
     target, initialTarget: target, exitMode: 'ENVELOPE_TOUCH', envelopeExitMode: 'OPPOSITE',
     ...(sma ? { envelopeDeviationPercent: sma.percent, envelopeStopLossPercent: sma.stopPercent, envelopeMaPeriod: sma.period } : { atrEnvelope: atr }),
     ...(sma?.takeProfitPercent === undefined ? {} : { envelopeTakeProfitPercent: sma.takeProfitPercent }),
+    ...(sma?.takeProfitPercent !== undefined && parameters.envelopeTakeProfitReplacesBand !== false ? { envelopeTakeProfitReplacesBand: true } : {}),
     ...(band.atrEnvelopeStopDistance === undefined ? {} : { atrEnvelopeStopDistance: band.atrEnvelopeStopDistance }),
     ...(parameters.envelopeTrailingStopEnabled === true ? { envelopeTrailingStopPercent: envelopeTrailingStopPercent(parameters) } : {}),
     envelopeCloseOnConfirmedBreakout: parameters.envelopeCloseOnConfirmedBreakout === true,
@@ -878,14 +880,15 @@ function replayEnvelopeMinutes(state: PortfolioState, rows: { symbol: string; ba
       const band = bar.envelopeBySide?.[p.signal.side] ?? bar.envelope;
       if (!band) throw new Error(`${symbol}의 엔벨로프 계산에 필요한 캔들이 부족합니다.`);
       const long = p.signal.side === 'LONG';
+      const oppositeBandExit = p.signal.envelopeTakeProfitReplacesBand !== true;
       p.target = long ? band.upper : band.lower;
-      let reason: string | null = (long ? minute.open >= p.target : minute.open <= p.target) ? 'ENVELOPE_OPPOSITE' : null;
+      let reason: string | null = oppositeBandExit && (long ? minute.open >= p.target : minute.open <= p.target) ? 'ENVELOPE_OPPOSITE' : null;
       if (p.signal.envelopeCloseOnCenterReturn) {
         const returned = long ? minute.open <= band.lower : minute.open >= band.upper;
         if (!reason && p.envelopeCenterTouched && returned) reason = 'ENVELOPE_CENTER_RETURN';
         if (minute.openTime > p.opened && (long ? minute.open >= band.center : minute.open <= band.center)) p.envelopeCenterTouched = true;
       }
-      if (!reason && observation.quarter.openTime > Math.floor(p.opened / 900) * 900
+      if (oppositeBandExit && !reason && observation.quarter.openTime > Math.floor(p.opened / 900) * 900
         && (long ? observation.quarter.high >= band.upper : observation.quarter.low <= band.lower)) reason = 'ENVELOPE_15M_WICK';
       if (reason) close(state, p, minute.open, p.qty, reason, minute, true);
     }

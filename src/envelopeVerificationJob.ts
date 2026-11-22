@@ -4,7 +4,7 @@ import { bandFor, currentEnvelopeSettings } from './envelope';
 import { envelopeCandleDataStart } from './envelopeCandleFilter';
 import { replayFixedEnvelope, validateEnvelopeMinuteRanges, yieldAnalysis } from './envelopeReplay';
 import { matchesEnvelopeFilters, validateEnvelopeResultOptions } from './envelopeResults';
-import { settingsForStatisticsRow, usesCurrentEnvelopeExecution, type EnvelopeStatisticsRow } from './envelopeStatistics';
+import { isCurrentEnvelopeStatisticsVersion, settingsForStatisticsRow, usesCurrentEnvelopeExecution, type EnvelopeStatisticsRow } from './envelopeStatistics';
 import { loadEnvelopeStatisticsReport } from './envelopeStatisticsHistory';
 import { emptyVerificationSummary, loadEnvelopeVerification, planEnvelopeVerification, recordVerificationMonth, verificationKey, verificationRowKey, type EnvelopeVerificationReport, type VerificationMonth, type VerificationRequest } from './envelopeVerification';
 import { envelopeEntryMayTouch, prepareSymbolBlock } from './engine';
@@ -17,7 +17,8 @@ interface SymbolGroup { instrument: Instrument; interval: BacktestInterval; band
 
 function groupCandidates(instrument: Instrument, settings: BacktestSettings, rows: EnvelopeStatisticsRow[]): SymbolGroup[] {
   const intervals = new Map<BacktestInterval, Map<string, BandGroup>>();
-  const sorted = [...rows].sort((a, b) => a.deviationPercent - b.deviationPercent || (a.stopLossPercent ?? 0) - (b.stopLossPercent ?? 0));
+  const sorted = [...rows].sort((a, b) => a.deviationPercent - b.deviationPercent
+    || (a.takeProfitPercent ?? 0) - (b.takeProfitPercent ?? 0) || (a.stopLossPercent ?? 0) - (b.stopLossPercent ?? 0));
   for (const row of sorted) {
     const bands = intervals.get(row.interval) ?? new Map<string, BandGroup>();
     const geometry = `${row.side}:${row.maPeriod}:${row.leverage ?? settings.leverage}`;
@@ -38,7 +39,8 @@ async function verificationSource(request: VerificationRequest): Promise<{ setti
   const symbol = `${source.settings.symbol.toUpperCase().replace(/USDT$/, '')}USDT`;
   const instrument = source.instrument ?? { symbol, launchAt: 0 };
   const rows = source.rows.filter(row => matchesEnvelopeFilters(row, request.resultOptions));
-  return { settings: source.settings, at: source.updatedAt, groups: groupCandidates(instrument, source.settings, rows) };
+  const settings = { ...source.settings, envelopeTakeProfitReplacesBand: isCurrentEnvelopeStatisticsVersion(source.version) };
+  return { settings, at: source.updatedAt, groups: groupCandidates(instrument, settings, rows) };
 }
 
 function coversWindow(rows: Candle[], seconds: number, start: number, end: number): boolean {
@@ -107,12 +109,16 @@ async function replayVerificationMonth(group: SymbolGroup, month: VerificationMo
       catch { return null; }
     }
     let deviation = -1;
+    let takeProfit: number | undefined;
     let reusableFinal: number | undefined;
     for (const { key, row } of band.candidates) {
       signal.throwIfAborted();
+      if (deviation !== row.deviationPercent || takeProfit !== row.takeProfitPercent) {
+        takeProfit = row.takeProfitPercent;
+        reusableFinal = document ? undefined : initialCapital;
+      }
       if (deviation !== row.deviationPercent) {
         deviation = row.deviationPercent;
-        reusableFinal = document ? undefined : initialCapital;
         for (const bar of document?.bars ?? []) if (bar.envelope) {
           const next = bandFor(bar.envelope.center, deviation);
           bar.envelope.upper = next.upper;
@@ -127,7 +133,7 @@ async function replayVerificationMonth(group: SymbolGroup, month: VerificationMo
           shouldYield, validatedMinuteOpenRanges,
         });
         finals.set(key, result.finalEquityUsdt);
-        // For this band, all following stops are wider. They replay identically once none fired.
+        // For this deviation and TP, the following SL values are wider.
         if (!result.exitReasons.SL) reusableFinal = result.finalEquityUsdt;
       }
       if (shouldYield()) { publishProgress(finals.size); await yieldAnalysis(); }

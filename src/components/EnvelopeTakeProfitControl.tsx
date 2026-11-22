@@ -17,7 +17,7 @@ export function EnvelopeTakeProfitControl({ enabled, value = defaultEnvelopeTake
           value={value} onChange={event => onChange(event.target.value)} />
         <b>%</b>
       </span>
-      <small>0.1~20% · 실제 체결가 기준 롱 +%, 숏 −%</small>
+      <small>0.1~20% · 실제 체결가 기준 롱 +%, 숏 −% · 체크 시 반대 밴드 터치 청산 끔</small>
     </label>
   </>;
 }

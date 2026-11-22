@@ -1,6 +1,6 @@
 import type { BacktestSettings, Strategy } from './types';
 import { defaultEnvelopeTakeProfitPercent } from './envelope';
-import { isCurrentEnvelopeStatisticsVersion, statisticsCenterRange, statisticsPercentRange, usesOptimizedEnvelopeStopLoss } from './envelopeStatistics';
+import { isCurrentEnvelopeStatisticsVersion, statisticsCenterRange, statisticsPercentRange, usesCustomStatisticsRanges, usesOptimizedEnvelopeStopLoss } from './envelopeStatistics';
 import { statisticsRangeLabels } from './envelopeStatisticsRanges';
 
 /** Which input form produced the history card. */
@@ -119,14 +119,15 @@ export function formatBacktestHistorySettings(
     addEnabled(values, settings.envelopeCandleFilterEnabled === true, '매수금지 캔들 필터');
 
     const statistics = kind === 'ENVELOPE_STATISTICS';
+    const searchesTakeProfit = statistics && isCurrentEnvelopeStatisticsVersion(version) && settings.envelopeTakeProfitEnabled === true;
     if (strategy === 'ATR_ENVELOPE') {
       const atr = settings.atrEnvelope;
       add(values, 'EMA', atr?.emaPeriod ?? '3');
       add(values, 'ATR', atr?.atrPeriod ?? '3');
       add(values, 'N', atr?.atrMultiplier ?? '0.5');
       add(values, 'SL 배수', `${settings.atrEnvelopeStopMultiplier ?? '0'} ATR`);
-    } else if (statistics && isCurrentEnvelopeStatisticsVersion(version)) {
-      values.push(...statisticsRangeLabels(settings), 'SL ≤ 이격 × 2');
+    } else if (statistics && usesCustomStatisticsRanges(version)) {
+      values.push(...statisticsRangeLabels(settings, searchesTakeProfit), 'SL ≤ 이격 × 2');
     } else if (statistics && usesOptimizedEnvelopeStopLoss(version)) {
       add(values, '중심선 탐색', `${statisticsCenterRange}봉`);
       add(values, '이격 탐색', statisticsPercentRange);
@@ -136,7 +137,7 @@ export function formatBacktestHistorySettings(
       add(values, '엔벨로프 이격', `${settings.envelopeDeviationPercent ?? '3'}%`);
       add(values, 'SL', `${settings.envelopeStopLossPercent ?? '3'}%`);
     }
-    addEnabled(values, strategy === 'ENVELOPE' && settings.envelopeTakeProfitEnabled === true, 'TP', `${settings.envelopeTakeProfitPercent ?? defaultEnvelopeTakeProfitPercent}%`);
+    addEnabled(values, strategy === 'ENVELOPE' && settings.envelopeTakeProfitEnabled === true && !searchesTakeProfit, 'TP', `${settings.envelopeTakeProfitPercent ?? defaultEnvelopeTakeProfitPercent}%`);
     addEnabled(values, settings.envelopeTrailingStopEnabled === true, '트레일링 스탑', `${settings.envelopeTrailingStopPercent ?? '3'}%`);
 
     if (statistics) {

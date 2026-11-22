@@ -5,28 +5,31 @@ export const statisticsAxes = [
   { key: 'center', label: '중심선', unit: '봉', min: 1, max: envelopeMaxPeriod, scale: 1 },
   { key: 'deviation', label: '이격', unit: '%', min: 0.1, max: 20, scale: 10 },
   { key: 'stopLoss', label: 'SL', unit: '%', min: 0.1, max: 20, scale: 10 },
+  { key: 'takeProfit', label: 'TP', unit: '%', min: 0.1, max: 20, scale: 10 },
 ] as const;
 
-const defaults: EnvelopeStatisticsRanges = {
+const defaults: Required<EnvelopeStatisticsRanges> = {
   center: { start: '1', end: '10', increment: '1' },
   deviation: { start: '0.1', end: '10.0', increment: '0.1' },
   stopLoss: { start: '0.1', end: '10.0', increment: '0.1' },
+  takeProfit: { start: '2', end: '6', increment: '1' },
 };
 
-type RangeSettings = Pick<BacktestSettings, 'envelopeStatisticsRanges'>;
+type RangeSettings = Pick<BacktestSettings, 'envelopeStatisticsRanges' | 'envelopeTakeProfitEnabled'>;
 
-export function statisticsRanges(settings: RangeSettings): EnvelopeStatisticsRanges {
+export function statisticsRanges(settings: RangeSettings): Required<EnvelopeStatisticsRanges> {
   const saved = settings.envelopeStatisticsRanges;
   return {
     center: { ...defaults.center, ...saved?.center },
     deviation: { ...defaults.deviation, ...saved?.deviation },
     stopLoss: { ...defaults.stopLoss, ...saved?.stopLoss },
+    takeProfit: { ...defaults.takeProfit, ...saved?.takeProfit },
   };
 }
 
-export function statisticsRangeLabels(settings: RangeSettings): string[] {
+export function statisticsRangeLabels(settings: RangeSettings, includeTakeProfit: boolean): string[] {
   const ranges = statisticsRanges(settings);
-  return statisticsAxes.map(({ key, label, unit }) => {
+  return statisticsAxes.filter(axis => includeTakeProfit || axis.key !== 'takeProfit').map(({ key, label, unit }) => {
     const { start, end, increment } = ranges[key];
     return `${label} 탐색 ${start}~${end}${unit} · ${increment}${unit}씩`;
   });
@@ -51,11 +54,15 @@ function rangeSteps(range: EnvelopeStatisticsRange, axis: typeof statisticsAxes[
   return steps;
 }
 
-export function compileStatisticsGrid(settings: RangeSettings) {
+export function compileStatisticsGrid(settings: RangeSettings, optimizeTakeProfit = true) {
   const ranges = statisticsRanges(settings);
-  const periods = rangeSteps(ranges.center, statisticsAxes[0]);
-  const deviationSteps = rangeSteps(ranges.deviation, statisticsAxes[1]);
-  const stopSteps = rangeSteps(ranges.stopLoss, statisticsAxes[2]);
+  const [center, deviation, stopLoss, takeProfit] = statisticsAxes;
+  const periods = rangeSteps(ranges.center, center);
+  const deviationSteps = rangeSteps(ranges.deviation, deviation);
+  const stopSteps = rangeSteps(ranges.stopLoss, stopLoss);
+  const takeProfitPercents = optimizeTakeProfit && settings.envelopeTakeProfitEnabled === true
+    ? rangeSteps(ranges.takeProfit, takeProfit).map(step => step / takeProfit.scale)
+    : [undefined];
   const deviations: { step: number; stopCount: number; precedingCount: number }[] = [];
   let stopCount = 0;
   let combinationsPerGroup = 0;
@@ -64,8 +71,8 @@ export function compileStatisticsGrid(settings: RangeSettings) {
     while (stopCount < stopSteps.length && stopSteps[stopCount]! <= step * 2) stopCount += 1;
     if (stopCount === 0) continue;
     deviations.push({ step, stopCount, precedingCount: combinationsPerGroup });
-    combinationsPerGroup += stopCount;
+    combinationsPerGroup += stopCount * takeProfitPercents.length;
   }
   if (!combinationsPerGroup) throw new Error('SL이 이격의 2배 이하인 조합이 없습니다. 이격 또는 SL 범위를 조정해 주세요.');
-  return { periods, deviations, stopSteps, combinationsPerGroup };
+  return { periods, deviations, stopSteps, takeProfitPercents, combinationsPerGroup };
 }

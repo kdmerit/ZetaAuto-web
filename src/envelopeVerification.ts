@@ -119,8 +119,10 @@ export async function loadEnvelopeVerification(target: VerificationTarget): Prom
   return report.status === 'RUNNING' ? { ...report, status: 'PAUSED', message: '마지막으로 완료된 달 다음부터 이어갈 수 있습니다.' } : report;
 }
 
-export const verificationRowKey = (symbol: string, row: EnvelopeStatisticsRow): string =>
-  [symbol, row.side, row.interval, row.maPeriod, row.deviationPercent, row.stopLossPercent, row.exitMode, row.leverage].join(':');
+export function verificationRowKey(symbol: string, row: EnvelopeStatisticsRow): string {
+  const key = [symbol, row.side, row.interval, row.maPeriod, row.deviationPercent, row.stopLossPercent, row.exitMode, row.leverage].join(':');
+  return row.takeProfitPercent === undefined ? key : `${key}:TP${row.takeProfitPercent}`;
+}
 
 export function verificationSummaryFor(report: EnvelopeVerificationReport | null, symbol: string, row: EnvelopeStatisticsRow): VerificationSummary | undefined {
   return report?.summaries[verificationRowKey(symbol, row)];

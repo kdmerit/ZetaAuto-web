@@ -52,6 +52,7 @@ export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSet
     envelopeStopLossPercent: settings.envelopeStopLossPercent ?? '3',
     envelopeTakeProfitEnabled: settings.envelopeTakeProfitEnabled === true,
     envelopeTakeProfitPercent: settings.envelopeTakeProfitPercent ?? defaultEnvelopeTakeProfitPercent,
+    envelopeTakeProfitReplacesBand: settings.envelopeTakeProfitReplacesBand !== false,
     envelopeTrailingStopEnabled: settings.envelopeTrailingStopEnabled === true,
     envelopeTrailingStopPercent: settings.envelopeTrailingStopPercent ?? '3',
     envelopeCloseOnlyEntryEnabled: settings.envelopeCloseOnlyEntryEnabled === true,
@@ -66,7 +67,7 @@ export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSet
 
 export function currentAtrEnvelopeSettings(settings: BacktestSettings): BacktestSettings {
   const { envelopeMaPeriod: _sma, envelopeDeviationPercent: _percent, envelopeStopLossPercent: _stop,
-    envelopeTakeProfitEnabled: _takeProfit, envelopeTakeProfitPercent: _takeProfitPercent,
+    envelopeTakeProfitEnabled: _takeProfit, envelopeTakeProfitPercent: _takeProfitPercent, envelopeTakeProfitReplacesBand: _replaceBand,
     envelopeStatisticsInterval: _statistics, ...shared } = currentEnvelopeSettings(settings);
   return { ...shared, atrEnvelope: { ...defaultAtrEnvelopeInputs, ...settings.atrEnvelope },
     atrEnvelopeStopMultiplier: settings.atrEnvelopeStopMultiplier ?? defaultAtrEnvelopeStopMultiplier };

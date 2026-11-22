@@ -237,6 +237,8 @@ button.envelope-best { background: transparent; text-align: left; font: inherit;
 .statistics-range { display: grid; gap: 8px; }
 .statistics-range h3 { font-size: 17px; }
 .statistics-range .field-label { font-size: 14px; }
+.statistics-range-inputs { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.statistics-range-inputs input { min-width: 0; padding-inline: 8px; }
 .statistics-finish-dialog { width: min(420px, calc(100% - 32px)); padding: 20px; color: inherit; }
 .statistics-finish-dialog::backdrop { background: rgba(9, 15, 25, .8); }
 .envelope-statistics .statistics-finish-dialog p { margin: 12px 0 16px; }

@@ -89,5 +89,14 @@ describe('backtest history setting summaries', () => {
     expect(updated).toEqual(expect.arrayContaining(['중심선 탐색 4~40봉 · 4봉씩', '이격 탐색 1~3.2% · 0.2%씩', 'SL 탐색 0.1~10% · 0.5%씩', 'SL ≤ 이격 × 2']));
     expect(updated).not.toContain('SL 3%');
     expect(formatBacktestHistorySettings(settings, 'ENVELOPE', 'ENVELOPE_STATISTICS', '2.11.0')).toEqual(expect.arrayContaining(['중심선 탐색 1~10봉', '이격 탐색 0.1~10.0%', 'SL 탐색 0.1~10.0%']));
+
+    const withTp = { ...settings, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6',
+      envelopeStatisticsRanges: { ...settings.envelopeStatisticsRanges, takeProfit: { start: '2', end: '4.5', increment: '0.5' } } };
+    const searched = formatBacktestHistorySettings(withTp, 'ENVELOPE', 'ENVELOPE_STATISTICS', envelopeOptimizerVersion);
+    expect(searched).toContain('TP 탐색 2~4.5% · 0.5%씩');
+    expect(searched).not.toContain('TP 6%');
+    const archived = formatBacktestHistorySettings(withTp, 'ENVELOPE', 'ENVELOPE_STATISTICS', '2.11.1');
+    expect(archived).toContain('중심선 탐색 4~40봉 · 4봉씩');
+    expect(archived).toContain('TP 6%');
   });
 });

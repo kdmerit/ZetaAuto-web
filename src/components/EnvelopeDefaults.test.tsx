@@ -54,11 +54,12 @@ describe('envelope input defaults and arrangement', () => {
     expect(rows[4]).toContain('checked=""');
     expect(rows[5]).toContain('매수금지 캔들 필터 적용');
     expect(rows[5]).not.toContain('checked=""');
-    expect(rows[6]).toContain('TP사용');
-    expect(rows[6]).not.toContain('checked=""');
-    expect(rows[7]).toContain('트레일링 스탑 적용');
-    expect(rows[7]).not.toContain('checked=""');
-    expect(html).toMatch(/TP \(%\)[\s\S]*?<input[^>]*min="0.1" max="20"[^>]*disabled=""[^>]*value="6"/);
+    const tp = rows.find(row => row.includes('TP사용'));
+    const trailing = rows.find(row => row.includes('트레일링 스탑 적용'));
+    expect(tp).toBeDefined(); expect(tp).not.toContain('checked=""');
+    expect(trailing).toBeDefined(); expect(trailing).not.toContain('checked=""');
+    if (view === 'SINGLE_STATS') expect(html).not.toContain('aria-label="TP 시작값"');
+    else expect(html).toMatch(/TP \(%\)[\s\S]*?<input[^>]*min="0.1" max="20"[^>]*disabled=""[^>]*value="6"/);
     expect(html).toMatch(/트레일링 스탑 \(%\)[\s\S]*?<input[^>]*min="1"[^>]*max="100"[^>]*step="0.1"[^>]*value="3"/);
     expect(html).not.toContain('MA20 아래에서만 매수 (롱)');
     expect(html).not.toContain('종가 &gt; 엔벨로프 상단 확정 시 청산');
@@ -164,7 +165,20 @@ describe('envelope input defaults and arrangement', () => {
     const statistics = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
     expect(options(statistics)[1]).toContain('checked=""');
     expect(options(statistics)[2]).toContain('checked=""');
-    expect(statistics).toMatch(/TP \(%\)[\s\S]*?<input[^>]*disabled=""[^>]*value="7"/);
+    expect(statistics).toContain('TP사용');
+    expect(statistics).not.toContain('aria-label="TP 시작값"');
+  });
+
+  it('restores the three TP range inputs in a single statistics row when enabled', () => {
+    values.set('zetaauto.web.envelope.view', 'SINGLE_STATS');
+    values.set('zetaauto.web.envelope.SINGLE_STATS.settings', JSON.stringify({
+      envelopeTakeProfitEnabled: true, envelopeStatisticsRanges: { takeProfit: { start: '1.5', end: '6.5', increment: '0.5' } },
+    }));
+    const html = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
+    const tpRow = html.match(/aria-label="TP 탐색 범위"[\s\S]*?<div class="field-grid statistics-range-inputs">([\s\S]*?)<\/div>/)?.[1];
+    expect(tpRow).toMatch(/aria-label="TP 시작값"[^>]*value="1.5"/);
+    expect(tpRow).toMatch(/aria-label="TP 종료값"[^>]*value="6.5"/);
+    expect(tpRow).toMatch(/aria-label="TP 증가값"[^>]*value="0.5"/);
   });
 
   it('keeps saved statistics preferences instead of replacing them with new defaults', () => {

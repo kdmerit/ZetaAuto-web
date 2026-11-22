@@ -77,6 +77,7 @@ async function readJob(strategy: Strategy): Promise<LocalJob | null> {
   if (!snapshot) throw new Error('저장된 분석 진행 상태가 없습니다. 새 분석을 시작해 주세요.');
   const { snapshotKey: _key, ...job } = header;
   if (job.strategy === 'ATR_ENVELOPE') job.settings.atrEnvelopeStopMultiplier ??= '0';
+  if (job.strategy === 'ENVELOPE') job.settings.envelopeTakeProfitReplacesBand ??= false;
   return { ...job, ...snapshot, failedSymbols: job.failedSymbols ?? [] };
 }
 
@@ -191,7 +192,7 @@ async function executeWithLease(
       if (!options.settings) throw new Error('분석 설정이 없습니다.');
       const copied = structuredClone(options.settings);
       const settings = options.strategy === 'NEW_HIGH' ? currentNewHighSettings(copied)
-        : options.strategy === 'ENVELOPE' ? currentEnvelopeSettings(copied)
+        : options.strategy === 'ENVELOPE' ? currentEnvelopeSettings({ ...copied, envelopeTakeProfitReplacesBand: true })
         : options.strategy === 'ATR_ENVELOPE' ? currentAtrEnvelopeSettings(copied)
         : options.strategy === 'PULLBACK' ? currentPullbackSettings(copied)
         : options.strategy === 'REFERENCE' ? currentReferenceSettings(copied) : copied;

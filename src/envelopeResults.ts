@@ -28,7 +28,8 @@ export function compareEnvelopeRows(a: EnvelopeStatisticsRow, b: EnvelopeStatist
     || (b.profitRatioPercent ?? -Infinity) - (a.profitRatioPercent ?? -Infinity)
     || b.entryCount - a.entryCount || a.maxDrawdownPercent - b.maxDrawdownPercent
     || a.maPeriod - b.maPeriod || a.deviationPercent - b.deviationPercent
-    || (a.stopLossPercent ?? 0) - (b.stopLossPercent ?? 0) || (a.side ?? '').localeCompare(b.side ?? '');
+    || (a.stopLossPercent ?? 0) - (b.stopLossPercent ?? 0) || (a.takeProfitPercent ?? 0) - (b.takeProfitPercent ?? 0)
+    || (a.side ?? '').localeCompare(b.side ?? '');
 }
 export function selectedEnvelopeRows(rows: EnvelopeStatisticsRow[], options = defaultEnvelopeResultOptions): EnvelopeStatisticsRow[] {
   return rows.filter(row => matchesEnvelopeFilters(row, options)).sort((a, b) => compareEnvelopeRows(a, b, options));

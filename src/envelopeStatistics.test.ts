@@ -56,6 +56,7 @@ describe('envelope breakout statistics', () => {
     expect(statisticsTotalFor({ ...settings, side: 'LONG' })).toBe(75_500);
     expect(statisticsTotalFor(settings)).toBe(151_000);
     expect(statisticsTotalFor(settings, '2.11.0')).toBe(200_000);
+    expect(statisticsTotalFor({ ...settings, envelopeTakeProfitEnabled: true }, '2.11.1')).toBe(151_000);
   });
   it('keeps increments anchored to the start, includes exact 2× stops and skips deviations with no allowed stop', () => {
     const grid = compileStatisticsGrid({ envelopeStatisticsRanges: {
@@ -77,6 +78,9 @@ describe('envelope breakout statistics', () => {
     expect(() => compile({ deviation: { ...ranges.deviation, increment: '0' } })).toThrow('이격의 시작값·종료값·증가값');
     expect(() => compile({ stopLoss: { ...ranges.stopLoss, increment: '0.15' } })).toThrow('소수 한 자리');
     expect(() => compile({ deviation: { ...ranges.deviation, end: '0.2' }, stopLoss: { ...ranges.stopLoss, start: '0.5' } })).toThrow('SL이 이격의 2배 이하인 조합이 없습니다');
+    const invalidTarget = { ...ranges, takeProfit: { ...ranges.takeProfit, increment: '0' } };
+    expect(() => compileStatisticsGrid({ envelopeStatisticsRanges: invalidTarget, envelopeTakeProfitEnabled: true })).toThrow('TP의 시작값·종료값·증가값');
+    expect(compileStatisticsGrid({ envelopeStatisticsRanges: invalidTarget }).takeProfitPercents).toEqual([undefined]);
   });
   it('offers only 1h, 4h and 1d and uses the selected period for validation', () => {
     expect(statisticsIntervals).toEqual(['1h', '4h', '1d']);
@@ -103,7 +107,7 @@ describe('envelope breakout statistics', () => {
     expect(job.status).toBe('COMPLETED'); expect(job.settings.envelopeStatisticsInterval).toBe('1h');
     expect(job.settings.envelopeStopLossPercent).toBeUndefined();
     expect(job.rows.every(row => row.interval === '1h' && row.exitMode === 'OPPOSITE' && row.leverage === 5)).toBe(true);
-    expect(job.settings.envelopeStatisticsRanges).toEqual(envelopeStatisticsRanges);
+    expect(job.settings.envelopeStatisticsRanges).toMatchObject(envelopeStatisticsRanges);
     expect([...new Set(job.rows.map(row => row.maPeriod))]).toEqual([1, 5, 9]);
     expect([...new Set(job.rows.map(row => row.deviationPercent))]).toEqual([0.1, 0.2]);
     const stops = job.rows.filter(row => row.maPeriod === 1 && row.deviationPercent === 0.1);
@@ -120,6 +124,37 @@ describe('envelope breakout statistics', () => {
     expect((await loadEnvelopeStatistics())!.rows).toEqual(job.rows);
     expect(fetch).not.toHaveBeenCalled();
   }, 30000);
+
+  it('replays distinct TP combinations and resumes from the saved TP and SL indices', async () => {
+    const candles = rows('1h').slice(0, 210).map((row, index) => index === 200
+      ? { ...row, open: 98.9, low: 98.9, high: 101.5, close: 100 }
+      : { ...row, open: 100, low: 100, high: 100, close: 100 });
+    await cacheCandles('BTCUSDT', '1h', candles);
+    await cacheCandles('BTCUSDT', '1m', minuteRows(candles.slice(200)));
+    const input: BacktestSettings = { ...settings, side: 'LONG', endDate: settings.startDate, endTime: '19:00',
+      envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: 'invalid', envelopeStatisticsRanges: {
+        center: { start: '1', end: '1', increment: '1' },
+        deviation: { start: '1', end: '1', increment: '0.1' },
+        stopLoss: { start: '0.5', end: '1', increment: '0.5' },
+        takeProfit: { start: '2', end: '4.5', increment: '1' },
+      } };
+    const signal = new AbortController().signal;
+    await executeEnvelopeStatistics({ settings: input }, () => {}, signal);
+    const job = (await loadEnvelopeStatistics())!;
+    expect(job.status).toBe('COMPLETED');
+    expect(statisticsTotalFor(job.settings)).toBe(6);
+    expect(job.rows.map(row => [row.takeProfitPercent, row.stopLossPercent, row.closedTradeCount])).toEqual([
+      [2, 0.5, 1], [2, 1, 1], [3, 0.5, 0], [3, 1, 0], [4, 0.5, 0], [4, 1, 0],
+    ]);
+    expect(settingsForStatisticsRow(job.settings, job.rows[4]!)).toMatchObject({ envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '4.0' });
+    const paused = { ...job, status: 'PAUSED' as const, intervalIndex: 0, periodIndex: 0, sideIndex: 0,
+      step: 1, stopStep: 2, takeProfitIndex: 1, rows: job.rows.slice(0, 3) };
+    expect(statisticsProgress(paused)).toBe(3);
+    await writeValue('jobs', 'ENVELOPE_STATISTICS', paused);
+    await executeEnvelopeStatistics({ resumeId: paused.id }, () => {}, signal);
+    expect((await loadEnvelopeStatistics())!.rows).toEqual(job.rows);
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
   it('loads all 240 warmup candles and considers widths above the old 10% ceiling', async () => {
     const { start } = analysisWindow(settings);
