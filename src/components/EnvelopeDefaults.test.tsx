@@ -23,7 +23,7 @@ function options(html: string): string[] {
 }
 
 describe('envelope input defaults and arrangement', () => {
-  it.each(['SINGLE', 'ALL', 'SINGLE_STATS', 'ALL_STATS'])('starts %s at 1D with the above-MA20 filter checked', view => {
+  it.each(['SINGLE', 'ALL', 'SINGLE_STATS'])('starts %s at 1D with the above-MA20 filter checked', view => {
     values.set('zetaauto.web.envelope.view', view);
     const html = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
     expect(html).toMatch(/class="selected"[^>]*>1D<|aria-pressed="true"[^>]*>1D</);
@@ -31,9 +31,11 @@ describe('envelope input defaults and arrangement', () => {
       expect(html).toMatch(/엔벨로프 중심선 봉수\s*<input[^>]*type="number"[^>]*min="1" max="240" step="1"[^>]*value="20"/);
       expect(html).toMatch(/SL \(%\)[\s\S]*?<input[^>]*min="0.1"[^>]*max="20"[^>]*step="0.1"[^>]*value="3"/);
     } else {
-      expect(html).toContain('중심선은 1~10봉을 1봉씩');
-      expect(html).toContain('이격과 SL은 각각 0.1~10.0%');
-      expect(html).not.toContain('SL (%)');
+      expect(html).toMatch(/aria-label="중심선 시작값"[^>]*value="1"/);
+      expect(html).toMatch(/aria-label="중심선 종료값"[^>]*value="10"/);
+      expect(html).toMatch(/aria-label="이격 증가값"[^>]*value="0.1"/);
+      expect(html).toMatch(/aria-label="SL 종료값"[^>]*value="10.0"/);
+      expect(html).toContain('SL ≤ 이격 × 2');
       expect(html).toContain('월별 검증');
       expect(html).toMatch(/aria-pressed="true">과거<\/button>/);
       expect(html).toMatch(/disabled=""[^>]*>검증<\/button>/);
@@ -173,28 +175,36 @@ describe('envelope input defaults and arrangement', () => {
     expect(options(html)[0]).not.toContain('checked=""');
   });
 
-  it('restores each statistics screen with its own verification inputs and preserves unapplied filter edits', () => {
+  it('restores individual statistics verification inputs and preserves unapplied filter edits', () => {
     const single: EnvelopeVerificationPreferences = {
       direction: 'FUTURE', months: '24',
       options: { sortBy: 'netUsdt', sortOrder: 'LOW', filterBy: 'lossMonths', comparison: 'MAX', threshold: '2', deviationSlEnabled: true, deviationSlMultiplier: '2.5' },
       filterDraft: { filterBy: 'averageProfit', comparison: 'MIN', threshold: '', deviationSlEnabled: false, deviationSlMultiplier: '' },
     };
-    const all: EnvelopeVerificationPreferences = {
-      direction: 'PAST', months: '6', options: defaultVerificationResultOptions, filterDraft: defaultVerificationFilterOptions,
-    };
     saveEnvelopeVerificationPreferences('SINGLE_STATS', single);
-    saveEnvelopeVerificationPreferences('ALL_STATS', all);
 
     expect(loadEnvelopeVerificationPreferences('SINGLE_STATS')).toEqual(single);
-    expect(loadEnvelopeVerificationPreferences('ALL_STATS')).toEqual(all);
     values.set('zetaauto.web.envelope.view', 'SINGLE_STATS');
     const individual = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
     expect(individual).toMatch(/aria-pressed="true">미래<\/button>/);
     expect(individual).toMatch(/검증 개월 수<input[^>]*value="24"/);
+  });
+
+  it('reopens the individual statistics view with the saved ranges when the old tab was selected', () => {
     values.set('zetaauto.web.envelope.view', 'ALL_STATS');
-    const whole = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
-    expect(whole).toMatch(/aria-pressed="true">과거<\/button>/);
-    expect(whole).toMatch(/검증 개월 수<input[^>]*value="6"/);
+    values.set('zetaauto.web.envelope.SINGLE_STATS.settings', JSON.stringify({ envelopeStatisticsRanges: {
+      center: { start: '15', end: '240', increment: '3' },
+      deviation: { start: '2.5', end: '12', increment: '0.3' },
+      stopLoss: { start: '1.2', end: '17', increment: '0.4' },
+    } }));
+    const html = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
+    expect(html).toMatch(/aria-pressed="true" class="selected">개별통계</);
+    expect(html).toContain('전체분석');
+    expect(html).not.toContain('전체통계');
+    expect(html).not.toContain('가상매매');
+    expect(html).toMatch(/aria-label="중심선 종료값"[^>]*value="240"/);
+    expect(html).toMatch(/aria-label="이격 시작값"[^>]*value="2.5"/);
+    expect(html).toMatch(/aria-label="SL 증가값"[^>]*value="0.4"/);
   });
 
   it('restores editable inputs without activating invalid stored filter values', () => {

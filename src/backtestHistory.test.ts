@@ -71,6 +71,11 @@ describe('backtest history setting summaries', () => {
         minProfitRatioPercent: '55',
         sort: 'winRatePercent' as const,
       },
+      envelopeStatisticsRanges: {
+        center: { start: '4', end: '40', increment: '4' },
+        deviation: { start: '1', end: '3.2', increment: '0.2' },
+        stopLoss: { start: '0.1', end: '10', increment: '0.5' },
+      },
     };
 
     const summary = formatBacktestHistorySettings(settings, 'ENVELOPE', 'ENVELOPE_STATISTICS').join(' · ');
@@ -80,10 +85,9 @@ describe('backtest history setting summaries', () => {
     expect(summary).toContain('최소 수익비 55%');
     expect(summary).toContain('정렬 기준 승률');
     expect(summary).toContain('SL 3%');
-    for (const kind of ['ENVELOPE_STATISTICS', 'ENVELOPE_BATCH_STATS'] as const) {
-      const updated = formatBacktestHistorySettings(settings, 'ENVELOPE', kind, envelopeOptimizerVersion);
-      expect(updated).toEqual(expect.arrayContaining(['중심선 탐색 1~10봉', '이격 탐색 0.1~10.0%', 'SL 탐색 0.1~10.0%']));
-      expect(updated).not.toContain('SL 3%');
-    }
+    const updated = formatBacktestHistorySettings(settings, 'ENVELOPE', 'ENVELOPE_STATISTICS', envelopeOptimizerVersion);
+    expect(updated).toEqual(expect.arrayContaining(['중심선 탐색 4~40봉 · 4봉씩', '이격 탐색 1~3.2% · 0.2%씩', 'SL 탐색 0.1~10% · 0.5%씩', 'SL ≤ 이격 × 2']));
+    expect(updated).not.toContain('SL 3%');
+    expect(formatBacktestHistorySettings(settings, 'ENVELOPE', 'ENVELOPE_STATISTICS', '2.11.0')).toEqual(expect.arrayContaining(['중심선 탐색 1~10봉', '이격 탐색 0.1~10.0%', 'SL 탐색 0.1~10.0%']));
   });
 });

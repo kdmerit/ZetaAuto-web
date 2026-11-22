@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareEnvelopeRows, defaultEnvelopeResultOptions, envelopeBests, matchesEnvelopeFilters, profitRatio, retainEnvelopeCandidates, selectedEnvelopeRows, validateEnvelopeResultOptions } from './envelopeResults';
+import { compareEnvelopeRows, envelopeBests, matchesEnvelopeFilters, profitRatio, selectedEnvelopeRows, validateEnvelopeResultOptions } from './envelopeResults';
 import type { EnvelopeStatisticsRow } from './envelopeStatistics';
 
 const row: EnvelopeStatisticsRow = { side: 'LONG', interval: '1h', maPeriod: 5, deviationPercent: 1, exitMode: 'OPPOSITE', entryCount: 10, closedTradeCount: 10, winCount: 6, lossCount: 4,
@@ -44,18 +44,5 @@ describe('user result filters and optimal-setting ordering', () => {
   it('uses deterministic tie-breakers without changing the selected primary metric', () => {
     expect(compareEnvelopeRows({ ...row, maxDrawdownPercent: 0 }, row, options)).toBeLessThan(0);
     expect(compareEnvelopeRows({ ...row, winRatePercent: 50, returnPercent: 11 }, row, options)).toBeLessThan(0);
-  });
-  it('retains exact possible ALL winners for either ordering and arbitrary later thresholds, separately by side', () => {
-    let seed = 593;
-    const next = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2 ** 32; };
-    const rows = Array.from({ length: 150 }, (_, index) => ({ ...row, side: index % 2 ? 'LONG' as const : 'SHORT' as const,
-      maPeriod: [5, 10, 20, 40, 60, 80, 100, 120][index % 8]!, deviationPercent: index / 10,
-      entryCount: Math.floor(next() * 50), returnPercent: next() * 50 - 10, winRatePercent: next() * 100, profitRatioPercent: next() * 100, maxDrawdownPercent: next() * 10 }));
-    const retained = retainEnvelopeCandidates(rows);
-    expect(retained.length).toBeLessThan(rows.length);
-    for (const sort of ['returnPercent', 'winRatePercent'] as const) for (const trades of [0, 10, 30]) for (const roi of [-10, 2, 10, 30]) for (const ratio of [0, 50, 80]) {
-      const filter = { ...defaultEnvelopeResultOptions, sort, minTrades: String(trades), minReturnPercent: String(roi), minProfitRatioPercent: String(ratio) };
-      expect(envelopeBests(retained, filter)).toEqual(envelopeBests(rows, filter));
-    }
   });
 });

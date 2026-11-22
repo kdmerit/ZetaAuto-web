@@ -41,10 +41,10 @@ describe('one-month backtest start defaults', () => {
     expect(markup).toMatch(/시작일<input[^>]*value="2025-02-03"/);
   });
 
-  it.each(['SINGLE_STATS', 'ALL_STATS'])('uses the same date fallback and preserves saved %s dates', view => {
-    values.set('zetaauto.web.envelope.view', view);
+  it('uses the same date fallback and preserves saved individual statistics dates', () => {
+    values.set('zetaauto.web.envelope.view', 'SINGLE_STATS');
     expect(renderToStaticMarkup(<EnvelopeWorkspace context={context} />)).toMatch(/시작일<input[^>]*value="2026-10-11"/);
-    values.set(`zetaauto.web.envelope.${view}.settings`, JSON.stringify({ startDate: '2025-02-03', startTime: '13:45' }));
+    values.set('zetaauto.web.envelope.SINGLE_STATS.settings', JSON.stringify({ startDate: '2025-02-03', startTime: '13:45' }));
     expect(renderToStaticMarkup(<EnvelopeWorkspace context={context} />)).toMatch(/시작일<input[^>]*value="2025-02-03"/);
   });
 

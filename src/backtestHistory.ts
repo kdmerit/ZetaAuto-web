@@ -1,13 +1,10 @@
 import type { BacktestSettings, Strategy } from './types';
 import { defaultEnvelopeTakeProfitPercent } from './envelope';
-import { isCurrentEnvelopeStatisticsVersion, statisticsCenterRange, statisticsPercentRange } from './envelopeStatistics';
+import { isCurrentEnvelopeStatisticsVersion, statisticsCenterRange, statisticsPercentRange, usesOptimizedEnvelopeStopLoss } from './envelopeStatistics';
+import { statisticsRangeLabels } from './envelopeStatisticsRanges';
 
 /** Which input form produced the history card. */
-export type BacktestHistorySettingsKind =
-  | 'BACKTEST'
-  | 'ENVELOPE_STATISTICS'
-  | 'ENVELOPE_BATCH_STATS'
-  | 'ENVELOPE_BATCH_VIRTUAL';
+export type BacktestHistorySettingsKind = 'BACKTEST' | 'ENVELOPE_STATISTICS';
 
 const sideLabel = (side: BacktestSettings['side']): string =>
   side === 'LONG' ? '롱' : side === 'SHORT' ? '숏' : '롱 + 숏';
@@ -121,20 +118,19 @@ export function formatBacktestHistorySettings(
     addEnabled(values, settings.envelopeHalfCandleEnabled === true, '캔들 절반 엔벨 이내');
     addEnabled(values, settings.envelopeCandleFilterEnabled === true, '매수금지 캔들 필터');
 
-    const statistics = kind === 'ENVELOPE_STATISTICS' || kind === 'ENVELOPE_BATCH_STATS';
-    const optimized = isCurrentEnvelopeStatisticsVersion(version);
+    const statistics = kind === 'ENVELOPE_STATISTICS';
     if (strategy === 'ATR_ENVELOPE') {
       const atr = settings.atrEnvelope;
       add(values, 'EMA', atr?.emaPeriod ?? '3');
       add(values, 'ATR', atr?.atrPeriod ?? '3');
       add(values, 'N', atr?.atrMultiplier ?? '0.5');
       add(values, 'SL 배수', `${settings.atrEnvelopeStopMultiplier ?? '0'} ATR`);
-    } else if (statistics && optimized) {
+    } else if (statistics && isCurrentEnvelopeStatisticsVersion(version)) {
+      values.push(...statisticsRangeLabels(settings), 'SL ≤ 이격 × 2');
+    } else if (statistics && usesOptimizedEnvelopeStopLoss(version)) {
       add(values, '중심선 탐색', `${statisticsCenterRange}봉`);
       add(values, '이격 탐색', statisticsPercentRange);
       add(values, 'SL 탐색', statisticsPercentRange);
-    } else if (kind === 'ENVELOPE_BATCH_VIRTUAL' && optimized) {
-      values.push('전체통계의 종목·방향별 중심선·이격·SL 적용');
     } else {
       add(values, '엔벨로프 중심선 봉수', settings.envelopeMaPeriod ?? '20');
       add(values, '엔벨로프 이격', `${settings.envelopeDeviationPercent ?? '3'}%`);

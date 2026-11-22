@@ -26,6 +26,12 @@ export interface AtrEnvelopeParameters {
 }
 export type BacktestInterval = '15m' | '1h' | '4h' | '1d';
 export type EnvelopeStatisticsInterval = BacktestInterval | 'ALL';
+export interface EnvelopeStatisticsRange {
+  start: string;
+  end: string;
+  increment: string;
+}
+export type EnvelopeStatisticsRanges = Record<'center' | 'deviation' | 'stopLoss', EnvelopeStatisticsRange>;
 export interface EnvelopeResultOptions {
   minTrades: string;
   minReturnPercent: string;
@@ -77,6 +83,7 @@ export interface BacktestSettings {
   envelopeMaPeriod?: string;
   envelopeRisk?: ContractRisk;
   envelopeStatisticsInterval?: EnvelopeStatisticsInterval;
+  envelopeStatisticsRanges?: EnvelopeStatisticsRanges;
   envelopeMoveSlOnCenter?: boolean;
   envelopeEntryMode?: 'RECLAIM' | 'BAND_TOUCH';
   /** New runs observe prices once per minute; absent on archived OHLC replays. */

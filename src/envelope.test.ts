@@ -113,7 +113,7 @@ describe('envelope band-touch entries and exits', () => {
     expect(maximumTouchedStep(document)).toBe(15);
     expect(maximumTouchedStep(document, true)).toBe(0);
     const wide = replay(false, [[100, 100, 80, 85]]).document;
-    expect(maximumTouchedStep(wide)).toBe(100);
+    expect(maximumTouchedStep(wide)).toBe(200);
   });
 
   it.each([

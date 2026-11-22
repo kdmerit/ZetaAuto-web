@@ -1,7 +1,6 @@
 import { intervalSeconds } from './api';
 import { lease, maintainCache, writeValue } from './database';
 import { bandFor, currentEnvelopeSettings } from './envelope';
-import { envelopeBatchSettings, loadEnvelopeBatchReport } from './envelopeBatch';
 import { envelopeCandleDataStart } from './envelopeCandleFilter';
 import { replayFixedEnvelope, validateEnvelopeMinuteRanges, yieldAnalysis } from './envelopeReplay';
 import { matchesEnvelopeFilters, validateEnvelopeResultOptions } from './envelopeResults';
@@ -34,19 +33,12 @@ function groupCandidates(instrument: Instrument, settings: BacktestSettings, row
 
 async function verificationSource(request: VerificationRequest): Promise<{ settings: BacktestSettings; at: number; groups: SymbolGroup[] }> {
   validateEnvelopeResultOptions(request.resultOptions);
-  if (request.source === 'SINGLE_STATS') {
-    const source = await loadEnvelopeStatisticsReport(request.sourceId);
-    if (!source || !usesCurrentEnvelopeExecution(source.version)) throw new Error('현재 체결 방식으로 완료된 개별통계가 필요합니다.');
-    const symbol = `${source.settings.symbol.toUpperCase().replace(/USDT$/, '')}USDT`;
-    const instrument = source.instrument ?? { symbol, launchAt: 0 };
-    const rows = source.rows.filter(row => matchesEnvelopeFilters(row, request.resultOptions));
-    return { settings: source.settings, at: source.updatedAt, groups: groupCandidates(instrument, source.settings, rows) };
-  }
-
-  const source = await loadEnvelopeBatchReport(request.sourceId, request.resultOptions);
-  if (!source || source.kind !== 'ALL_STATS' || !usesCurrentEnvelopeExecution(source.version)) throw new Error('현재 체결 방식으로 완료된 전체통계가 필요합니다.');
-  const groups = source.rows.flatMap(row => groupCandidates(row, source.settings, envelopeBatchSettings(row, source.settings)));
-  return { settings: source.settings, at: source.updatedAt, groups };
+  const source = await loadEnvelopeStatisticsReport(request.sourceId);
+  if (!source || !usesCurrentEnvelopeExecution(source.version)) throw new Error('현재 체결 방식으로 완료된 개별통계가 필요합니다.');
+  const symbol = `${source.settings.symbol.toUpperCase().replace(/USDT$/, '')}USDT`;
+  const instrument = source.instrument ?? { symbol, launchAt: 0 };
+  const rows = source.rows.filter(row => matchesEnvelopeFilters(row, request.resultOptions));
+  return { settings: source.settings, at: source.updatedAt, groups: groupCandidates(instrument, source.settings, rows) };
 }
 
 function coversWindow(rows: Candle[], seconds: number, start: number, end: number): boolean {

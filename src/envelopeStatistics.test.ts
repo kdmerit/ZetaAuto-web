@@ -4,6 +4,7 @@ import { intervalSeconds } from './api';
 import { cacheCandles, openCacheDatabase, readValue, writeValue } from './database';
 import { envelopeOptimizerVersion, executeEnvelopeStatistics, isCurrentEnvelopeStatisticsVersion, loadEnvelopeStatistics, selectedStatisticsIntervals, settingsForStatisticsRow, statisticsAnalysisWindow, statisticsIntervals, statisticsPeriods, statisticsProgress, statisticsTotalFor, usesFiveEnvelopePeriods } from './envelopeStatistics';
 import { currentEnvelopeSettings } from './envelope';
+import { compileStatisticsGrid, statisticsRanges } from './envelopeStatisticsRanges';
 import { analysisWindow } from './marketData';
 import type { BacktestSettings, Candle } from './types';
 import { minuteRows } from './test/envelopeFixtures';
@@ -50,10 +51,32 @@ describe('envelope breakout statistics', () => {
     expect(usesFiveEnvelopePeriods(version)).toBe(true);
     expect(statisticsTotalFor(settings, version)).toBe(2000);
   });
-  it('counts 10 centers × 100 deviations × 100 stops for each direction', () => {
+  it('counts only valid deviation/SL pairs for each direction and keeps the old grid total for archives', () => {
     expect(statisticsPeriods(envelopeOptimizerVersion)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    expect(statisticsTotalFor({ ...settings, side: 'LONG' })).toBe(100_000);
-    expect(statisticsTotalFor(settings)).toBe(200_000);
+    expect(statisticsTotalFor({ ...settings, side: 'LONG' })).toBe(75_500);
+    expect(statisticsTotalFor(settings)).toBe(151_000);
+    expect(statisticsTotalFor(settings, '2.11.0')).toBe(200_000);
+  });
+  it('keeps increments anchored to the start, includes exact 2× stops and skips deviations with no allowed stop', () => {
+    const grid = compileStatisticsGrid({ envelopeStatisticsRanges: {
+      center: { start: '3', end: '8', increment: '2' },
+      deviation: { start: '.1', end: '.8', increment: '.2' },
+      stopLoss: { start: '0.3', end: '1.5', increment: '0.3' },
+    } });
+    expect(grid.periods).toEqual([3, 5, 7]);
+    expect(grid.deviations.map(({ step, stopCount }) => [step / 10, grid.stopSteps.slice(0, stopCount).map(stop => stop / 10)])).toEqual([
+      [0.3, [0.3, 0.6]], [0.5, [0.3, 0.6, 0.9]], [0.7, [0.3, 0.6, 0.9, 1.2]],
+    ]);
+    expect(grid.combinationsPerGroup).toBe(9);
+  });
+  it('rejects reversed ranges, invalid increments and grids with no eligible stop', () => {
+    const ranges = statisticsRanges({});
+    const compile = (change: Partial<typeof ranges>) => compileStatisticsGrid({ envelopeStatisticsRanges: { ...ranges, ...change } });
+    expect(() => compile({ center: { ...ranges.center, start: '11' } })).toThrow('종료값은 시작값 이상');
+    expect(() => compile({ center: { ...ranges.center, increment: '1.5' } })).toThrow('정수');
+    expect(() => compile({ deviation: { ...ranges.deviation, increment: '0' } })).toThrow('이격의 시작값·종료값·증가값');
+    expect(() => compile({ stopLoss: { ...ranges.stopLoss, increment: '0.15' } })).toThrow('소수 한 자리');
+    expect(() => compile({ deviation: { ...ranges.deviation, end: '0.2' }, stopLoss: { ...ranges.stopLoss, start: '0.5' } })).toThrow('SL이 이격의 2배 이하인 조합이 없습니다');
   });
   it('offers only 1h, 4h and 1d and uses the selected period for validation', () => {
     expect(statisticsIntervals).toEqual(['1h', '4h', '1d']);
@@ -63,25 +86,32 @@ describe('envelope breakout statistics', () => {
     expect(() => selectedStatisticsIntervals({ envelopeStatisticsInterval: '30m' } as unknown as BacktestSettings)).toThrow('통계 분석 주기');
   });
 
-  it('simulates and restores every stop step independently of the saved manual SL', async () => {
+  it('simulates the saved custom grid and resumes at the next valid stop independently of the manual SL', async () => {
     const candles = rows('1h').slice(0, 210).map((row, index) => index === 200
       ? { ...row, open: 99.9, low: 99.75, high: 100.25, close: 100 }
       : { ...row, open: 100, low: 100, high: 100, close: 100 });
     await cacheCandles('BTCUSDT', '1h', candles);
     await cacheCandles('BTCUSDT', '1m', minuteRows(candles.slice(200)));
+    const envelopeStatisticsRanges = {
+      center: { start: '1', end: '10', increment: '4' },
+      deviation: { start: '0.1', end: '0.5', increment: '0.1' },
+      stopLoss: { start: '0.1', end: '0.5', increment: '0.1' },
+    };
     await executeEnvelopeStatistics({ settings: { ...settings, side: 'LONG', endDate: settings.startDate, endTime: '19:00',
-      envelopeStatisticsInterval: '1h', envelopeStopLossPercent: 'invalid' } }, () => {}, new AbortController().signal);
+      envelopeStatisticsInterval: '1h', envelopeStopLossPercent: 'invalid', envelopeStatisticsRanges } }, () => {}, new AbortController().signal);
     const job = (await loadEnvelopeStatistics())!;
     expect(job.status).toBe('COMPLETED'); expect(job.settings.envelopeStatisticsInterval).toBe('1h');
     expect(job.settings.envelopeStopLossPercent).toBeUndefined();
     expect(job.rows.every(row => row.interval === '1h' && row.exitMode === 'OPPOSITE' && row.leverage === 5)).toBe(true);
-    expect([...new Set(job.rows.map(row => row.maPeriod))]).toEqual(statisticsPeriods(envelopeOptimizerVersion));
+    expect(job.settings.envelopeStatisticsRanges).toEqual(envelopeStatisticsRanges);
+    expect([...new Set(job.rows.map(row => row.maPeriod))]).toEqual([1, 5, 9]);
     expect([...new Set(job.rows.map(row => row.deviationPercent))]).toEqual([0.1, 0.2]);
     const stops = job.rows.filter(row => row.maPeriod === 1 && row.deviationPercent === 0.1);
-    expect(stops.map(row => row.stopLossPercent)).toEqual(Array.from({ length: 100 }, (_, index) => (index + 1) / 10));
+    expect(stops.map(row => row.stopLossPercent)).toEqual([0.1, 0.2]);
+    expect(job.rows.filter(row => row.maPeriod === 1 && row.deviationPercent === 0.2).map(row => row.stopLossPercent)).toEqual([0.1, 0.2, 0.3, 0.4]);
     expect(stops[0]!.returnPercent).toBeLessThan(0);
-    expect(stops[99]!.returnPercent).toBeGreaterThan(0);
-    expect(settingsForStatisticsRow(job.settings, stops[99]!)).toMatchObject({ envelopeMaPeriod: '1', envelopeDeviationPercent: '0.1', envelopeStopLossPercent: '10.0' });
+    expect(stops[1]!.returnPercent).toBeGreaterThan(0);
+    expect(settingsForStatisticsRow(job.settings, stops[1]!)).toMatchObject({ envelopeMaPeriod: '1', envelopeDeviationPercent: '0.1', envelopeStopLossPercent: '0.2' });
     expect(statisticsProgress(job)).toBe(statisticsTotalFor(job.settings)); expect(await readValue('results', `envelope-statistics:${job.id}`)).not.toBeNull();
     const paused = { ...job, status: 'PAUSED' as const, intervalIndex: 0, periodIndex: 0, sideIndex: 0, step: 1, stopStep: 2, rows: [stops[0]!], best: null, bestBySide: {} };
     expect(statisticsProgress(paused)).toBe(1);
@@ -90,6 +120,28 @@ describe('envelope breakout statistics', () => {
     expect((await loadEnvelopeStatistics())!.rows).toEqual(job.rows);
     expect(fetch).not.toHaveBeenCalled();
   }, 30000);
+
+  it('loads all 240 warmup candles and considers widths above the old 10% ceiling', async () => {
+    const { start } = analysisWindow(settings);
+    const seconds = intervalSeconds('1h');
+    const candles: Candle[] = Array.from({ length: 250 }, (_, index) => {
+      const openTime = start + (index - 240) * seconds;
+      return { openTime, closeTime: openTime + seconds, open: 100, high: 100, low: 100, close: 100, volume: 10,
+        ...(index === 240 ? { open: 87, low: 86, high: 101 } : {}) };
+    });
+    await cacheCandles('BTCUSDT', '1h', candles);
+    await cacheCandles('BTCUSDT', '1m', minuteRows(candles.slice(240)));
+    await executeEnvelopeStatistics({ settings: { ...settings, side: 'LONG', endDate: settings.startDate, endTime: '19:00',
+      envelopeHalfCandleEnabled: false, envelopeStatisticsInterval: '1h', envelopeStatisticsRanges: {
+        center: { start: '240', end: '240', increment: '1' },
+        deviation: { start: '12.5', end: '12.5', increment: '0.1' },
+        stopLoss: { start: '0.5', end: '0.5', increment: '0.1' },
+      } } }, () => {}, new AbortController().signal);
+    const job = (await loadEnvelopeStatistics())!;
+    expect(job.status).toBe('COMPLETED');
+    expect(job.rows).toMatchObject([{ maPeriod: 240, deviationPercent: 12.5, stopLossPercent: 0.5, entryCount: 1 }]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
 
   it('loads and searches 4h data rather than forcing hourly candles', async () => {
     await cacheCandles('BTCUSDT', '4h', rows('4h'));

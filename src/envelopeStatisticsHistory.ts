@@ -1,5 +1,5 @@
 /** Small history cards reference full reports in IndexedDB, including original v2.10.36 archives. */
-import { deleteValue, readValue, retentionMs, writeValue } from './database';
+import { readValue, retentionMs, writeValues } from './database';
 import { isFilteredEnvelopeStatisticsVersion, isReclaimStatisticsVersion, qualifiesEnvelopeSetting, type EnvelopeStatisticsJob } from './envelopeStatistics';
 import { envelopeBests } from './envelopeResults';
 import type { BacktestSettings } from './types';
@@ -13,6 +13,7 @@ export interface EnvelopeStatisticsHistoryEntry {
   savedAt: number;
   settings: BacktestSettings;
   comparedCount: number;
+  finishedEarly?: true;
   bestReturnPercent: number | null;
   version?: string;
   bestBySide?: Partial<Record<'LONG' | 'SHORT', number | null>>;
@@ -24,7 +25,7 @@ function summaryFor(job: EnvelopeStatisticsJob): EnvelopeStatisticsHistoryEntry 
   const bestBySide: EnvelopeStatisticsHistoryEntry['bestBySide'] = job.bestBySide ? Object.fromEntries(Object.keys(job.bestBySide).map(side => [side, null])) : {};
   if (isFilteredEnvelopeStatisticsVersion(job.version)) {
     const selected = envelopeBests(job.rows, job.settings.envelopeResultOptions);
-    return { id: job.id, version: job.version, savedAt: job.updatedAt, settings: job.settings, comparedCount: job.rows.length,
+    return { id: job.id, version: job.version, savedAt: job.updatedAt, settings: job.settings, comparedCount: job.rows.length, finishedEarly: job.finishedEarly,
       bestReturnPercent: selected.best?.returnPercent ?? null,
       bestBySide: Object.fromEntries(Object.entries(selected.bestBySide).map(([side, row]) => [side, row?.returnPercent ?? null])) };
   }
@@ -55,15 +56,18 @@ async function readIndex(): Promise<IndexEntry[]> {
   return [...unique.values()].sort((a, b) => b.at - a.at);
 }
 
-export async function saveEnvelopeStatisticsHistory(job: EnvelopeStatisticsJob): Promise<void> {
+export async function saveEnvelopeStatisticsHistory(job: EnvelopeStatisticsJob, latestJobKey?: string): Promise<void> {
   if (job.status !== 'COMPLETED') return;
   const previous = await readIndex();
   const keep = [{ id: job.id, at: job.updatedAt, summary: summaryFor(job) }, ...previous.filter(item => item.id !== job.id)]
     .filter(item => Date.now() - item.at <= retentionMs).slice(0, maximum);
-  // Report precedes index publication, so a visible card never refers to an unfinished write.
-  await writeValue('results', reportKey(job.id), job);
-  await writeValue('publicData', indexKey, keep);
-  for (const item of previous) if (!keep.some(value => value.id === item.id)) await deleteValue('results', reportKey(item.id));
+  const retired = previous.filter(item => !keep.some(value => value.id === item.id));
+  await writeValues([
+    { store: 'results', key: reportKey(job.id), value: job },
+    { store: 'publicData', key: indexKey, value: keep },
+    ...(latestJobKey ? [{ store: 'jobs' as const, key: latestJobKey, value: job }] : []),
+    ...retired.map(item => ({ store: 'results' as const, key: reportKey(item.id), remove: true as const })),
+  ]);
 }
 
 export async function loadEnvelopeStatisticsHistory(symbol?: string): Promise<EnvelopeStatisticsHistoryEntry[]> {

@@ -59,12 +59,29 @@ export async function readValue<T>(store: StoreName, key: string): Promise<T | n
   return row?.value ?? null;
 }
 
-export async function writeValue<T>(store: StoreName, key: string, value: T): Promise<void> {
+type ValueChange = { store: StoreName; key: string } & ({ value: unknown } | { remove: true });
+
+export async function writeValues(changes: readonly ValueChange[]): Promise<void> {
   const db = await openCacheDatabase();
-  const transaction = db.transaction(store, 'readwrite');
+  const transaction = db.transaction([...new Set(changes.map(change => change.store))], 'readwrite');
   const done = completed(transaction);
-  transaction.objectStore(store).put({ key, value, updatedAt: Date.now() } satisfies ValueRecord<T>);
+  const updatedAt = Date.now();
+  try {
+    for (const change of changes) {
+      const store = transaction.objectStore(change.store);
+      if ('value' in change) store.put({ key: change.key, value: change.value, updatedAt } satisfies ValueRecord<unknown>);
+      else store.delete(change.key);
+    }
+  } catch (error) {
+    transaction.abort();
+    await done.catch(() => {});
+    throw error;
+  }
   await done;
+}
+
+export function writeValue<T>(store: StoreName, key: string, value: T): Promise<void> {
+  return writeValues([{ store, key, value }]);
 }
 
 export async function deleteValue(store: StoreName, key: string): Promise<void> {

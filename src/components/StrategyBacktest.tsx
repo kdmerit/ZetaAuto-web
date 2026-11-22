@@ -45,7 +45,6 @@ import { EnvelopeCandleFilterControl } from './EnvelopeCandleFilterControl';
 import { EnvelopeStopLossControl, EnvelopeTrailingStopControl } from './EnvelopeStopLossControl';
 import { EnvelopeTakeProfitControl } from './EnvelopeTakeProfitControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
-import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
 import { useBacktestScreenWakeLock } from '../screenWakeLock';
 import { currentNewHighSettings, newHighBreakoutCandleMaxMultiplier, newHighBreakoutCandleMinMultiplier, newHighPeriod, newHighRiskAmount, newHighRules, newHighSlMultiplier, newHighTpMultiplier, newHighTrailingStopMultiplier } from '../newHigh';
@@ -538,7 +537,6 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
 
   const runLocal = (resume = false): void => {
     if (isEnvelopeStatisticsRunning()) throw new Error('통계분석을 먼저 일시정지해 주세요.');
-    if (isEnvelopeBatchRunning()) throw new Error('전체통계·가상매매를 먼저 일시정지해 주세요.');
     if (!resume) validate();
     resultRequestRef.current += 1;
     const snapshot = { ...(resume && localJob ? localJob.settings : settings) };
@@ -845,8 +843,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>‘중심선 터치후 이탈시 매도’를 켜면 매수 후 1분 점검 가격으로 중심선 도달을 기록하고, 이후 점검에서 롱은 하단·숏은 상단에 되돌아오면 전량 시장가 청산합니다. 점검 사이에 생겼다가 사라진 중심선 꼬리는 기록하지 않습니다. 중심선과 밴드는 매 봉 갱신하며 {usesAtrEnvelope ? '반대 밴드 청산도' : '반대 밴드 청산과 최초 SL도'} 함께 적용합니다.</p>
                 <p>‘롱/숏 비율 50%’를 켜면 매수 시점의 총 평가자산 대비 롱·숏 평가자산을 각각 최대 50%로 제한합니다. 평가자산은 증거금에 평가손익과 수수료를 반영한 금액이며, 계약 명목금액은 사용하지 않습니다. 새 매수를 포함해 한도를 넘으면 그 주문 전체를 건너뛰고, 기존 포지션을 강제로 줄이지는 않습니다.</p>
                 <p>한 종목은 봉당 한 번만 진입하고 봉 시작에 보유했다면 같은 봉에 재진입하지 않습니다. 전체종목은 종목명 순서·봉 시작 가용자금 한도로 배분하며 미래 청산 자금을 재사용하지 않습니다. 기간 말 미청산분은 평가액에 포함합니다.</p>
-                {!usesAtrEnvelope ? <><p>개별통계·전체통계는 선택한 1h·4h·1d 주기에서 방향당 최대 1,000조합, 롱+숏 최대 2,000조합을 비교합니다. 입력 배율과 MA20 필터를 고정해 MA3·MA5·MA20·MA60·MA120과 이격 0.1~20.0%(0.1 단위)를 비교합니다. 매매횟수·수익률·최소수익비 필터를 통과한 결과를 방향별로 선정합니다.</p>
-                <p>전체통계는 슬리피지 필터 없이 모든 활성 USDT 종목에서 조건을 충족한 방향별 세팅을 저장합니다. 가상매매는 선정한 중심선·이격을 고정하고 별도로 입력한 기간·초기자금·베팅액·레버리지로 검증합니다. 검증 기간으로 다시 최적화하지 않습니다. 선정 기간과 겹치거나 그 이전을 검증하면 화면에 표시하며 실제 미래 성과를 보장하지 않습니다.</p>
+                {!usesAtrEnvelope ? <><p>개별통계는 선택한 캔들 주기에서 중심선·이격·SL을 입력한 범위와 증가값으로 비교합니다. SL이 이격의 2배 이하인 조합을 계산합니다. 완료된 조합 중 통계 필터를 통과한 결과는 별도의 기간에서 월별 검증할 수 있습니다.</p>
                 {settings.envelopeRisk ? <p className="notice">통계에서 불러온 세팅은 현재 공개 위험한도에 따른 격리 LIQ 예상치를 사용합니다. 시가 갭이 SL과 LIQ를 모두 넘으면 남은 포지션 증거금을 소진하는 추정 청산으로 처리합니다. 실제 계좌·과거 거래소 청산가와 다를 수 있습니다.</p> : null}</> : null}
               </div>
             ) : (

@@ -48,22 +48,3 @@ export function envelopeBests(rows: EnvelopeStatisticsRow[], options = defaultEn
 export function betterFilteredEnvelopeSetting(row: EnvelopeStatisticsRow, previous?: EnvelopeStatisticsRow | null, options = defaultEnvelopeResultOptions): boolean {
   return matchesEnvelopeFilters(row, options) && (!previous || compareEnvelopeRows(row, previous, options) < 0);
 }
-
-/** ALL displays one winner per side. Keep the exact Pareto frontier for any lower-bound filter and either sort.
- * Never mix sides or discard a candidate that could win after a later filter change. */
-export function retainEnvelopeCandidates(rows: EnvelopeStatisticsRow[]): EnvelopeStatisticsRow[] {
-  const frontier: EnvelopeStatisticsRow[] = [];
-  const dominates = (a: EnvelopeStatisticsRow, b: EnvelopeStatisticsRow): boolean => a.side === b.side
-    && a.entryCount >= b.entryCount && a.returnPercent >= b.returnPercent
-    && (a.profitRatioPercent ?? -Infinity) >= (b.profitRatioPercent ?? -Infinity)
-    && (a.winRatePercent ?? -Infinity) >= (b.winRatePercent ?? -Infinity)
-    && a.maxDrawdownPercent <= b.maxDrawdownPercent
-    && compareEnvelopeRows(a, b) <= 0 && compareEnvelopeRows(a, b, { ...defaultEnvelopeResultOptions, sort: 'winRatePercent' }) <= 0;
-  for (const row of rows) {
-    if (!row.entryCount || row.profitRatioPercent == null || !Number.isFinite(row.profitRatioPercent)) continue;
-    if (frontier.some(previous => dominates(previous, row))) continue;
-    for (let index = frontier.length - 1; index >= 0; index -= 1) if (dominates(row, frontier[index]!)) frontier.splice(index, 1);
-    frontier.push(row);
-  }
-  return frontier;
-}

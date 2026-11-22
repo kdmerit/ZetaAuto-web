@@ -1,8 +1,8 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cacheCandles, openCacheDatabase, writeValue } from './database';
-import type { EnvelopeBatchJob } from './envelopeBatch';
-import { envelopeOptimizerVersion, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow } from './envelopeStatistics';
+import { envelopeOptimizerVersion, executeEnvelopeStatistics, loadEnvelopeStatistics, type EnvelopeStatisticsJob, type EnvelopeStatisticsRow } from './envelopeStatistics';
+import { loadEnvelopeStatisticsHistory, loadEnvelopeStatisticsReport } from './envelopeStatisticsHistory';
 import { defaultVerificationResultOptions, emptyVerificationSummary, loadEnvelopeVerification, orderVerificationRows, parseVerificationMonths, planEnvelopeVerification, recordVerificationMonth, verificationRowKey, verificationValue, type VerificationRequest } from './envelopeVerification';
 import { executeEnvelopeVerification } from './envelopeVerificationJob';
 import { minuteRows } from './test/envelopeFixtures';
@@ -33,13 +33,16 @@ function dailyCandles(start: number, end: number): Candle[] {
   });
 }
 
-async function saveSingle(rows: EnvelopeStatisticsRow[], launchAt = 0, sourceSettings = settings) {
-  const report: EnvelopeStatisticsJob = {
+function singleReport(rows: EnvelopeStatisticsRow[], launchAt = 0, sourceSettings = settings): EnvelopeStatisticsJob {
+  return {
     id: 'single', version: envelopeOptimizerVersion, settings: sourceSettings, status: 'COMPLETED', updatedAt: Date.now(),
     intervalIndex: 1, periodIndex: 0, step: 1, exitIndex: 0, message: '완료', rows, maxSteps: {}, skippedIntervals: {},
     instrument: { symbol: 'BTCUSDT', launchAt, LONG: true, SHORT: true },
   };
-  await writeValue('results', 'envelope-statistics:single', report);
+}
+
+async function saveSingle(rows: EnvelopeStatisticsRow[], launchAt = 0, sourceSettings = settings, version = envelopeOptimizerVersion) {
+  await writeValue('results', 'envelope-statistics:single', { ...singleReport(rows, launchAt, sourceSettings), version });
 }
 
 describe('monthly verification windows and result metrics', () => {
@@ -108,7 +111,7 @@ describe('saved statistics verification', () => {
     const wideStop = { ...ordinaryRow, stopLossPercent: 5 };
     const noEntry = { ...ordinaryRow, deviationPercent: 9 };
     const excluded = { ...ordinaryRow, maPeriod: 2, entryCount: 0 };
-    await saveSingle([ordinaryRow, wideStop, noEntry, excluded], at('2026-03-15'));
+    await saveSingle([ordinaryRow, wideStop, noEntry, excluded], at('2026-03-15'), settings, '2.11.0');
     const candles = dailyCandles(at('2026-03-31'), at('2026-06-01')).map(candle => {
       if (candle.openTime === at('2026-04-01')) return { ...candle, open: 98.9, low: 95 };
       if (candle.openTime === at('2026-05-01')) return { ...candle, open: 98.9, low: 98.9, high: 102 };
@@ -134,22 +137,32 @@ describe('saved statistics verification', () => {
     expect(fetch).not.toHaveBeenCalled();
   }, 20_000);
 
-  it('stops a newly listed symbol per full month and completes other all-statistics settings', async () => {
-    const instruments = [{ symbol: 'OLDUSDT', launchAt: 0 }, { symbol: 'NEWUSDT', launchAt: at('2026-05-15') }];
-    const winner = { ...ordinaryRow, side: 'SHORT' as const };
-    const source: EnvelopeBatchJob = {
-      id: 'all', kind: 'ALL_STATS', version: envelopeOptimizerVersion, settings: { ...settings, mode: 'ALL', side: 'BOTH' },
-      status: 'COMPLETED', updatedAt: Date.now(), message: '완료', universe: instruments, cursor: 2,
-      rows: instruments.map(instrument => ({ ...instrument, status: 'OK', best: winner, bestBySide: { SHORT: winner } })),
-    };
-    await writeValue('results', 'envelope-batch:all', source);
-    await cacheCandles('OLDUSDT', '1d', dailyCandles(at('2026-04-30'), at('2026-06-01')));
-    const all: VerificationRequest = { ...request, source: 'ALL_STATS', sourceId: 'all', months: 1 };
-    await executeEnvelopeVerification(all, () => {}, new AbortController().signal);
-    const result = (await loadEnvelopeVerification(all))!;
-    expect(result).toMatchObject({ status: 'COMPLETED', targetCount: 2, dataStops: 1 });
-    expect(result.summaries[verificationRowKey('OLDUSDT', winner)]!.months).toBe(1);
-    expect(result.summaries[verificationRowKey('NEWUSDT', winner)]!.months).toBe(0);
+  it.each([envelopeOptimizerVersion, '2.11.0'])('finalizes paused %s results without replaying the rest of the grid and verifies the saved rows', async version => {
+    const filtered = { ...ordinaryRow, stopLossPercent: 0.6, returnPercent: -3 };
+    const untested = { ...ordinaryRow, stopLossPercent: 0.7 };
+    const paused = { ...singleReport([ordinaryRow, filtered]), version, status: 'PAUSED' as const,
+      intervalIndex: 0, step: 10, stopStep: 7 };
+    await writeValue('jobs', 'ENVELOPE_STATISTICS', paused);
+    expect(await loadEnvelopeStatisticsReport(paused.id)).toBeNull();
+    const signal = new AbortController().signal;
+    await expect(executeEnvelopeStatistics({ finishId: 'another-job', resultOptions: options }, () => {}, signal)).rejects.toThrow('일시정지 개별통계');
+    expect((await loadEnvelopeStatistics())!.status).toBe('PAUSED');
+    await executeEnvelopeStatistics({ finishId: paused.id, resultOptions: options }, () => {}, signal);
+    const completed = await loadEnvelopeStatisticsReport(paused.id);
+    expect(completed).toMatchObject({ status: 'COMPLETED', finishedEarly: true, rows: paused.rows });
+    expect(completed!.rows).toHaveLength(2);
+    expect(await loadEnvelopeStatistics()).toEqual(completed);
+    expect((await loadEnvelopeStatisticsHistory('BTC'))[0]).toMatchObject({ comparedCount: 2, finishedEarly: true });
+    await expect(executeEnvelopeStatistics({ resumeId: paused.id }, () => {}, signal)).rejects.toThrow('일시정지 개별통계');
+    expect((await loadEnvelopeStatistics())!.status).toBe('COMPLETED');
+
+    await cacheCandles('BTCUSDT', '1d', dailyCandles(at('2026-04-30'), at('2026-06-01')));
+    await executeEnvelopeVerification({ ...request, months: 1 }, () => {}, signal);
+    const report = (await loadEnvelopeVerification(request))!;
+    expect(report).toMatchObject({ status: 'COMPLETED', targetCount: 1, dataStops: 0 });
+    expect(report.summaries[verificationRowKey('BTCUSDT', ordinaryRow)]!.months).toBe(1);
+    expect(report.summaries[verificationRowKey('BTCUSDT', filtered)]).toBeUndefined();
+    expect(report.summaries[verificationRowKey('BTCUSDT', untested)]).toBeUndefined();
     expect(fetch).not.toHaveBeenCalled();
   });
 

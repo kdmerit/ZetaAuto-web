@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { EnvelopeBestSettings, EnvelopeStatisticsStatus } from './EnvelopeStatisticsPanel';
-import { EnvelopeSymbolSettings, VirtualEvaluationFields, VirtualPeriodNotice } from './EnvelopeWorkspace';
 import { envelopeOptimizerVersion, type EnvelopeStatisticsJob } from '../envelopeStatistics';
-import { defaultVerificationResultOptions } from '../envelopeVerification';
 import type { BacktestSettings } from '../types';
 import { EnvelopeResultControls } from './EnvelopeResultControls';
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
@@ -57,26 +55,11 @@ describe('envelope fixed-leverage statistics status', () => {
     const individual = renderToStaticMarkup(<EnvelopeBestSettings job={current} disabled={false} onChoose={() => {}} />);
     expect(individual).toContain('롱 해당 기간 최고 수익률 -4.5%'); expect(individual).toContain('숏 해당 기간 최고 수익률 18%');
     expect(individual).toContain('SMA5'); expect(individual).toContain('SMA60');
-    const all = renderToStaticMarkup(<EnvelopeSymbolSettings row={{ symbol: 'BTCUSDT', launchAt: 0, status: 'OK', best: bestBySide.SHORT, bestBySide }} settings={settings} disabled={false} onChoose={() => {}} />);
-    expect(all).toContain('롱 최고 수익률'); expect(all).toContain('-4.5%'); expect(all).toContain('숏 최고 수익률'); expect(all).toContain('18%');
-    expect(all).toContain('SMA5'); expect(all).toContain('SMA60');
   });
   it('does not invent a return or setting for a direction with no trades', () => {
     const html = renderToStaticMarkup(<EnvelopeBestSettings job={job({ version: '2.10.42', status: 'COMPLETED', settings: { side: 'BOTH' } as BacktestSettings, bestBySide: { LONG: null, SHORT: null } })} disabled={false} onChoose={() => {}} />);
     expect(html).toContain('롱 해당 기간 최고 수익률 —'); expect(html).toContain('숏 해당 기간 최고 수익률 —'); expect(html).not.toContain('0%');
     expect((html.match(/disabled/g) ?? []).length).toBe(2);
-  });
-  it('shows only the directions whose displayed envelope setting passes the verification ratio filter', () => {
-    const long = { side: 'LONG' as const, interval: '1h' as const, maPeriod: 3, deviationPercent: 1.5, stopLossPercent: 0.6, exitMode: 'OPPOSITE' as const,
-      returnPercent: 10, profitUsdt: 100, realizedProfitUsdt: 100, feesUsdt: 1, entryCount: 2, closedTradeCount: 2, winCount: 2, lossCount: 0,
-      winRatePercent: 100, maxDrawdownPercent: 1, openPositionCount: 0 };
-    const short = { ...long, side: 'SHORT' as const, stopLossPercent: 0.7 };
-    const row = { symbol: 'BTCUSDT', launchAt: 0, status: 'OK' as const, best: long, bestBySide: { LONG: long, SHORT: short } };
-    const settings = { side: 'BOTH', leverage: '5' } as BacktestSettings;
-    const verificationOptions = { ...defaultVerificationResultOptions, deviationSlEnabled: true, deviationSlMultiplier: '2.5' };
-    const html = renderToStaticMarkup(<EnvelopeSymbolSettings row={row} settings={settings} disabled={false} onChoose={() => {}} verificationOptions={verificationOptions} />);
-    expect(html).toContain('롱 최고 수익률');
-    expect(html).not.toContain('숏 최고 수익률');
   });
   it('shows the reduced fixed-exit total and the required trade/win-loss counts', () => {
     const current = job({ version: '2.10.43', settings: { side: 'BOTH', leverage: '5', envelopeStatisticsInterval: '1h' } as BacktestSettings });
@@ -85,42 +68,23 @@ describe('envelope fixed-leverage statistics status', () => {
       returnPercent: 3, profitUsdt: 30, realizedProfitUsdt: 30, feesUsdt: 1, entryCount: 5, closedTradeCount: 5, winCount: 3, lossCount: 2, winRatePercent: 60, maxDrawdownPercent: 1, openPositionCount: 0 };
     const html = renderToStaticMarkup(<EnvelopeBestSettings job={{ ...current, status: 'COMPLETED', rows: [row], bestBySide: { LONG: row, SHORT: null } }} disabled={false} onChoose={() => {}} />);
     expect(html).toContain('진입 5회'); expect(html).toContain('승/패 3/2'); expect(html).toContain('승률 60%');
-    const all = renderToStaticMarkup(<EnvelopeSymbolSettings settings={current.settings} row={{ symbol: 'BTCUSDT', launchAt: 0, status: 'OK', best: row, bestBySide: { LONG: row, SHORT: null }, tradedSides: { SHORT: true } }} disabled={false} onChoose={() => {}} />);
-    expect(all).toContain('진입 5회'); expect(all).toContain('승/패 3/2'); expect(all).toContain('최적 기준 미달');
-  });
-  it('renders independent evaluation inputs and labels overlapping or backward-looking evaluations', () => {
-    const training = { startDate: '2026-02-01', startTime: '09:00', endDate: '2026-02-11', endTime: '09:00', envelopeStatisticsInterval: '1h' } as BacktestSettings;
-    const evaluation = { ...training, startDate: '2026-03-01', endDate: '2026-03-11', initialCapitalUsdt: '1500', betAmountUsdt: '50', leverage: '3' };
-    const html = renderToStaticMarkup(<VirtualEvaluationFields settings={evaluation} disabled={false} onChange={() => {}} />);
-    for (const marker of ['가상매매 분석 기간', '2026-03-01', '가상 초기자금', '1500', '고정 베팅액', '50', '레버리지']) expect(html).toContain(marker);
-    expect(html).toContain('SL (%)');
-    const withOptimizedStop = renderToStaticMarkup(<VirtualEvaluationFields settings={evaluation} disabled={false} usesOptimizedStopLoss onChange={() => {}} />);
-    expect(withOptimizedStop).toContain('SL도 종목·방향별로 선정된 값을 사용합니다.');
-    expect(withOptimizedStop).not.toContain('SL (%)');
-    expect(renderToStaticMarkup(<VirtualPeriodNotice evaluation={evaluation} training={training} />)).toContain('선정 이후');
-    expect(renderToStaticMarkup(<VirtualPeriodNotice evaluation={training} training={training} />)).toContain('겹칩니다');
-    expect(renderToStaticMarkup(<VirtualPeriodNotice evaluation={{ ...evaluation, startDate: '2026-01-01', endDate: '2026-01-11' }} training={training} />)).toContain('선정 이전');
   });
   it('shows the final percentage formula, three user filters and two sorting modes without a hidden fixed win-rate gate', () => {
     const html = renderToStaticMarkup(<EnvelopeResultControls value={{ minTrades: '10', minReturnPercent: '10', minProfitRatioPercent: '80', sort: 'winRatePercent' }} onApply={() => {}} />);
     for (const marker of ['매매횟수', '수익률', '최소수익비', '80', '필터 적용', '수익률 높은 순', '승률 높은 순', '수익금 ÷ (수익금 + 손실금의 절댓값) × 100']) expect(html).toContain(marker);
     expect(html).not.toContain('순손익 ÷'); expect(html).toContain('별도 고정 제한 없이');
   });
-  it.each(['2.10.97', envelopeOptimizerVersion])('ranks report %s by the selected metric and shows the optimized SL when present', version => {
+  it.each(['2.10.97', '2.11.0', envelopeOptimizerVersion])('ranks report %s by the selected metric and shows the optimized SL when present', version => {
     const common = { interval: '1h' as const, side: 'LONG' as const, deviationPercent: 1, exitMode: 'OPPOSITE' as const, leverage: 5,
       returnPercent: 20, profitUsdt: 200, realizedProfitUsdt: 200, feesUsdt: 1, entryCount: 10, closedTradeCount: 10, winCount: 9, lossCount: 1, winRatePercent: 70, profitRatioPercent: 90, maxDrawdownPercent: 1, openPositionCount: 0 };
-    const optimized = version === envelopeOptimizerVersion;
+    const optimized = version !== '2.10.97';
     const winner = { ...common, maPeriod: optimized ? 10 : 120, returnPercent: 10, winRatePercent: 95, stopLossPercent: optimized ? 0.3 : undefined };
     const rows = [{ ...common, maPeriod: 5 }, winner];
     const current = job({ version, status: 'COMPLETED', settings: { side: 'LONG', leverage: '5' } as BacktestSettings, rows });
     const options = { minTrades: '10', minReturnPercent: '10', minProfitRatioPercent: '80', sort: 'winRatePercent' as const };
     const html = renderToStaticMarkup(<EnvelopeBestSettings job={current} resultOptions={options} disabled={false} onChoose={() => {}} />);
     expect(html).toContain('최고 승률 95%'); expect(html).toContain(`SMA${winner.maPeriod}`); expect(html).not.toContain('SMA5'); expect(html).toContain('수익비 90%'); expect(html).toContain('반대 밴드 전량 청산');
-    if (optimized) {
-      expect(html).toContain('SL 0.3%');
-      const all = renderToStaticMarkup(<EnvelopeSymbolSettings settings={current.settings} row={{ symbol: 'BTCUSDT', launchAt: 0, status: 'OK', best: winner, bestBySide: { LONG: winner } }} disabled={false} onChoose={() => {}} />);
-      expect(all).toContain('SL 0.3%');
-    }
+    if (optimized) expect(html).toContain('SL 0.3%');
     const empty = renderToStaticMarkup(<EnvelopeBestSettings job={current} resultOptions={{ ...options, minTrades: '11' }} disabled={false} onChoose={() => {}} />);
     expect(empty).toContain('필터를 충족한 세팅이 없습니다'); expect(empty).not.toContain(`SMA${winner.maPeriod}`);
   });

@@ -123,7 +123,7 @@ export function EnvelopeVerificationControls({ verification, candidates, resultO
         <label className="field-label">검증 개월 수<input type="number" inputMode="numeric" min="1" step="1" value={months} onChange={event => updatePreferences({ months: event.target.value })} /></label>
       </div>
       <p className="muted small">{direction === 'PAST' ? '통계 시작일 전' : '통계 종료일 후'}부터 완전한 한 달씩 검증합니다. 월마다 초기자금과 포지션을 초기 상태로 되돌립니다.</p>
-      {target && candidates > 0 ? <p className="muted small">{target.source === 'SINGLE_STATS' ? '통계 필터를 통과한' : '표시된 종목·방향별'} 설정 {candidates.toLocaleString()}개</p> : null}
+      {target && candidates > 0 ? <p className="muted small">통계 필터를 통과한 설정 {candidates.toLocaleString()}개</p> : null}
       <button className="primary-button full-width" type="button" disabled={disabled || !target || candidates === 0} onClick={() => start(resultOptions)}>검증</button>
       {report?.status === 'PAUSED' && !running ? <button className="outline-button full-width" type="button" disabled={disabled} onClick={() => start(resultOptions, true)}>검증 이어하기 · {report.request.months}개월</button> : null}
     </fieldset>

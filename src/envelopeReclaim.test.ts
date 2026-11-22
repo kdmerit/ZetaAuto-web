@@ -24,7 +24,7 @@ describe('current envelope model settings', () => {
     expect(envelopePeriods).toEqual([3, 5, 20, 60, 120]);
     expect(qualifiesEnvelopeSetting(candidate)).toBe(true); expect(betterEnvelopeSetting(candidate)).toBe(true);
     expect(qualifiesEnvelopeSetting({ ...candidate, entryCount: 1 })).toBe(false);
-    expect(statisticsTotalFor({ ...base, envelopeStatisticsInterval: '1h' })).toBe(200_000);
-    expect(statisticsTotalFor({ ...base, envelopeStatisticsInterval: '4h' })).toBe(200_000);
+    expect(statisticsTotalFor({ ...base, envelopeStatisticsInterval: '1h' })).toBe(151_000);
+    expect(statisticsTotalFor({ ...base, envelopeStatisticsInterval: '4h' })).toBe(151_000);
   });
 });

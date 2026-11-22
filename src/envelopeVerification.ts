@@ -3,7 +3,7 @@ import type { EnvelopeStatisticsRow } from './envelopeStatistics';
 import type { BacktestSettings, EnvelopeResultOptions } from './types';
 
 export type VerificationDirection = 'PAST' | 'FUTURE';
-export type VerificationSource = 'SINGLE_STATS' | 'ALL_STATS';
+export type VerificationSource = 'SINGLE_STATS';
 export interface VerificationTarget {
   source: VerificationSource;
   sourceId: string;
