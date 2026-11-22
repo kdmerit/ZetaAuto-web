@@ -47,6 +47,7 @@ const lineStyles: Record<PriceLine['kind'], { label: string; color: string }> = 
   INITIAL_SL: { label: '최초 SL', color: '#FF5C78' },
   INITIAL_TP: { label: '최초 TP', color: '#39C98A' },
   TP: { label: 'TP', color: '#39C98A' },
+  FIXED_TP: { label: '고정 TP', color: '#C2DB64' },
   PARTIAL_TP: { label: '부분 TP', color: '#39C98A' },
   TRAILING_SL: { label: '트레일링 SL', color: '#C084FC' },
   TRAILING_REACHED: { label: '도달 ATR', color: '#F2C66D' },

@@ -18,6 +18,7 @@ import { EnvelopeSideRatioControl } from './EnvelopeSideRatioControl';
 import { EnvelopeHalfCandleControl } from './EnvelopeHalfCandleControl';
 import { EnvelopeCandleFilterControl } from './EnvelopeCandleFilterControl';
 import { EnvelopeStopLossControl, EnvelopeTrailingStopControl } from './EnvelopeStopLossControl';
+import { EnvelopeTakeProfitControl } from './EnvelopeTakeProfitControl';
 import { formatBacktestHistorySettings } from '../backtestHistory';
 import { compareVerificationValues, defaultVerificationResultOptions, hasVerificationFilter, orderVerificationRows, verificationSummaryFor, type EnvelopeVerificationReport, type VerificationResultOptions } from '../envelopeVerification';
 import { EnvelopeVerificationControls, EnvelopeVerificationSummary, useEnvelopeVerification } from './EnvelopeVerification';
@@ -54,6 +55,8 @@ function SearchFields({ settings, onChange, disabled, single }: { settings: Back
     <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnlyEntryEnabled === true} onChange={event => update('envelopeCloseOnlyEntryEnabled', event.target.checked)} /><span>종가에서만 매수</span></label>
     <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />
     <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
+    <EnvelopeTakeProfitControl enabled={settings.envelopeTakeProfitEnabled === true} value={settings.envelopeTakeProfitPercent}
+      onToggle={enabled => update('envelopeTakeProfitEnabled', enabled)} onChange={value => update('envelopeTakeProfitPercent', value)} />
     <EnvelopeTrailingStopControl enabled={settings.envelopeTrailingStopEnabled === true} value={settings.envelopeTrailingStopPercent ?? '3'} onToggle={enabled => update('envelopeTrailingStopEnabled', enabled)} onChange={value => update('envelopeTrailingStopPercent', value)} />
     <h2>분석 기간 (한국시간)</h2><div className="field-grid two">
       <label className="field-label">시작일<input inputMode="numeric" value={settings.startDate} onChange={event => update('startDate', formatDateInput(event.target.value))} /></label>
@@ -61,7 +64,7 @@ function SearchFields({ settings, onChange, disabled, single }: { settings: Back
       <label className="field-label">종료일 (선택)<input inputMode="numeric" value={settings.endDate} onChange={event => update('endDate', formatDateInput(event.target.value))} placeholder="현재까지" /></label>
       <label className="field-label">종료시간<input inputMode="numeric" value={settings.endTime} onChange={event => update('endTime', formatTimeInput(event.target.value))} /></label>
     </div><div className="field-grid three"><label className="field-label">가상 초기자금<input inputMode="decimal" value={settings.initialCapitalUsdt} onChange={event => update('initialCapitalUsdt', event.target.value)} /></label><label className="field-label">고정 베팅액<input inputMode="decimal" value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /></label><label className="field-label">고정 레버리지<input inputMode="decimal" value={settings.leverage} onChange={event => update('leverage', event.target.value)} /><small>1~100배 · 모든 조건에 동일 적용</small></label></div>
-    <p className="muted small">중심선은 {statisticsCenterRange}봉을 1봉씩, 이격과 SL은 각각 {statisticsPercentRange}를 0.1%씩 바꿔 비교합니다. SL은 실제 진입가 기준입니다.</p>
+    <p className="muted small">중심선은 {statisticsCenterRange}봉을 1봉씩, 이격과 SL은 각각 {statisticsPercentRange}를 0.1%씩 바꿔 비교합니다. SL은 실제 진입가 기준입니다. {settings.envelopeTakeProfitEnabled ? '입력한 TP 비율은 모든 조합에 동일하게 적용합니다.' : ''}</p>
     <p className="muted small">거래소 최대 레버리지·위험한도는 조회하지 않습니다. SL·수수료를 반영한 가정 계산이며 실제 계좌의 강제청산은 재현하지 않습니다. 중지 후 이어갈 수 있습니다.</p>
   </fieldset></section>;
 }
@@ -91,6 +94,8 @@ export function VirtualEvaluationFields({ settings, onChange, disabled, usesOpti
     <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />
     <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
     {!usesOptimizedStopLoss ? <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} /> : null}
+    <EnvelopeTakeProfitControl enabled={settings.envelopeTakeProfitEnabled === true} value={settings.envelopeTakeProfitPercent}
+      onToggle={enabled => update('envelopeTakeProfitEnabled', enabled)} onChange={value => update('envelopeTakeProfitPercent', value)} />
     <EnvelopeTrailingStopControl enabled={settings.envelopeTrailingStopEnabled === true} value={settings.envelopeTrailingStopPercent ?? '3'} onToggle={enabled => update('envelopeTrailingStopEnabled', enabled)} onChange={value => update('envelopeTrailingStopPercent', value)} />
     <p className="muted small">검증 기간·자금·배율·MA20 필터·청산 옵션·롱/숏 비율·캔들 필터{usesOptimizedStopLoss ? '' : '·SL'}는 통계와 별도로 저장합니다.</p>
   </fieldset></section>;

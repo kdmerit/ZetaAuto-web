@@ -35,6 +35,7 @@ interface Holding {
   envelopeCenter?: number;
   envelopeCenterTouched?: boolean;
   envelopeReturnBand?: number;
+  envelopeTakeProfitPrice?: number;
   envelopeTrailingDistance?: number;
   envelopeTrailingExtreme?: number;
   envelopeTrailingStop?: number;
@@ -139,6 +140,7 @@ function priceLines(p: Holding): PriceLine[] {
       ...(hasFixedStop(p.signal) ? [{ kind: 'SL' as const, price: p.stop }] : []),
       ...(p.envelopeTrailingStop === undefined ? [] : [{ kind: 'TRAILING_SL' as const, price: p.envelopeTrailingStop }]),
       { kind: 'TP', price: p.target },
+      ...(p.envelopeTakeProfitPrice === undefined ? [] : [{ kind: 'FIXED_TP' as const, price: p.envelopeTakeProfitPrice }]),
     ];
     return lines.filter(line => Number.isFinite(line.price) && line.price > 0);
   }
@@ -331,6 +333,9 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   if (envelope) {
     if (signal.strategy === 'ENVELOPE') p.signal = { ...effectiveSignal, stop: p.stop, initialStop: signal.envelopeEntryMode === 'BAND_TOUCH' ? p.stop : signal.second ?? signal.stop };
     p.envelopeCenter = signal.envelopeCenter;
+    if (signal.envelopeTakeProfitPercent !== undefined) {
+      p.envelopeTakeProfitPrice = entry * (1 + direction * signal.envelopeTakeProfitPercent / 100);
+    }
     if (signal.envelopeTrailingStopPercent !== undefined) {
       p.envelopeTrailingDistance = entry * signal.envelopeTrailingStopPercent / 100;
       p.envelopeTrailingExtreme = entry;
@@ -454,6 +459,11 @@ function atPrice(state: PortfolioState, symbol: string, price: number, candle: C
       return;
     }
   }
+  const takeProfit = p.envelopeTakeProfitPrice;
+  if (takeProfit !== undefined && (long ? price >= takeProfit : price <= takeProfit)) {
+    close(state, p, takeProfit, p.qty, 'ENVELOPE_TP', candle, opening);
+    return;
+  }
   const roi = roiPrice(p, settings);
   if (roi !== null && (long ? price <= roi : price >= roi)) { close(state, p, opening ? price : roi, p.qty, 'ROI_LOSS', candle, opening); return; }
   if (isEnvelopeStrategy(p.signal.strategy) && p.signal.envelopeExecutionModel !== 'MINUTE_POLL' && p.signal.envelopeCloseOnCenterReturn === true) {
@@ -499,6 +509,7 @@ function holdingPriceLevels(p: Holding, settings: BacktestSettings): number[] {
     if (liq !== null) levels.add(liq);
   }
   if (hasIntrabarTarget(p)) levels.add(p.target);
+  if (p.envelopeTakeProfitPrice !== undefined) levels.add(p.envelopeTakeProfitPrice);
   if (hasFixedStop(p.signal)) levels.add(p.stop);
   if (p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE' && p.pullbackMa60Exit !== undefined) levels.add(p.pullbackMa60Exit);
   if (p.pending) levels.add(p.second);
@@ -732,6 +743,7 @@ function envelopeEntrySignal(definition: EnvelopeEntryDefinition, price: number,
     stop: sma ? price * (1 + (side === 'LONG' ? -1 : 1) * sma.stopPercent / 100) : 0,
     target, initialTarget: target, exitMode: 'ENVELOPE_TOUCH', envelopeExitMode: 'OPPOSITE',
     ...(sma ? { envelopeDeviationPercent: sma.percent, envelopeStopLossPercent: sma.stopPercent, envelopeMaPeriod: sma.period } : { atrEnvelope: atr }),
+    ...(sma?.takeProfitPercent === undefined ? {} : { envelopeTakeProfitPercent: sma.takeProfitPercent }),
     ...(band.atrEnvelopeStopDistance === undefined ? {} : { atrEnvelopeStopDistance: band.atrEnvelopeStopDistance }),
     ...(parameters.envelopeTrailingStopEnabled === true ? { envelopeTrailingStopPercent: envelopeTrailingStopPercent(parameters) } : {}),
     envelopeCloseOnConfirmedBreakout: parameters.envelopeCloseOnConfirmedBreakout === true,
@@ -823,7 +835,7 @@ function* envelopeMinuteFrames(rows: (EnvelopeMinuteRow & { children: Candle[] }
   for (const [, entries] of [...frames].sort((a, b) => a[0] - b[0])) yield entries;
 }
 
-/** Local emulation of the live one-minute worker. SL/TS remain exchange-side intraminute stops. */
+/** Local emulation of the live one-minute worker, with intraminute fills for resting SL, TS and TP orders. */
 function replayEnvelopeMinutes(state: PortfolioState, rows: { symbol: string; bar: PreparedBar }[], settings: BacktestSettings,
   openingBudget: number, options: ReplayOptions, occupiedAtOpen: Set<string>): number {
   const activeRows: (EnvelopeMinuteRow & { children: Candle[] })[] = [];
@@ -900,7 +912,9 @@ function replayEnvelopeMinutes(state: PortfolioState, rows: { symbol: string; ba
         const trail = extreme === undefined || p.envelopeTrailingDistance === undefined ? undefined : extreme + (long ? -1 : 1) * p.envelopeTrailingDistance;
         const mayStop = hasFixedStop(p.signal) && (long ? row.minute.low <= p.stop : row.minute.high >= p.stop)
           || trail !== undefined && (long ? row.minute.low <= trail : row.minute.high >= trail);
-        if (mayStop || p.risk) {
+        const takeProfit = p.envelopeTakeProfitPrice;
+        const mayTakeProfit = takeProfit !== undefined && (long ? row.minute.high >= takeProfit : row.minute.low <= takeProfit);
+        if (mayStop || mayTakeProfit || p.risk) {
           const childBar = { ...row.bar, candle: row.minute, signal: null };
           mergePath(state, worstPath([replayPath(p, childBar, parameters, true), replayPath(p, childBar, parameters, false)]), row.symbol);
         } else {

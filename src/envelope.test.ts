@@ -41,6 +41,16 @@ describe('envelope parameters and causal bands', () => {
   it.each(['0', '0.09', '20.1', '1.25', '-1', 'NaN', ''])('rejects invalid offset %s', value => {
     expect(() => envelopeParameters({ ...settings, envelopeDeviationPercent: value })).toThrow();
   });
+  it('validates the inclusive TP range only when the option is enabled', () => {
+    const enabled = { ...settings, envelopeTakeProfitEnabled: true };
+    for (const value of ['0.1', '6.25', '20']) {
+      expect(envelopeParameters({ ...enabled, envelopeTakeProfitPercent: value }).takeProfitPercent).toBe(Number(value));
+    }
+    for (const value of ['', '0.09', '20.01', 'Infinity']) {
+      expect(() => envelopeParameters({ ...enabled, envelopeTakeProfitPercent: value })).toThrow('TP는 0.1~20%');
+    }
+    expect(envelopeParameters({ ...settings, envelopeTakeProfitPercent: '21' }).takeProfitPercent).toBeUndefined();
+  });
   it.each([1, ...envelopePeriods, 137, 240])('supports SMA%d, using only prior closed prices', period => {
     expect(envelopeParameters({ ...settings, envelopeMaPeriod: String(period) }).period).toBe(period);
     const rows = Array.from({ length: period + 1 }, (_, i) => candle(i, [i + 1, i + 1, i + 1, i + 1]));

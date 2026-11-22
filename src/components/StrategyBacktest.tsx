@@ -35,7 +35,7 @@ import { chartTimestamp, mergeChartPages } from '../chartData';
 import { chartAtInterval, withChartExecutionTimes } from '../chartIntervals';
 import { serverSettingsSnapshot } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
-import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvelopeSettings, currentPullbackSettings, defaultAtrEnvelopeStopMultiplier, envelopeMaxPeriod, envelopeParameters, envelopePeriod, isEnvelopeStrategy, pullbackEnvelopeParameters } from '../envelope';
+import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvelopeSettings, currentPullbackSettings, defaultAtrEnvelopeStopMultiplier, defaultEnvelopeTakeProfitPercent, envelopeMaxPeriod, envelopeParameters, envelopePeriod, isEnvelopeStrategy, pullbackEnvelopeParameters } from '../envelope';
 import { atrEnvelopeFields, atrEnvelopeMultiplierInput, defaultAtrEnvelopeInputs } from '../marketIndicators';
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
@@ -43,6 +43,7 @@ import { EnvelopeSideRatioControl } from './EnvelopeSideRatioControl';
 import { EnvelopeHalfCandleControl } from './EnvelopeHalfCandleControl';
 import { EnvelopeCandleFilterControl } from './EnvelopeCandleFilterControl';
 import { EnvelopeStopLossControl, EnvelopeTrailingStopControl } from './EnvelopeStopLossControl';
+import { EnvelopeTakeProfitControl } from './EnvelopeTakeProfitControl';
 import { isEnvelopeStatisticsRunning } from '../envelopeStatisticsClient';
 import { isEnvelopeBatchRunning } from '../envelopeBatchClient';
 import { useAnalysisBusy } from '../analysisActivity';
@@ -124,6 +125,8 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     envelopeCloseOnCenterReturn: false,
     envelopeSideRatio50Enabled: false,
     envelopeStopLossPercent: strategy === 'ENVELOPE' ? '3' : undefined,
+    envelopeTakeProfitEnabled: strategy === 'ENVELOPE' ? false : undefined,
+    envelopeTakeProfitPercent: strategy === 'ENVELOPE' ? defaultEnvelopeTakeProfitPercent : undefined,
     envelopeTrailingStopEnabled: envelope ? false : undefined,
     envelopeTrailingStopPercent: envelope ? '3' : undefined,
     envelopeCloseOnlyEntryEnabled: false,
@@ -210,6 +213,7 @@ const reasonLabels: Record<string, string> = {
   PULLBACK_MA_EXIT: '눌림목 정배열 이탈 청산',
   ENVELOPE_CENTER: '엔벨로프 중심선 청산',
   ENVELOPE_OPPOSITE: '엔벨로프 반대 밴드 청산',
+  ENVELOPE_TP: '엔벨로프 고정 TP 청산',
   ENVELOPE_15M_WICK: '15분봉 반대 밴드 터치 확인 청산',
   ENVELOPE_MA20_CLOSE: '엔벨로프 MA20 이탈 종가 청산',
   ENVELOPE_CLOSE_CONFIRM: '엔벨로프 돌파 종가 확정 청산',
@@ -834,6 +838,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <p>1분 점검 시 현재가가 엔벨로프 하단 이하이면 매수하고, 매수 이후 상단 이상이면 현재가로 전량 청산합니다.{usesAtrEnvelope ? '' : ' SL은 체결가 × (1 − SL%/100)입니다.'}</p>
                 <strong>숏 포지션</strong>
                 <p>1분 점검 시 현재가가 엔벨로프 상단 이상이면 매도하고, 매도 이후 하단 이하이면 현재가로 전량 청산합니다.{usesAtrEnvelope ? '' : ' SL은 체결가 × (1 + SL%/100)입니다.'}</p>
+                {!usesAtrEnvelope ? <p>‘TP사용’을 켜면 실제 체결가에서 입력한 비율만큼 위(롱) 또는 아래(숏)에 전량 익절 지정가를 둡니다. 진입 이후 가격이 닿으면 주문가에 청산하며, 반대 밴드나 손절이 먼저 발동하면 해당 조건으로 청산합니다.</p> : null}
                 <p>‘종가에서만 매수’를 켜면 장중 밴드 터치는 무시하고, 롱은 기준 캔들 종가가 하단 이하·숏은 상단 이상으로 확정될 때 해당 캔들 종가에 진입합니다.</p>
                 <p>MA20·선택한 캔들 절반 엔벨·매수금지 캔들 필터는 매수 점검 시점까지의 고가·저가와 현재가로 판단합니다. MA20은 직전 완료 19봉 종가와 현재가의 평균입니다. 이후 확정될 일봉 고저가·종가는 앞선 매수에 사용하지 않습니다. MA20에 닿거나 걸친 캔들은 제외하며, ‘캔들 절반 엔벨 이내’를 켜면 1d 고저 중간값이 롱은 하단 이하·숏은 상단 이상인 캔들을 제외합니다.</p>
                 <p>1분봉을 시간순으로 읽어 각 분 시작 가격으로 점검합니다. 현재가가 반대 밴드에 도달하거나, 매수한 15분봉 다음 봉부터 현재 15분봉의 관측된 고가(롱)·저가(숏)가 반대 밴드에 닿으면 점검 시점 현재가에 시장가 슬리피지를 반영해 청산합니다. 과거 터치 가격으로 소급 체결하지 않습니다. {usesAtrEnvelope ? '선택한 트레일링 스탑' : 'SL·트레일링 스탑'}은 1분봉 내부의 두 가격 순서 중 보수적인 결과를 적용합니다.</p>
@@ -993,6 +998,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 </label>
                 <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '3'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용</small></label>
                 <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
+                <EnvelopeTakeProfitControl enabled={settings.envelopeTakeProfitEnabled === true} value={settings.envelopeTakeProfitPercent}
+                  onToggle={enabled => update('envelopeTakeProfitEnabled', enabled)} onChange={value => update('envelopeTakeProfitPercent', value)} />
               </>}
               <EnvelopeTrailingStopControl enabled={settings.envelopeTrailingStopEnabled === true} fixedStop={!usesAtrEnvelope || Number(atrStopMultiplier) > 0} value={settings.envelopeTrailingStopPercent ?? '3'} onToggle={enabled => update('envelopeTrailingStopEnabled', enabled)} onChange={value => update('envelopeTrailingStopPercent', value)} />
             </>

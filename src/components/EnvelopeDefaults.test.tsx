@@ -39,7 +39,7 @@ describe('envelope input defaults and arrangement', () => {
       expect(html).toMatch(/disabled=""[^>]*>검증<\/button>/);
     }
     const rows = options(html);
-    expect(rows).toHaveLength(7);
+    expect(rows).toHaveLength(8);
     expect(rows[0]).toContain('MA20 위에서만 매수 (롱)');
     expect(rows[0]).toContain('checked=""');
     expect(rows[1]).toContain('중심선 터치후 이탈시 매도');
@@ -52,8 +52,11 @@ describe('envelope input defaults and arrangement', () => {
     expect(rows[4]).toContain('checked=""');
     expect(rows[5]).toContain('매수금지 캔들 필터 적용');
     expect(rows[5]).not.toContain('checked=""');
-    expect(rows[6]).toContain('트레일링 스탑 적용');
+    expect(rows[6]).toContain('TP사용');
     expect(rows[6]).not.toContain('checked=""');
+    expect(rows[7]).toContain('트레일링 스탑 적용');
+    expect(rows[7]).not.toContain('checked=""');
+    expect(html).toMatch(/TP \(%\)[\s\S]*?<input[^>]*min="0.1" max="20"[^>]*disabled=""[^>]*value="6"/);
     expect(html).toMatch(/트레일링 스탑 \(%\)[\s\S]*?<input[^>]*min="1"[^>]*max="100"[^>]*step="0.1"[^>]*value="3"/);
     expect(html).not.toContain('MA20 아래에서만 매수 (롱)');
     expect(html).not.toContain('종가 &gt; 엔벨로프 상단 확정 시 청산');
@@ -73,7 +76,7 @@ describe('envelope input defaults and arrangement', () => {
     expect(html).toContain('<h1>ATR 엔벨로프 백테스트</h1>');
     expect(html).toContain('>개별분석</button>');
     expect(html).toContain('>전체분석</button>');
-    for (const label of ['개별통계', '전체통계', '가상매매', '엔벨로프 중심선 봉수', '엔벨로프 이격 (%)', 'SL (%)']) expect(html).not.toContain(label);
+    for (const label of ['개별통계', '전체통계', '가상매매', '엔벨로프 중심선 봉수', '엔벨로프 이격 (%)', 'SL (%)', 'TP사용']) expect(html).not.toContain(label);
     for (const label of ['MA20 위에서만 매수 (롱)', '중심선 터치후 이탈시 매도', '롱/숏 비율 50%', '종가에서만 매수', '캔들 절반 엔벨 이내', '매수금지 캔들 필터 적용', '트레일링 스탑 적용']) {
       expect(html).toContain(label);
     }
@@ -147,15 +150,19 @@ describe('envelope input defaults and arrangement', () => {
   });
 
   it('restores the saved center-return exit in ordinary analysis and statistics', () => {
-    saveSettings('ENVELOPE', { ...defaultSettings('ENVELOPE'), envelopeCloseOnCenterReturn: true, envelopeSideRatio50Enabled: true });
+    saveSettings('ENVELOPE', { ...defaultSettings('ENVELOPE'), envelopeCloseOnCenterReturn: true, envelopeSideRatio50Enabled: true, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6.25' });
     const ordinary = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
     expect(options(ordinary)[1]).toContain('checked=""');
     expect(options(ordinary)[2]).toContain('checked=""');
+    expect(options(ordinary)[6]).toContain('checked=""');
+    expect(ordinary).toMatch(/TP \(%\)[\s\S]*?<input[^>]*value="6\.25"/);
+    expect(ordinary).not.toMatch(/TP \(%\)[\s\S]*?<input(?=[^>]*value="6\.25")[^>]*disabled=""/);
     values.set('zetaauto.web.envelope.view', 'SINGLE_STATS');
-    values.set('zetaauto.web.envelope.SINGLE_STATS.settings', JSON.stringify({ envelopeCloseOnCenterReturn: true, envelopeSideRatio50Enabled: true }));
+    values.set('zetaauto.web.envelope.SINGLE_STATS.settings', JSON.stringify({ envelopeCloseOnCenterReturn: true, envelopeSideRatio50Enabled: true, envelopeTakeProfitEnabled: false, envelopeTakeProfitPercent: '7' }));
     const statistics = renderToStaticMarkup(<EnvelopeWorkspace context={context} />);
     expect(options(statistics)[1]).toContain('checked=""');
     expect(options(statistics)[2]).toContain('checked=""');
+    expect(statistics).toMatch(/TP \(%\)[\s\S]*?<input[^>]*disabled=""[^>]*value="7"/);
   });
 
   it('keeps saved statistics preferences instead of replacing them with new defaults', () => {

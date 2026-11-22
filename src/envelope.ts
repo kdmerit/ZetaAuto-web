@@ -11,6 +11,7 @@ export const envelopeModelVersion = '2.10.97';
 // All new envelope jobs share the causal minute execution model.
 export const envelopeLocalJobVersion = envelopeModelVersion;
 export const envelopeWarmupBars = 200;
+export const defaultEnvelopeTakeProfitPercent = '6';
 export const defaultAtrEnvelopeStopMultiplier = '0.5';
 export const isEnvelopeStrategy = (strategy: Strategy | undefined): strategy is 'ENVELOPE' | 'ATR_ENVELOPE' =>
   strategy === 'ENVELOPE' || strategy === 'ATR_ENVELOPE';
@@ -49,6 +50,8 @@ export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSet
     envelopeCloseOnCenterReturn: settings.envelopeCloseOnCenterReturn === true,
     envelopeSideRatio50Enabled: settings.envelopeSideRatio50Enabled === true,
     envelopeStopLossPercent: settings.envelopeStopLossPercent ?? '3',
+    envelopeTakeProfitEnabled: settings.envelopeTakeProfitEnabled === true,
+    envelopeTakeProfitPercent: settings.envelopeTakeProfitPercent ?? defaultEnvelopeTakeProfitPercent,
     envelopeTrailingStopEnabled: settings.envelopeTrailingStopEnabled === true,
     envelopeTrailingStopPercent: settings.envelopeTrailingStopPercent ?? '3',
     envelopeCloseOnlyEntryEnabled: settings.envelopeCloseOnlyEntryEnabled === true,
@@ -63,6 +66,7 @@ export function currentEnvelopeSettings(settings: BacktestSettings): BacktestSet
 
 export function currentAtrEnvelopeSettings(settings: BacktestSettings): BacktestSettings {
   const { envelopeMaPeriod: _sma, envelopeDeviationPercent: _percent, envelopeStopLossPercent: _stop,
+    envelopeTakeProfitEnabled: _takeProfit, envelopeTakeProfitPercent: _takeProfitPercent,
     envelopeStatisticsInterval: _statistics, ...shared } = currentEnvelopeSettings(settings);
   return { ...shared, atrEnvelope: { ...defaultAtrEnvelopeInputs, ...settings.atrEnvelope },
     atrEnvelopeStopMultiplier: settings.atrEnvelopeStopMultiplier ?? defaultAtrEnvelopeStopMultiplier };
@@ -104,7 +108,7 @@ export function dailyTrendAllows(change: number | null | undefined, side: 'LONG'
   return change != null && Number.isFinite(change) && (side === 'LONG' ? change >= 0.5 - 1e-10 : change <= -0.5 + 1e-10);
 }
 
-export function envelopeParameters(settings: BacktestSettings): { percent: number; stopPercent: number; exit: EnvelopeExitMode; period: number } {
+export function envelopeParameters(settings: BacktestSettings): { percent: number; stopPercent: number; exit: EnvelopeExitMode; period: number; takeProfitPercent?: number } {
   const value = settings.envelopeDeviationPercent ?? '0.5';
   const percent = Number(value);
   if (!/^\d+(\.\d)?$/.test(value) || !Number.isFinite(percent) || percent < 0.1 || percent > 20) {
@@ -124,8 +128,13 @@ export function envelopeParameters(settings: BacktestSettings): { percent: numbe
   if (!/^\d+(\.\d)?$/.test(stopValue) || !Number.isFinite(stopPercent) || stopPercent < 0.1 || stopPercent > 20) {
     throw new Error('SL은 0.1~20.0%로 입력해 주세요. (소수 한 자리)');
   }
+  const takeProfitPercent = settings.envelopeTakeProfitEnabled === true
+    ? Number(settings.envelopeTakeProfitPercent ?? defaultEnvelopeTakeProfitPercent) : undefined;
+  if (takeProfitPercent !== undefined && (!Number.isFinite(takeProfitPercent) || takeProfitPercent < 0.1 || takeProfitPercent > 20)) {
+    throw new Error('TP는 0.1~20%로 입력해 주세요.');
+  }
   if (settings.envelopeTrailingStopEnabled === true) envelopeTrailingStopPercent(settings);
-  return { percent, stopPercent, exit, period };
+  return { percent, stopPercent, exit, period, ...(takeProfitPercent === undefined ? {} : { takeProfitPercent }) };
 }
 
 /** A By Rate input becomes one fixed price distance at the actual entry fill. */

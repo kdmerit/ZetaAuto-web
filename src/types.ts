@@ -66,6 +66,8 @@ export interface BacktestSettings {
   atrEnvelope?: AtrEnvelopeInputs;
   atrEnvelopeStopMultiplier?: string;
   envelopeStopLossPercent?: string;
+  envelopeTakeProfitEnabled?: boolean;
+  envelopeTakeProfitPercent?: string;
   envelopeTrailingStopEnabled?: boolean;
   envelopeTrailingStopPercent?: string;
   envelopeCloseOnlyEntryEnabled?: boolean;
@@ -179,6 +181,7 @@ export type PriceLineKind =
   | 'INITIAL_SL'
   | 'INITIAL_TP'
   | 'TP'
+  | 'FIXED_TP'
   | 'PARTIAL_TP'
   | 'TRAILING_SL'
   | 'TRAILING_REACHED'
@@ -324,6 +327,7 @@ export interface Signal {
   /** Fixed price distance at entry. Absent when the ATR stop is disabled or predates this setting. */
   atrEnvelopeStopDistance?: number;
   envelopeStopLossPercent?: number;
+  envelopeTakeProfitPercent?: number;
   envelopeTrailingStopPercent?: number;
   envelopeExitMode?: EnvelopeExitMode;
   envelopeMaPeriod?: number;

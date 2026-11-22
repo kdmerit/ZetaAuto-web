@@ -1251,7 +1251,10 @@ export function buildLocalChart(
       lines.push(...(trade.priceLines ?? []).filter(value => value.kind === 'TRAILING_SL'));
     } else if (signal.strategy !== 'ENVELOPE' || signal.exitMode !== 'ENVELOPE_MA20_CLOSE') {
       if (signal.strategy !== 'NEW_HIGH' || signal.newHighSlEnabled !== false) lines.push(line('SL', signal.activeStop ?? signal.stop));
-      if (signal.strategy === 'ENVELOPE') lines.push(line('TP', signal.target));
+      if (signal.strategy === 'ENVELOPE') {
+        lines.push(line('TP', signal.target));
+        lines.push(...(trade.priceLines ?? []).filter(value => value.kind === 'FIXED_TP'));
+      }
     }
     if (signal.strategy === 'NEW_HIGH' && signal.newHighSlEnabled !== false && signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
   } else if (signal.strategy === 'REFERENCE') {

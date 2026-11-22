@@ -1,4 +1,5 @@
 import type { BacktestSettings, Strategy } from './types';
+import { defaultEnvelopeTakeProfitPercent } from './envelope';
 import { isCurrentEnvelopeStatisticsVersion, statisticsCenterRange, statisticsPercentRange } from './envelopeStatistics';
 
 /** Which input form produced the history card. */
@@ -139,6 +140,7 @@ export function formatBacktestHistorySettings(
       add(values, '엔벨로프 이격', `${settings.envelopeDeviationPercent ?? '3'}%`);
       add(values, 'SL', `${settings.envelopeStopLossPercent ?? '3'}%`);
     }
+    addEnabled(values, strategy === 'ENVELOPE' && settings.envelopeTakeProfitEnabled === true, 'TP', `${settings.envelopeTakeProfitPercent ?? defaultEnvelopeTakeProfitPercent}%`);
     addEnabled(values, settings.envelopeTrailingStopEnabled === true, '트레일링 스탑', `${settings.envelopeTrailingStopPercent ?? '3'}%`);
 
     if (statistics) {

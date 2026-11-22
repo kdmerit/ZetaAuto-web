@@ -70,8 +70,8 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
   });
 
   it('waits for the selected candle close when close-only entry is enabled', () => {
-    const input = { ...parameters, envelopeCloseOnlyEntryEnabled: true };
-    const state = replay(fixture({ 0: [100, 100, 97, 100], 1439: [100, 100, 97, 97] }, input), input);
+    const input = { ...parameters, envelopeCloseOnlyEntryEnabled: true, envelopeTakeProfitEnabled: true };
+    const state = replay(fixture({ 0: [100, 100, 97, 100], 1439: [100, 106, 97, 97] }, input), input);
     expect(state.entries).toBe(1);
     expect(state.positions.BTCUSDT!.opened).toBe(start + day);
     const finalClose = parameters.side === 'LONG' ? 97 : 103;
@@ -94,10 +94,31 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
     expect(trade.exitPrice).not.toBe(trade.signal.target);
   });
 
-  it('keeps current-price target exits active even during the entry quarter', () => {
-    const state = replay(fixture({ ...entry, 2: [104, 104, 104, 104] }, parameters), parameters);
+  it.each([false, true])('keeps earlier current-price band exits active, fixed TP enabled=%s', enabled => {
+    const input = { ...parameters, envelopeTakeProfitEnabled: enabled, envelopeTakeProfitPercent: '20' };
+    const state = replay(fixture({ ...entry, 2: [104, 104, 104, 104] }, input), input);
     expect(state.exitReasons).toEqual({ ENVELOPE_OPPOSITE: 1 });
     expect(state.trades[0]!.exitPrice).toBeCloseTo(side === 'LONG' ? 104 * .9998 : 96 * 1.0002, 10);
+  });
+
+  it('fills a fixed 6% TP at its order price on an intraminute touch after entry', () => {
+    const input = { ...parameters, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6' };
+    const document = fixture({ ...entry, 2: [97, 104, 97, 97] }, input);
+    const state = replay(document, input);
+    const trade = state.trades[0]!;
+    const entryPrice = side === 'LONG' ? 97 * 1.0002 : 103 * .9998;
+    const orderPrice = entryPrice * (side === 'LONG' ? 1.06 : .94);
+    expect(state.exitReasons).toEqual({ ENVELOPE_TP: 1 });
+    expect(trade.exitAt).toBe(start + 2 * 60);
+    expect(trade.exitPrice).toBeCloseTo(orderPrice, 10);
+    expect(trade.priceLines?.find(line => line.kind === 'FIXED_TP')?.price).toBe(trade.exitPrice);
+    expect(replay(document, { ...input, envelopeTakeProfitEnabled: false }).closed).toBe(0);
+  });
+
+  it('uses the conservative stop result when the same minute reaches both SL and fixed TP', () => {
+    const input = { ...parameters, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6' };
+    const state = replay(fixture({ ...entry, 2: [97, 104, 93, 97] }, input), input);
+    expect(state.exitReasons).toEqual({ SL: 1 });
   });
 
   it('observes center-return state only at polls, excluding an unobserved center wick', () => {
@@ -116,11 +137,13 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
     expect(state.trades[0]!.exitAt).toBe(start + 2 * 60);
   });
 
-  it('preserves minute entry times and pending observations across account checkpoints', () => {
-    const document = fixture(entry, parameters, 2);
-    const whole = replay(document, parameters);
-    const first = replay(document, parameters, initialPortfolio(1000), start, start + day);
-    const resumed = replay(document, parameters, JSON.parse(JSON.stringify(first)) as PortfolioState, start + day, start + 2 * day);
+  it('preserves minute entry times and the fixed TP across account checkpoints', () => {
+    const input = { ...parameters, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6' };
+    const document = fixture({ ...entry, 1441: [97, 104, 97, 97] }, input, 2);
+    const whole = replay(document, input);
+    const first = replay(document, input, initialPortfolio(1000), start, start + day);
+    const resumed = replay(document, input, JSON.parse(JSON.stringify(first)) as PortfolioState, start + day, start + 2 * day);
+    expect(resumed.exitReasons).toEqual({ ENVELOPE_TP: 1 });
     expect(resumed).toEqual(whole);
   });
 
@@ -177,11 +200,12 @@ describe('shared minute execution and entry filters', () => {
   });
 
   it('keeps fixed/statistics replay identical to ordinary replay', async () => {
-    const input = { ...settings, interval: '1h' as const };
+    const input = { ...settings, interval: '1h' as const, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6' };
     const document = fixture({ 0: [100, 100, 97, 97], 15: [100, 104, 100, 100] }, input);
     const direct = replay(document, input);
     const result = await replayFixedEnvelope(document, input, 3600, new AbortController().signal, async () => {});
     expect(result.entryCount).toBe(direct.entries);
+    expect(result.exitReasons).toEqual({ ENVELOPE_TP: 1 });
     expect(result.exitReasons).toEqual(direct.exitReasons);
     expect(result.recentTrades).toEqual(direct.trades);
   });
