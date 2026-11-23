@@ -113,8 +113,7 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): {
     let signal: Signal | null = null;
     if (side && (settings.side === 'BOTH' || settings.side === side)) {
       if (index - lastSetup[side] > setupLookback) {
-        const older = rows[index - 2]!;
-        const stop = side === 'LONG' ? Math.min(older.low, previous!.low, row.low) : Math.max(older.high, previous!.high, row.high);
+        const stop = side === 'LONG' ? row.low : row.high;
         signal = {
           strategy: 'NEW_HIGH', side, index: row.openTime / seconds, entry: row.close,
           stop, initialStop: stop, target: 0, initialTarget: 0, exitMode: 'NEW_HIGH_TOUCH',
@@ -138,8 +137,8 @@ export const newHighRules = {
     '현재 봉을 포함한 최근 3봉에서 MA10 − MA20 값이 연속으로 증가해야 합니다.',
     '현재 종가가 직전 20봉의 최고가를 넘어야 합니다.',
     '직전 10봉에 위 진입 조건을 모두 충족한 봉이 없으면 현재 봉 종가에 진입합니다.',
-    '손절가는 진입봉을 포함한 최근 3봉의 최저가에 고정합니다.',
-    '진입 후 종가가 실제 매수가보다 높고 직전 봉 저가보다 낮은 봉이 나오면 그 종가에 청산합니다.',
+    '손절가는 진입봉의 저가에 고정합니다.',
+    '진입 후 종가가 직전 봉 저가보다 낮으면 그 종가에 청산합니다.',
   ],
   short: [
     '현재 봉이 음봉이고, 몸통 길이와 거래량이 각각 직전 봉의 5배 이상이어야 합니다.',
@@ -150,8 +149,8 @@ export const newHighRules = {
     '현재 봉을 포함한 최근 3봉에서 MA10 − MA20 값이 연속으로 감소해야 합니다.',
     '현재 종가가 직전 20봉의 최저가보다 낮아야 합니다.',
     '직전 10봉에 위 진입 조건을 모두 충족한 봉이 없으면 현재 봉 종가에 진입합니다.',
-    '손절가는 진입봉을 포함한 최근 3봉의 최고가에 고정합니다.',
-    '진입 후 종가가 실제 진입가보다 낮고 직전 봉 고가보다 높은 봉이 나오면 그 종가에 청산합니다.',
+    '손절가는 진입봉의 고가에 고정합니다.',
+    '진입 후 종가가 직전 봉 고가보다 높으면 그 종가에 청산합니다.',
   ],
   common: '이동평균은 선택 주기의 종가를 사용합니다. ATR은 각 봉이 시작하기 전 20일간 선택 주기의 실제 변동폭(TR) 평균입니다. 손절은 진입 다음 봉부터 15분봉 순서로 확인하며 종가 청산보다 우선합니다. 진입·청산 슬리피지 0.02%와 편도 수수료 0.055%를 반영합니다.',
 };

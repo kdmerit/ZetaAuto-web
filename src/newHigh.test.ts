@@ -39,7 +39,7 @@ const signalAt = (rows: Candle[], index = entryIndex) => prepareNewHigh(rows, se
 describe.each(sides)('%s new high/low signals', side => {
   it('enters a 20-bar breakout at the inclusive 5× body and volume boundaries', () => {
     const rows = inDirection(longRows(), side);
-    expect(signalAt(rows)).toMatchObject({ side, entry: side === 'LONG' ? 107 : 93, stop: side === 'LONG' ? 97.5 : 102.5 });
+    expect(signalAt(rows)).toMatchObject({ side, entry: side === 'LONG' ? 107 : 93, stop: side === 'LONG' ? 101.5 : 98.5 });
     const opposite = side === 'LONG' ? 'SHORT' : 'LONG';
     expect(prepareNewHigh(rows, { ...settings, side: opposite }).at(-1)?.signal).toBeNull();
   });
@@ -110,54 +110,55 @@ describe.each(sides)('%s new high/low signals', side => {
 });
 
 describe('new high/low executions', () => {
-  it.each(sides)('holds %s through a wick break or a losing close and exits at a profitable reversal close', side => {
+  it.each(sides)('holds %s through wick touches and equal closes, then exits on a losing reversal close', side => {
     const rows = inDirection([...longRows(),
       candle(entryIndex + 1, 110, 113, 109, 112),
       candle(entryIndex + 2, 112, 112, 108, 110),
-      candle(entryIndex + 3, 110, 111, 106, 107),
-      candle(entryIndex + 4, 110, 112, 109.5, 111),
-      candle(entryIndex + 5, 111, 112, 107.5, 108.5),
+      candle(entryIndex + 3, 110, 111, 106, 108),
+      candle(entryIndex + 4, 108, 109, 104.5, 105),
     ], side);
     const reason = side === 'LONG' ? 'NEW_HIGH_PREVIOUS_LOW_CLOSE' : 'NEW_HIGH_PREVIOUS_HIGH_CLOSE';
-    const stop = side === 'LONG' ? 97.5 : 102.5;
+    const stop = side === 'LONG' ? 101.5 : 98.5;
     const result = runBacktest(rows, settings, 'NEW_HIGH');
-    expect(result).toMatchObject({ entryCount: 1, exitReasons: { [reason]: 1 } });
+    expect(result).toMatchObject({ entryCount: 1, lossCount: 1, exitReasons: { [reason]: 1 } });
     const trade = result.recentTrades[0]!;
     expect(trade).toMatchObject({ entryAt: rows[entryIndex]!.closeTime, exitAt: rows.at(-1)!.closeTime,
       signal: { initialStop: stop, activeStop: stop } });
     expect(trade.executions.map(fill => fill.timing)).toEqual(['BAR_CLOSE', 'BAR_CLOSE']);
-    expect(trade.exitPrice).toBeCloseTo(side === 'LONG' ? 108.5 * 0.9998 : 91.5 * 1.0002, 12);
-    expect(buildLocalChart(result, trade, settings).priceLines.map(line => line.kind)).toEqual(['ENTRY', 'SL', 'EXIT']);
+    expect(trade.exitPrice).toBeCloseTo(side === 'LONG' ? 105 * 0.9998 : 95 * 1.0002, 12);
+    const { priceLines } = buildLocalChart(result, trade, settings);
+    expect(priceLines.map(line => line.kind)).toEqual(['ENTRY', 'SL', 'EXIT']);
+    expect(priceLines).toContainEqual({ kind: 'SL', price: stop });
   });
 
   it.each(sides)('ignores pre-entry extremes and gives the later stop priority over a %s reversal close', side => {
     const rows = inDirection(longRows(), side);
     const input = { ...settings, newHighSlEnabled: false, newHighTpEnabled: true, newHighTrailingStopEnabled: true };
     expect(runBacktest(rows, input, 'NEW_HIGH')).toMatchObject({ entryCount: 1, openPositionCount: 1 });
-    rows.push(...inDirection([candle(entryIndex + 1, 111, 113, 110, 112), candle(entryIndex + 2, 112, 115, 97.5, 108)], side));
+    rows.push(...inDirection([candle(entryIndex + 1, 111, 113, 110, 112), candle(entryIndex + 2, 112, 115, 101.5, 108)], side));
     const result = runBacktest(rows, input, 'NEW_HIGH');
     expect(result.exitReasons).toEqual({ SL: 1 });
-    expect(result.recentTrades[0]!.exitPrice).toBeCloseTo(side === 'LONG' ? 97.5 * 0.9998 : 102.5 * 1.0002, 12);
+    expect(result.recentTrades[0]!.exitPrice).toBeCloseTo(side === 'LONG' ? 101.5 * 0.9998 : 98.5 * 1.0002, 12);
   });
 
   it('fills a short stop at the opening price of the first 15-minute bar that gaps past it', () => {
     const rows = inDirection(longRows(), 'SHORT');
-    const exit = candle(entryIndex + 1, 93, 106, 91, 91.5);
+    const exit = candle(entryIndex + 1, 93, 101, 91, 91.5);
     const children = Array.from({ length: day / 900 }, (_, index): Candle => {
       const at = exit.openTime + index * 900;
       const [open, high, low, close] = index === 0 ? [93, 94, 91, 92] as const
-        : index === 1 ? [104, 106, 91.5, 91.5] as const : [91.5, 91.5, 91.5, 91.5] as const;
+        : index === 1 ? [100, 101, 91.5, 91.5] as const : [91.5, 91.5, 91.5, 91.5] as const;
       return { openTime: at, closeTime: at + 900, open, high, low, close, volume: 1 };
     });
     const result = runBacktest([...rows, exit], settings, 'NEW_HIGH', undefined, undefined, children);
     expect(result.exitReasons).toEqual({ SL: 1 });
     const trade = result.recentTrades[0]!;
     expect(trade.executions.at(-1)).toMatchObject({ at: exit.openTime + 900, candleOpenAt: exit.openTime });
-    expect(trade.exitPrice).toBeCloseTo(104 * 1.0002, 12);
+    expect(trade.exitPrice).toBeCloseTo(100 * 1.0002, 12);
   });
 
-  it('retains fixed-loss sizing with the three-bar stop including transaction costs', () => {
-    const rows = [...longRows(), candle(entryIndex + 1, 107, 109, 97.5, 103)];
+  it('sizes the order using the entry candle stop and transaction costs', () => {
+    const rows = [...longRows(), candle(entryIndex + 1, 107, 109, 101.5, 103)];
     const input = { ...settings, newHighSizingMode: 'RISK' as const, newHighRiskAmount: '10' };
     const trade = runBacktest(rows, input, 'NEW_HIGH').recentTrades[0]!;
     expect(trade.reason).toBe('SL');
@@ -169,7 +170,7 @@ describe('new high/low executions', () => {
     const offset = rows.at(-1)!.openTime;
     const input = { ...settings, initialCapitalUsdt: '101' };
     const first = prepareSymbolBlock('AAAUSDT', rows, input, 'NEW_HIGH', offset, offset + day).bars[0]!;
-    const exit = candle(entryIndex + 1, 106, 110, 97.5, 108);
+    const exit = candle(entryIndex + 1, 106, 110, 101.5, 108);
     const second = { ...first, candle: exit };
     const state = initialPortfolio(101);
     replayPortfolioBlock(state, [{ symbol: 'AAAUSDT', bars: [first, second] }, { symbol: 'ZZZUSDT', bars: [second] }],

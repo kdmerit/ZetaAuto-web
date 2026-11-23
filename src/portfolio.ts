@@ -1318,8 +1318,8 @@ function processNewHighHolding(state: PortfolioState, position: Holding, bar: Pr
   }
 
   const { previousLow, previousHigh } = bar.newHigh!;
-  const reversal = long ? previousLow !== null && candle.close > position.entry && candle.close < previousLow
-    : previousHigh !== null && candle.close < position.entry && candle.close > previousHigh;
+  const reversal = long ? previousLow !== null && candle.close < previousLow
+    : previousHigh !== null && candle.close > previousHigh;
   if (reversal) {
     close(state, position, candle.close, position.qty, long ? 'NEW_HIGH_PREVIOUS_LOW_CLOSE' : 'NEW_HIGH_PREVIOUS_HIGH_CLOSE', candle);
   } else {
