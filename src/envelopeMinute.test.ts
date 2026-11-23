@@ -36,7 +36,7 @@ function fixture(overrides: Record<number, Prices>, parameters = settings, days 
   });
   const executionMinutes = missingMinute === undefined ? minutes : minutes.filter((_, index) => index !== missingMinute);
   return prepareSymbolBlock('BTCUSDT', [...warmup, ...parents], parameters, 'ENVELOPE', start, start + days * seconds,
-    undefined, undefined, undefined, undefined, undefined, undefined, executionMinutes);
+    undefined, undefined, undefined, undefined, undefined, executionMinutes);
 }
 
 function replay(document: PreparedSymbol, parameters = settings, state = initialPortfolio(1000), from = start, end = document.bars.at(-1)!.candle.closeTime): PortfolioState {
@@ -220,7 +220,7 @@ describe.each(['LONG', 'SHORT'] as const)('causal minute-poll envelope: %s', sid
     const parent = { ...parentMinutes[0]!, openTime: parentStart, closeTime: parentStart + 3600,
       high: 100, low: 100, close: 100, volume: 59 };
     const document = prepareSymbolBlock('NEWUSDT', [parent], input, 'ENVELOPE', parentStart, parentStart + 3600,
-      undefined, undefined, undefined, undefined, undefined, undefined, parentMinutes);
+      undefined, undefined, undefined, undefined, undefined, parentMinutes);
     expect(document.bars).toHaveLength(1);
     expect(document.bars[0]!.envelopeIntrabarCandles).toBeUndefined();
     expect(() => replay(document, input)).not.toThrow();
@@ -247,7 +247,7 @@ describe('shared minute execution and entry filters', () => {
         low: Math.min(...rows.map(row => row.low)), close: rows.at(-1)!.close, volume: rows.length };
     });
     const document = prepareSymbolBlock('BTCUSDT', parents, input, 'ENVELOPE', start, start + 3600,
-      undefined, undefined, undefined, undefined, undefined, undefined, minutes);
+      undefined, undefined, undefined, undefined, undefined, minutes);
     expect(document.bars[0]!.envelopeCandleContext?.daily).toMatchObject({ open: 100, high: 100, low: 100, close: 100 });
     expect(document.bars[0]!.envelopeCandleContext?.previousDaily.close).toBe(100);
     const state = replay(document, input);

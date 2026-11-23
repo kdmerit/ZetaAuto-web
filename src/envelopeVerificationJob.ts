@@ -67,7 +67,7 @@ async function replayVerificationMonth(group: SymbolGroup, month: VerificationMo
   if (!coversWindow(inMonth(), seconds, start, end)) return null;
 
   const prepare = (settings: BacktestSettings, minutes?: Candle[]) => prepareSymbolBlock(
-    instrument.symbol, candles, settings, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, minutes,
+    instrument.symbol, candles, settings, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, minutes,
   );
   const previews = () => bands.map(band => ({
     ...band, firstTouch: prepare(band.settings).bars.find(bar => envelopeEntryMayTouch(bar, band.settings))?.candle.openTime,

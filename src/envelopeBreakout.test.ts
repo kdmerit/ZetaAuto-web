@@ -24,7 +24,7 @@ function fixture(overrides: Record<number, Prices>, count: number, settings = de
   const minutes = minuteRows(candles.slice(warmup));
   const end = start + count * seconds;
   const prepare = (lower?: Candle[]) => prepareSymbolBlock('BTCUSDT', candles, settings, 'ENVELOPE_BREAKOUT', start, end,
-    undefined, undefined, undefined, undefined, undefined, undefined, lower);
+    undefined, undefined, undefined, undefined, undefined, lower);
   const replay = (until = end) => {
     const state = initialPortfolio(Number(settings.initialCapitalUsdt));
     replayPortfolioBlock(state, [prepare(minutes)], settings, start, until, seconds);

@@ -54,19 +54,23 @@ export function formatBacktestHistorySettings(
   add(values, '분석 대상', settings.mode === 'ALL' ? '전체 종목' : '개별 종목');
 
   if (strategy === 'NEW_HIGH') {
-    add(values, '신고가 기준 봉수', settings.newHighLookback ?? '20');
-    addEnabled(values, settings.newHighBreakoutCandleMinEnabled === true, '돌파봉 최소크기', `${settings.newHighBreakoutCandleMinAtr ?? '1'} ATR`);
-    addEnabled(values, settings.newHighBreakoutCandleMaxEnabled === true, '돌파봉 최대크기', `${settings.newHighBreakoutCandleMaxAtr ?? '2'} ATR`);
-    addEnabled(values, settings.newHighSlEnabled !== false, 'SL 배수', `${settings.newHighSlMultiplier ?? '2'} ATR`);
-    addEnabled(values, settings.newHighTpEnabled !== false, 'TP 배수', `${settings.newHighTpMultiplier ?? '2'} ATR`);
-    addEnabled(values, settings.newHighTrailingStopEnabled === true, '트레일링 스탑 배수', `${settings.newHighTrailingStopMultiplier ?? '3'} ATR`);
-    add(values, '포지션 금액 기준', settings.newHighSizingMode === 'RISK' && settings.newHighSlEnabled !== false ? '고정 손실액' : '고정 베팅액');
-    if (settings.newHighSizingMode === 'RISK' && settings.newHighSlEnabled !== false) {
+    const priorLookback = settings.newHighLookback;
+    if (priorLookback !== undefined) {
+      add(values, '신고가 기준 봉수', priorLookback);
+      addEnabled(values, settings.newHighBreakoutCandleMinEnabled === true, '돌파봉 최소크기', `${settings.newHighBreakoutCandleMinAtr ?? '1'} ATR`);
+      addEnabled(values, settings.newHighBreakoutCandleMaxEnabled === true, '돌파봉 최대크기', `${settings.newHighBreakoutCandleMaxAtr ?? '2'} ATR`);
+      addEnabled(values, settings.newHighSlEnabled !== false, 'SL 배수', `${settings.newHighSlMultiplier ?? '2'} ATR`);
+      addEnabled(values, settings.newHighTpEnabled !== false, 'TP 배수', `${settings.newHighTpMultiplier ?? '2'} ATR`);
+      addEnabled(values, settings.newHighTrailingStopEnabled === true, '트레일링 스탑 배수', `${settings.newHighTrailingStopMultiplier ?? '3'} ATR`);
+    }
+    const riskSizing = settings.newHighSizingMode === 'RISK' && (priorLookback === undefined || settings.newHighSlEnabled !== false);
+    add(values, '포지션 금액 기준', riskSizing ? '고정 손실액' : '고정 베팅액');
+    if (riskSizing) {
       add(values, '고정 손실액', `${settings.newHighRiskAmount ?? settings.betAmountUsdt} USDT`);
     } else {
       add(values, '고정 베팅액', `${settings.betAmountUsdt} USDT`);
     }
-    addEnabled(values, settings.newHighDailyMa20Enabled === true, '1d MA20 방향 필터');
+    addEnabled(values, priorLookback !== undefined && settings.newHighDailyMa20Enabled === true, '1d MA20 방향 필터');
     return values;
   }
 

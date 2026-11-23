@@ -92,63 +92,69 @@ describe('durable local analysis', () => {
     expect(completed.result?.recentTrades[0]).toMatchObject({ entryAt, exitAt });
   });
 
-  it('resumes the NEW_HIGH 640/759 checkpoint and completes a fresh run using cached closed daily candles', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-11-11T06:29:00Z'));
-    const start = Date.parse('2026-10-11T00:00:00+09:00') / 1000;
-    const end = Date.parse('2026-11-11T06:00:00Z') / 1000;
-    const dailyEnd = Date.parse('2026-11-11T00:00:00Z') / 1000;
-    const input: BacktestSettings = { ...settings, mode: 'SINGLE', symbol: 'BTC', interval: '1h',
-      startDate: '2026-10-11', startTime: '00:00', endDate: '', newHighDailyMa20Enabled: true };
-    const instrument = { symbol: 'BTCUSDT', launchAt: origin };
+  it('resumes a held NEW_HIGH short and fetches 15m candles only from the first possible exit', async () => {
+    const hour = 3600;
+    const entryBar = 127;
+    const exitAt = origin + (entryBar + 1) * hour;
+    const end = origin + 135 * hour;
+    const input: BacktestSettings = { ...settings, mode: 'SINGLE', symbol: 'BTC', side: 'SHORT',
+      endDate: '2026-01-07', endTime: '00:00', newHighDailyMa20Enabled: true };
+    const instrument = { symbol: 'BTCUSDT', launchAt: origin - 500 * hour };
     vi.mocked(listInstruments).mockResolvedValue([instrument]);
+    const parents: Candle[] = [];
+    for (let index = -500; index < 135; index += 1) {
+      const price = index < entryBar - 20 ? 80 : 110;
+      const [open, high, low, close] = index === entryBar ? [110, 111, 103, 104]
+        : index === entryBar + 1 ? [104, 110, 85, 105] : [price, price + 1, price - 1, price];
+      const openTime = origin + index * hour;
+      parents.push({ openTime, closeTime: openTime + hour, open: open!, high: high!, low: low!, close: close!, volume: 10 });
+    }
+    const lower = parents.filter(row => row.openTime >= exitAt).flatMap(row => Array.from({ length: 4 }, (_, i) => {
+      const openTime = row.openTime + i * 900;
+      const prices = i === 0 ? row : { open: row.close, high: row.close, low: row.close, close: row.close };
+      return { ...prices, openTime, closeTime: openTime + 900, volume: row.volume / 4 };
+    }));
+    await cacheCandles(instrument.symbol, '1h', parents);
+    await cacheCandles(instrument.symbol, '15m', lower);
     const actual = await vi.importActual<typeof import('./marketData')>('./marketData');
     vi.mocked(ensureCandles).mockImplementation(actual.ensureCandles);
-    for (const [interval, seconds, from, stop] of [
-      ['1h', 3600, start - 21 * 86400, end],
-      ['15m', 900, start, end],
-      ['1d', 86400, Math.floor(start / 86400) * 86400 - 25 * 86400, dailyEnd],
-    ] as const) {
-      const candles: Candle[] = [];
-      for (let at = from; at < stop; at += seconds) {
-        candles.push({ openTime: at, closeTime: at + seconds, open: 100, high: 102, low: 99, close: 101, volume: 10 });
-      }
-      await cacheCandles('BTCUSDT', interval, candles);
-    }
-    const fetcher = vi.fn(() => { throw new Error('The current daily candle cannot be downloaded as a closed candle'); });
+    const fetcher = vi.fn(() => { throw new Error('All candle pages must be read from the cache'); });
     vi.stubGlobal('fetch', fetcher);
+
     const pause = new AbortController();
     await executeLocalJob({ strategy: 'NEW_HIGH', settings: input }, view => {
-      if (view.phase === 'DATA' && view.completed === 640) pause.abort();
+      if (view.phase === 'DATA' && view.blockStart === exitAt) pause.abort();
     }, pause.signal);
     const paused = (await loadLocalJob('NEW_HIGH'))!;
-    expect(paused).toMatchObject({ status: 'PAUSED', completed: 640, total: 759 });
+    expect(paused).toMatchObject({ status: 'PAUSED', completed: 128, total: 135, result: { entryCount: 1, openPositionCount: 1 } });
+    expect(vi.mocked(ensureCandles).mock.calls.map(call => call[1])).toEqual(['1h']);
+
     await executeLocalJob({ strategy: 'NEW_HIGH', resumeId: paused.id }, () => {}, new AbortController().signal);
     const resumed = (await loadLocalJob('NEW_HIGH'))!;
-    expect(resumed).toMatchObject({ id: paused.id, status: 'COMPLETED', completed: 759, total: 759, failedSymbols: [] });
+    expect(resumed).toMatchObject({ id: paused.id, status: 'COMPLETED', completed: 135,
+      result: { exitReasons: { MA60_TOUCH: 1 }, openPositionCount: 0 } });
+    expect(vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === '15m').map(call => call.slice(2, 4))).toEqual([[exitAt, end]]);
+    expect(fetcher).not.toHaveBeenCalled();
+
     await executeLocalJob({ strategy: 'NEW_HIGH', settings: input }, () => {}, new AbortController().signal);
     const fresh = (await loadLocalJob('NEW_HIGH'))!;
-    expect(fresh).toMatchObject({ status: 'COMPLETED', completed: 759, total: 759, failedSymbols: [] });
-    expect(fresh.id).not.toBe(paused.id);
     expect({ ...fresh.result, localRunId: undefined }).toEqual({ ...resumed.result, localRunId: undefined });
-    const dailyCalls = vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === '1d');
-    expect(dailyCalls.length).toBeGreaterThan(0);
-    expect(dailyCalls.every(call => call[3] % 86400 === 0 && call[3] <= dailyEnd)).toBe(true);
-    expect(fetcher).not.toHaveBeenCalled();
   });
 
-  it.each(['1h', '4h'] as const)('saves and resumes NEW_HIGH %s with twenty-day ATR warmup and the original Unit/N settings', async interval => {
+  it.each(['1h', '4h'] as const)('saves and resumes NEW_HIGH %s with ATR/lookback warmup and the original stake', async interval => {
     const input = { ...settings, interval, newHighLookback: '30' };
     const pause = new AbortController();
     await executeLocalJob({ strategy: 'NEW_HIGH', settings: input }, view => { if (view.blockStart > origin && view.phase === 'DATA') pause.abort(); }, pause.signal);
     const paused = (await loadLocalJob('NEW_HIGH'))!;
     const seconds = interval === '1h' ? 3600 : 14400;
-    for (const call of vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === interval)) expect(call[3]! - call[2]).toBeGreaterThan(20 * 86400);
+    const firstParent = vi.mocked(ensureCandles).mock.calls.find(call => call[1] === interval);
+    expect(firstParent?.[2]).toBe(origin - (20 * 86400 + 21 * seconds));
     if (paused.status === 'PAUSED') {
-      await executeLocalJob({ strategy: 'NEW_HIGH', settings: { ...input, newHighLookback: '99', betAmountUsdt: '1' }, resumeId: paused.id }, () => {}, new AbortController().signal);
+      await executeLocalJob({ strategy: 'NEW_HIGH', settings: { ...input, betAmountUsdt: '1' }, resumeId: paused.id }, () => {}, new AbortController().signal);
     }
-    const completed = (await loadLocalJob('NEW_HIGH'))!; expect(completed.status).toBe('COMPLETED'); expect(completed.version).toBe('2.10.93');
-    expect(completed.id).toBe(paused.id); expect(completed.settings.newHighLookback).toBe('30'); expect(completed.settings.betAmountUsdt).toBe('100');
+    const completed = (await loadLocalJob('NEW_HIGH'))!; expect(completed.status).toBe('COMPLETED'); expect(completed.version).toBe('2.11.6');
+    expect(canResumeLocalJob({ ...completed, version: '2.10.93' })).toBe(false);
+    expect(completed.id).toBe(paused.id); expect(completed.settings.newHighLookback).toBeUndefined(); expect(completed.settings.betAmountUsdt).toBe('100');
     expect(completed.settings.interval).toBe(interval); expect(completed.total).toBe((completed.end - completed.start) / seconds * 2);
     const saved = (await loadLocalResult(completed.id))!; expect(saved.result).toEqual(completed.result);
     await executeLocalJob({ strategy: 'NEW_HIGH', settings: input }, () => {}, new AbortController().signal);

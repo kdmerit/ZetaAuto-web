@@ -1,206 +1,230 @@
 import { describe, expect, it } from 'vitest';
-import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
-import { prepareSymbolBlock, runBacktest } from './engine';
-import { currentNewHighSettings, newHighBreakoutCandleMaxMultiplier, newHighBreakoutCandleMinMultiplier, newHighExecutionInterval, newHighPeriod, newHighRiskAmount, newHighSlMultiplier, newHighTpMultiplier, newHighTrailingStopMultiplier, newHighWarmup, prepareNewHigh, type PreparedNewHigh } from './newHigh';
-import { engineVersionFor, canResumeLocalJob } from './localJobs';
-import type { PreparedBar } from './engine';
+import { defaultSettings } from './components/StrategyBacktest';
+import { buildLocalChart, prepareSymbolBlock, runBacktest } from './engine';
+import { currentNewHighSettings, newHighWarmup, prepareNewHigh } from './newHigh';
+import { initialPortfolio, replayPortfolioBlock } from './portfolio';
 import type { BacktestSettings, Candle } from './types';
 
-const settings: BacktestSettings = { mode: 'SINGLE', symbol: 'BTC', interval: '1h', startDate: '2026-01-01', startTime: '09:00', endDate: '', endTime: '00:00',
-  initialCapitalUsdt: '1000', betAmountUsdt: '100', leverage: '1', side: 'LONG', partialTpEnabled: false,
-  fullTpWavePercent: '100', minDisparityPercent: '1', ma20HalfCloseEnabled: false, roiClosePercent: '100',
-  minVolatilityPercent: '0.5', volatilityK1: '0.5', volatilityK2: '1', volatilityTpEnabled: true, volatilityNextCloseEnabled: false,
-  newHighLookback: '20', newHighSlEnabled: true, newHighSlMultiplier: '2', newHighTpEnabled: true, newHighTpMultiplier: '2', newHighSizingMode: 'BET', newHighRiskAmount: '100' };
+const day = 86400;
 const origin = Date.UTC(2026, 0, 1) / 1000;
-const definition: PreparedNewHigh = { atr: 2, sum4: 300, sum9: 900, sum19: 1900, sum59: 5900, high: 101, low: 99, long: true, short: false };
+const entryIndex = 80;
+const settings: BacktestSettings = { ...defaultSettings('NEW_HIGH'), interval: '1d' };
 
-function bar(i: number, open: number, high: number, low: number, close: number, overrides: Partial<PreparedNewHigh> = {}): PreparedBar {
-  return { candle: { openTime: origin + i * 3600, closeTime: origin + (i + 1) * 3600, open, high, low, close, volume: 100 },
-    signal: null, ma20: null, ma60Exit: null, newHigh: { ...definition, ...overrides } };
+function candle(index: number, open: number, high: number, low: number, close: number, volume = 10): Candle {
+  const openTime = origin + index * day;
+  return { openTime, closeTime: openTime + day, open, high, low, close, volume };
 }
 
-function simulate(bars: PreparedBar[], parameters = settings) {
-  const state = initialPortfolio(Number(parameters.initialCapitalUsdt));
-  replayPortfolioBlock(state, [{ symbol: 'BTCUSDT', bars }], parameters, origin, bars.at(-1)!.candle.closeTime, 3600);
-  return state;
+function setLongSetup(rows: Candle[], index: number, offset = 0): void {
+  rows[index - 2] = candle(index - 2, 100.75 + offset, 102 + offset, 97.5 + offset, 101 + offset);
+  rows[index - 1] = candle(index - 1, 101 + offset, 103 + offset, 100 + offset, 102 + offset);
+  rows[index] = candle(index, 102 + offset, 108 + offset, 101.5 + offset, 107 + offset, 50);
 }
 
-function dailyHistory(): Candle[] {
-  return Array.from({ length: 40 }, (_, i) => {
-    const close = i === 39 ? 120 : i >= 20 && i < 25 ? 80 : 100;
-    return { openTime: origin + i * 86400, closeTime: origin + (i + 1) * 86400,
-      open: close, high: i === 39 ? 121 : 101, low: i >= 20 && i < 25 ? 79 : 99, close, volume: 100 };
-  });
+function longRows(): Candle[] {
+  const rows = Array.from({ length: entryIndex }, (_, index) => candle(index, 100, 102, 98, 100));
+  setLongSetup(rows, entryIndex);
+  return rows;
 }
 
-describe('new high/low close-breakout strategy', () => {
-  it('validates N, SL, TP and the supported execution settings', () => {
-    expect(newHighPeriod(settings)).toBe(20);
-    expect(newHighPeriod({ ...settings, newHighLookback: '1' })).toBe(1);
-    expect(newHighBreakoutCandleMinMultiplier(settings)).toBe(1);
-    expect(newHighBreakoutCandleMaxMultiplier(settings)).toBe(2);
-    expect(newHighSlMultiplier(settings)).toBe(2);
-    expect(newHighTpMultiplier(settings)).toBe(2);
-    expect(newHighTrailingStopMultiplier(settings)).toBe(3);
-    expect(newHighRiskAmount(settings)).toBe(100);
-    for (const value of ['', '0', '0.05', '10.1', '1.234', 'NaN']) expect(() => newHighSlMultiplier({ ...settings, newHighSlMultiplier: value })).toThrow('SL 배수');
-    for (const value of ['', '0', '0.05', '10.1', '1.234', 'NaN']) expect(() => newHighTpMultiplier({ ...settings, newHighTpMultiplier: value })).toThrow('TP 배수');
-    for (const value of ['', '0', '0.05', '10.1', '1.234', 'NaN']) expect(() => newHighTrailingStopMultiplier({ ...settings, newHighTrailingStopMultiplier: value })).toThrow('트레일링');
-    for (const value of ['', '0', '0.05', '10.1', '1.234', 'NaN']) expect(() => newHighBreakoutCandleMinMultiplier({ ...settings, newHighBreakoutCandleMinAtr: value })).toThrow('최소크기');
-    for (const value of ['', '0', '0.05', '10.1', '1.234', 'NaN']) expect(() => newHighBreakoutCandleMaxMultiplier({ ...settings, newHighBreakoutCandleMaxAtr: value })).toThrow('최대크기');
-    for (const value of ['', '0', '1001', '-5', '20.5', 'NaN']) expect(() => newHighPeriod({ ...settings, newHighLookback: value })).toThrow('봉수');
-    for (const value of ['', '0', '-1', 'NaN']) expect(() => newHighRiskAmount({ ...settings, newHighRiskAmount: value })).toThrow('고정 손실액');
-    expect(() => newHighPeriod({ ...settings, interval: '15m' })).toThrow('1h');
-    expect(currentNewHighSettings({ ...settings, interval: '15m', partialTpEnabled: true })).toMatchObject({ interval: '1h', partialTpEnabled: false, newHighBreakoutCandleMinEnabled: false, newHighBreakoutCandleMinAtr: '1', newHighBreakoutCandleMaxEnabled: false, newHighBreakoutCandleMaxAtr: '2', newHighSlEnabled: true, newHighTpEnabled: true, newHighTpMultiplier: '2', newHighTrailingStopEnabled: false, newHighTrailingStopMultiplier: '3' });
-    expect(currentNewHighSettings({ ...settings, newHighSlEnabled: false, newHighSizingMode: 'RISK' })).toMatchObject({ newHighSlEnabled: false, newHighSizingMode: 'BET' });
-    expect(newHighExecutionInterval('1h')).toBe('15m'); expect(newHighExecutionInterval('4h')).toBe('15m'); expect(newHighExecutionInterval('1d')).toBe('15m');
-    expect(newHighWarmup(settings)).toBe(20 * 86400 + 3600);
-    expect(newHighWarmup({ ...settings, interval: '4h' })).toBe(20 * 86400 + 14400);
-    expect(newHighWarmup({ ...settings, interval: '1d' })).toBe(40 * 86400);
-    expect(engineVersionFor('NEW_HIGH')).toBe('2.10.93'); expect(engineVersionFor('ENVELOPE')).toBe('2.10.97');
-    expect(canResumeLocalJob({ version: '2.10.93', strategy: 'NEW_HIGH', settings })).toBe(true);
-    expect(canResumeLocalJob({ version: '2.10.92', strategy: 'NEW_HIGH', settings })).toBe(false);
+function shortRows(plateau = 20): Candle[] {
+  const rows = Array.from({ length: entryIndex }, (_, index) => {
+    const price = index < entryIndex - plateau ? 80 : 110;
+    return candle(index, price, price + 1, price - 1, price);
+  });
+  rows[entryIndex - 2]!.high = 114;
+  rows.push(candle(entryIndex, 110, 112, 103, 104, 2));
+  return rows;
+}
+
+const signalAt = (rows: Candle[], index = entryIndex) => prepareNewHigh(rows, settings)[index]?.signal;
+
+describe('new high/low signals', () => {
+  it('enters a bullish 20-bar high at the inclusive 5× body and volume boundaries', () => {
+    const rows = longRows();
+    expect(signalAt(rows)).toMatchObject({ side: 'LONG', entry: 107, stop: 97.5 });
+    expect(prepareNewHigh(rows, { ...settings, side: 'SHORT' }).at(-1)?.signal).toBeNull();
   });
 
-  it('uses the first completed close beyond the previous N-bar extreme and the requested MA reversal zone', () => {
-    const data = dailyHistory();
-    const prepared = prepareNewHigh(data, { ...settings, interval: '1d' });
-    expect(prepared[39]?.long).toBe(true);
-    expect(prepared[39]?.high).toBe(101);
-    const secondBreak = [...data, { ...data[39]!, openTime: data[39]!.closeTime, closeTime: data[39]!.closeTime + 86400, open: 121, high: 122, low: 120, close: 121 }];
-    expect(prepareNewHigh(secondBreak, { ...settings, interval: '1d' })[40]?.long).toBe(false);
-    const wickOnly = [...data.slice(0, 39), { ...data[39]!, high: 121, close: 100 }];
-    expect(prepareNewHigh(wickOnly, { ...settings, interval: '1d' })[39]?.long).toBe(false);
-    const mirrored = data.map(row => ({ ...row, open: 200 - row.open, high: 200 - row.low, low: 200 - row.high, close: 200 - row.close }));
-    expect(prepareNewHigh(mirrored, { ...settings, interval: '1d', side: 'SHORT' })[39]?.short).toBe(true);
+  it.each([
+    ['body size below 5×', (rows: Candle[]) => { rows[entryIndex]!.open = 102.001; }],
+    ['volume below 5×', (rows: Candle[]) => { rows[entryIndex]!.volume = 49.999; }],
+    ['body equal to 1.5× the upper wick', (rows: Candle[]) => { rows[entryIndex]!.high = 107 + 5 / 1.5; }],
+    ['range midpoint equal to MA5', (rows: Candle[]) => { rows[entryIndex]!.low = 96; }],
+    ['close equal to the high 20 bars back', (rows: Candle[]) => { rows[entryIndex - 20]!.high = 107; }],
+    ['one step of the three-bar MA gap decreases', (rows: Candle[]) => { rows[entryIndex - 11] = candle(entryIndex - 11, 104, 105, 103, 104); }],
+  ] as const)('rejects a long with %s', (_label, change) => {
+    const rows = longRows();
+    change(rows);
+    expect(signalAt(rows)).toBeNull();
   });
 
-  it('filters the breakout candle range by the completed ATR with inclusive bounds', () => {
-    const data = dailyHistory();
-    const base = prepareNewHigh(data, { ...settings, interval: '1d' })[39]!;
-    const atr = base.atr!;
-    const withRange = (range: number): Candle[] => [...data.slice(0, 39), {
-      ...data[39]!, open: 120, high: 120 + range / 2, low: 120 - range / 2, close: 120,
-    }];
-    const filtered = { ...settings, interval: '1d' as const, newHighBreakoutCandleMinEnabled: true, newHighBreakoutCandleMinAtr: '1', newHighBreakoutCandleMaxEnabled: true, newHighBreakoutCandleMaxAtr: '2' };
-    expect(prepareNewHigh(withRange(atr * 0.99), filtered)[39]?.long).toBe(false);
-    expect(prepareNewHigh(withRange(atr), filtered)[39]?.long).toBe(true);
-    expect(prepareNewHigh(withRange(atr * 2), filtered)[39]?.long).toBe(true);
-    expect(prepareNewHigh(withRange(atr * 2.01), filtered)[39]?.long).toBe(false);
-    expect(() => prepareNewHigh(data, { ...filtered, newHighBreakoutCandleMinAtr: '3', newHighBreakoutCandleMaxAtr: '2' })).toThrow('최소크기');
+  it('compares each earlier MA gap with the ATR that was available at that bar', () => {
+    const rows = Array.from({ length: entryIndex }, (_, index) => candle(index, 100, 100, 100, 100));
+    rows[entryIndex - 2] = candle(entryIndex - 2, 100, 101, 100, 101);
+    rows[entryIndex - 1] = candle(entryIndex - 1, 101, 102, 101, 102);
+    rows.push(candle(entryIndex, 102, 108, 101.5, 107, 50));
+    expect(signalAt(rows)).toBeNull();
+    // This prior TR falls outside the entry ATR but inside several lookback bars' ATR windows.
+    rows[entryIndex - 21] = candle(entryIndex - 21, 100, 102, 98, 100);
+    expect(signalAt(rows)).toMatchObject({ side: 'LONG' });
   });
 
-  it('does not let future candles change a completed signal', () => {
-    const data = dailyHistory();
-    const expected = prepareNewHigh(data, { ...settings, interval: '1d' })[39];
-    data.push({ ...data[39]!, openTime: data[39]!.closeTime, closeTime: data[39]!.closeTime + 86400, open: 1000, high: 1100, low: 900, close: 950 });
-    expect(prepareNewHigh(data, { ...settings, interval: '1d' })[39]).toEqual(expected);
+  it.each([10, 11])('uses exactly the previous ten bars for long suppression (distance %i)', distance => {
+    const rows = longRows();
+    for (let index = rows.length; index <= entryIndex + distance; index += 1) rows.push(candle(index, 100, 102, 98, 100));
+    setLongSetup(rows, entryIndex + distance, 13);
+    expect(signalAt(rows, entryIndex + distance)?.side ?? null).toBe(distance === 10 ? null : 'LONG');
+    // Lowering the first setup's volume leaves all later price/MA conditions unchanged.
+    rows[entryIndex]!.volume = 10;
+    expect(signalAt(rows, entryIndex + distance)?.side).toBe('LONG');
   });
 
-  it('enters only at the completed parent close and applies the configured SL and TP from the actual fill', () => {
-    const state = simulate([bar(0, 100, 105, 95, 102)], { ...settings, newHighSlMultiplier: '1.5', newHighTpMultiplier: '3' });
-    const holding = state.positions.BTCUSDT!;
-    expect(state.entries).toBe(1); expect(state.closed).toBe(0);
-    expect(holding.executions[0]!.timing).toBe('BAR_CLOSE');
-    expect(holding.opened).toBe(origin + 3600);
-    expect(holding.first).toBeCloseTo(102 * 1.0002);
-    expect(holding.stop).toBeCloseTo(holding.first - 3);
-    expect(holding.target).toBeCloseTo(holding.first + 6);
-    expect(holding.newHighTrailStep).toBeUndefined();
+  it('counts suppressed long setups in the next ten-bar window and across preparation blocks', () => {
+    const rows = longRows();
+    for (let index = rows.length; index <= entryIndex + 20; index += 1) rows.push(candle(index, 100, 102, 98, 100));
+    setLongSetup(rows, entryIndex + 10, 13);
+    setLongSetup(rows, entryIndex + 20, 30);
+    const last = rows.at(-1)!;
+    const warmup = newHighWarmup({ ...settings, side: 'LONG' }) / day;
+    const block = () => prepareSymbolBlock('BTCUSDT', rows.slice(-warmup - 1),
+      { ...settings, side: 'LONG' }, 'NEW_HIGH', last.openTime, last.closeTime).bars[0]!.signal;
+    expect(block()).toBeNull();
+    rows[entryIndex + 10]!.volume = 10;
+    expect(block()?.side).toBe('LONG');
   });
 
-  it.each(['LONG', 'SHORT'] as const)('does not use the entry candle extreme for %s SL or TP', side => {
-    const entry = side === 'LONG'
-      ? bar(0, 100, 110, 90, 102)
-      : bar(0, 100, 110, 90, 98, { long: false, short: true });
-    const state = simulate([entry], { ...settings, side });
-    expect(state.entries).toBe(1); expect(state.closed).toBe(0); expect(state.positions.BTCUSDT).toBeDefined();
+  it('enters a bearish five-bar low above MA60 without requiring long volume or body conditions', () => {
+    const rows = shortRows();
+    expect(signalAt(rows)).toMatchObject({ side: 'SHORT', entry: 104, stop: 114 });
+    expect(prepareNewHigh(rows, { ...settings, side: 'LONG' }).at(-1)?.signal).toBeNull();
+    rows[entryIndex - 5]!.low = 104;
+    expect(signalAt(rows)).toBeNull();
   });
 
-  it('closes a long at the fixed TP when a later 15m candle reaches it', () => {
-    const next = bar(1, 102, 109, 101, 108);
-    next.newHighIntrabarCandles = [
-      { openTime: origin + 3600, closeTime: origin + 4500, open: 102, high: 103, low: 101, close: 102, volume: 10 },
-      { openTime: origin + 4500, closeTime: origin + 5400, open: 102, high: 109, low: 105, close: 108, volume: 10 },
+  it('accepts short close-above-MA20 and MA10-above-MA20 conditions on different prior bars', () => {
+    const rows = shortRows();
+    [103, 103, 103, 107, 110].forEach((price, offset) => {
+      const index = entryIndex - 5 + offset;
+      rows[index] = candle(index, price, price + 1, price - 1, price);
+    });
+    rows[entryIndex] = candle(entryIndex, 110, 112, 100, 101);
+    expect(signalAt(rows)?.side).toBe('SHORT');
+  });
+
+  it.each([5, 6])('uses exactly the previous five bars for short suppression (distance %i)', distance => {
+    const rows = shortRows(17);
+    const prices = [110, 110, 106, 105, 104].slice(0, distance - 1);
+    prices.forEach((price, offset) => rows.push(candle(entryIndex + offset + 1, price, price + 1, price - 1, price)));
+    rows.push(candle(entryIndex + distance, 105, 106, 99, 100));
+    expect(signalAt(rows)?.side).toBe('SHORT');
+    expect(signalAt(rows, entryIndex + distance)?.side ?? null).toBe(distance === 5 ? null : 'SHORT');
+    rows[entryIndex]!.open = 104;
+    expect(signalAt(rows, entryIndex + distance)?.side).toBe('SHORT');
+  });
+
+  it('requires the short close to be more than an ATR above MA60', () => {
+    const rows = shortRows();
+    rows[entryIndex - 20]!.high = 520;
+    expect(signalAt(rows)).toBeNull();
+  });
+});
+
+describe('new high/low executions', () => {
+  it('holds through a wick break or a losing close and closes a profitable prior-low break at the close', () => {
+    const rows = [...longRows(),
+      candle(entryIndex + 1, 110, 113, 109, 112),
+      candle(entryIndex + 2, 112, 112, 108, 110),
+      candle(entryIndex + 3, 110, 111, 106, 107),
+      candle(entryIndex + 4, 110, 112, 109.5, 111),
+      candle(entryIndex + 5, 111, 112, 107.5, 108.5),
     ];
-    const state = simulate([bar(0, 100, 105, 95, 102), next]);
-    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('NEW_HIGH_TP');
-    expect(state.trades[0]!.exitPrice).toBeCloseTo(state.trades[0]!.entryPrice + 4);
-    expect(state.trades[0]!.executions.at(-1)!.candleOpenAt).toBe(origin + 4500);
+    const result = runBacktest(rows, settings, 'NEW_HIGH');
+    expect(result).toMatchObject({ entryCount: 1, exitReasons: { NEW_HIGH_PREVIOUS_LOW_CLOSE: 1 } });
+    const trade = result.recentTrades[0]!;
+    expect(trade).toMatchObject({ entryAt: rows[entryIndex]!.closeTime, exitAt: rows.at(-1)!.closeTime,
+      signal: { initialStop: 97.5, activeStop: 97.5 } });
+    expect(trade.executions.map(fill => fill.timing)).toEqual(['BAR_CLOSE', 'BAR_CLOSE']);
+    expect(trade.exitPrice).toBeCloseTo(108.5 * 0.9998, 12);
+    expect(buildLocalChart(result, trade, settings).priceLines.map(line => line.kind)).toEqual(['ENTRY', 'SL', 'EXIT']);
   });
 
-  it('closes a long at the fixed SL when a later 15m candle reaches it', () => {
-    const state = simulate([bar(0, 100, 105, 95, 102), bar(1, 102, 103, 97, 99)]);
-    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('SL');
-    expect(state.trades[0]!.exitPrice).toBeLessThan(state.trades[0]!.entryPrice - 3.9);
-    expect(state.trades[0]!.newHighTrailStep).toBeUndefined();
+  it('ignores pre-entry extremes and gives the later stop priority over a long reversal close', () => {
+    const rows = longRows();
+    const input = { ...settings, newHighSlEnabled: false, newHighTpEnabled: true, newHighTrailingStopEnabled: true };
+    expect(runBacktest(rows, input, 'NEW_HIGH')).toMatchObject({ entryCount: 1, openPositionCount: 1 });
+    rows.push(candle(entryIndex + 1, 111, 113, 110, 112));
+    rows.push(candle(entryIndex + 2, 112, 115, 97.5, 108));
+    const result = runBacktest(rows, input, 'NEW_HIGH');
+    expect(result.exitReasons).toEqual({ SL: 1 });
+    expect(result.recentTrades[0]!.exitPrice).toBeCloseTo(97.5 * 0.9998, 12);
   });
 
-  it('uses the mirrored fixed SL and TP for shorts', () => {
-    const parameters = { ...settings, side: 'SHORT' as const, newHighSlMultiplier: '1.5', newHighTpMultiplier: '3' };
-    const entry = bar(0, 100, 105, 95, 98, { long: false, short: true });
-    const first = simulate([entry], parameters).positions.BTCUSDT!;
-    expect(first.first).toBeCloseTo(98 * 0.9998);
-    expect(first.stop).toBeCloseTo(first.first + 3); expect(first.target).toBeCloseTo(first.first - 6);
-    const state = simulate([entry, bar(1, 98, 99, 91, 93, { long: false, short: true })], parameters);
-    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('NEW_HIGH_TP');
+  it('closes a short at the live MA60 touch independently of the closing price', () => {
+    const rows = shortRows();
+    const touch = rows.slice(-59).reduce((total, row) => total + row.close, 0) / 59;
+    for (const close of [touch, 112]) {
+      const result = runBacktest([...rows, candle(entryIndex + 1, 104, 113, touch, close)], settings, 'NEW_HIGH');
+      expect(result.exitReasons).toEqual({ MA60_TOUCH: 1 });
+      expect(result.recentTrades[0]!.exitPrice).toBeCloseTo(touch * 1.0002, 12);
+    }
   });
 
-  it('does not retain the removed trailing or next-entry-candle exits', () => {
-    const state = simulate([bar(0, 100, 105, 95, 102), bar(1, 102, 104, 100, 103)]);
-    expect(state.closed).toBe(0); expect(state.positions.BTCUSDT).toBeDefined();
-    expect(state.positions.BTCUSDT!.newHighTrailStep).toBeUndefined();
-    expect(state.exitReasons.NEW_HIGH_TRAILING).toBeUndefined();
-    expect(state.exitReasons.NEW_HIGH_NEXT_CANDLE_BREAK).toBeUndefined();
-  });
-
-  it('applies fixed SL and TP only when their checkboxes are enabled', () => {
-    const noSl = simulate([bar(0, 100, 105, 95, 102), bar(1, 102, 103, 90, 100)], {
-      ...settings, newHighSlEnabled: false, newHighTpMultiplier: '10',
+  it('honors 15-minute order, prioritizes the stop within an ambiguous bar, and fills opening gaps', () => {
+    const rows = shortRows();
+    const touch = rows.slice(-59).reduce((total, row) => total + row.close, 0) / 59;
+    const exit = candle(entryIndex + 1, 104, 115, touch, 112);
+    const children = Array.from({ length: day / 900 }, (_, index): Candle => {
+      const at = exit.openTime + index * 900;
+      const prices = index === 0 ? [104, 105, touch, 104] : index === 1 ? [104, 115, 104, 112] : [112, 112, 112, 112];
+      const [open, high, low, close] = prices as [number, number, number, number];
+      return { openTime: at, closeTime: at + 900, open, high, low, close, volume: 1 };
     });
-    expect(noSl.closed).toBe(0); expect(noSl.positions.BTCUSDT).toBeDefined();
+    const run = (bars: Candle[], intrabar?: Candle[]) => runBacktest(bars, settings, 'NEW_HIGH', undefined, undefined, intrabar);
+    const result = run([...rows, exit], children);
+    expect(result.exitReasons).toEqual({ MA60_TOUCH: 1 });
+    expect(result.recentTrades[0]!.executions.at(-1)).toMatchObject({ at: exit.openTime, candleOpenAt: exit.openTime, timing: 'INTRABAR' });
+    expect(run([...rows, exit]).exitReasons).toEqual({ SL: 1 });
 
-    const noTp = simulate([bar(0, 100, 105, 95, 102), bar(1, 102, 110, 101, 109)], {
-      ...settings, newHighSlMultiplier: '1', newHighTpEnabled: false,
-    });
-    expect(noTp.closed).toBe(0); expect(noTp.positions.BTCUSDT).toBeDefined();
-
-    const noExits = simulate([bar(0, 100, 105, 95, 102), bar(1, 102, 110, 90, 100)], {
-      ...settings, newHighSlEnabled: false, newHighTpEnabled: false,
-    });
-    expect(noExits.closed).toBe(0); expect(noExits.positions.BTCUSDT).toBeDefined();
+    const gapped = run([...rows, candle(entryIndex + 1, 116, 118, touch, 111)]);
+    expect(gapped.exitReasons).toEqual({ SL: 1 });
+    expect(gapped.recentTrades[0]!.exitPrice).toBeCloseTo(116 * 1.0002, 12);
+    const favorable = run([...rows, candle(entryIndex + 1, 85, 117, 84, 115)]);
+    expect(favorable.exitReasons).toEqual({ MA60_TOUCH: 1 });
+    expect(favorable.recentTrades[0]!.exitPrice).toBeCloseTo(85 * 1.0002, 12);
   });
 
-  it('optionally follows the most favorable price by the configured ATR distance', () => {
-    const parameters = { ...settings, newHighTpMultiplier: '10', newHighTrailingStopEnabled: true, newHighTrailingStopMultiplier: '1' };
-    const first = simulate([bar(0, 100, 105, 95, 102)], parameters).positions.BTCUSDT!;
-    expect(first.newHighTrailingDistance).toBeCloseTo(2);
-    expect(first.stop).toBeCloseTo(first.first - 2);
-    const state = simulate([bar(0, 100, 105, 95, 102), bar(1, 102, 104, 102.5, 103.5), bar(2, 103.5, 103.5, 101.5, 102)], parameters);
-    expect(state.closed).toBe(1); expect(state.trades[0]!.reason).toBe('NEW_HIGH_TRAILING');
-    expect(state.trades[0]!.priceLines?.some(line => line.kind === 'TRAILING_SL')).toBe(true);
+  it('retains fixed-loss sizing with the three-bar stop including transaction costs', () => {
+    const rows = [...longRows(), candle(entryIndex + 1, 107, 109, 97.5, 103)];
+    const input = { ...settings, newHighSizingMode: 'RISK' as const, newHighRiskAmount: '10' };
+    const trade = runBacktest(rows, input, 'NEW_HIGH').recentTrades[0]!;
+    expect(trade.reason).toBe('SL');
+    expect(trade.netProfitUsdt).toBeCloseTo(-10, 10);
   });
 
-  it('keeps fixed-loss sizing based on the new initial SL distance', () => {
-    const parameters = { ...settings, newHighSizingMode: 'RISK' as const, newHighRiskAmount: '10', betAmountUsdt: '100' };
-    const state = simulate([bar(0, 100, 105, 95, 102), bar(1, 102, 103, 97, 100)], parameters);
-    expect(state.closed).toBe(1); expect(Math.abs(state.trades[0]!.netProfitUsdt)).toBeLessThanOrEqual(10.01);
+  it('uses opening cash for new orders in the shared account and allows no same-bar re-entry', () => {
+    const rows = longRows();
+    const offset = rows.at(-1)!.openTime;
+    const input = { ...settings, initialCapitalUsdt: '101' };
+    const first = prepareSymbolBlock('AAAUSDT', rows, input, 'NEW_HIGH', offset, offset + day).bars[0]!;
+    const exit = candle(entryIndex + 1, 106, 110, 97.5, 108);
+    const second = { ...first, candle: exit };
+    const state = initialPortfolio(101);
+    replayPortfolioBlock(state, [{ symbol: 'AAAUSDT', bars: [first, second] }, { symbol: 'ZZZUSDT', bars: [second] }],
+      input, offset, exit.closeTime, day);
+    expect(state).toMatchObject({ entries: 1, closed: 1, insufficientFunds: 1, positions: {} });
+    expect(Object.keys(state.positions)).toEqual([]);
   });
+});
 
-  it('resumes JSON portfolio state exactly across a TP', () => {
-    const bars = [bar(0, 100, 105, 95, 102), bar(1, 102, 109, 101, 108)];
-    const whole = simulate(bars); let resumed = JSON.parse(JSON.stringify(simulate(bars.slice(0, 1))));
-    replayPortfolioBlock(resumed, [{ symbol: 'BTCUSDT', bars: bars.slice(1) }], settings, bars[1]!.candle.openTime, bars[1]!.candle.closeTime, 3600);
-    expect(resumed).toEqual(whole);
-  });
-
-  it('uses the same close-entry and fixed-exit model through the public run path', () => {
-    const data = dailyHistory();
-    const runSettings = { ...settings, interval: '1d' as const };
-    const prepared = prepareSymbolBlock('BTCUSDT', data, runSettings, 'NEW_HIGH', data[0]!.openTime, data.at(-1)!.closeTime);
-    const state = initialPortfolio(1000);
-    replayPortfolioBlock(state, [prepared], runSettings, data[0]!.openTime, data.at(-1)!.closeTime, 86400);
-    const result = runBacktest(data, runSettings, 'NEW_HIGH');
-    expect(result.entryCount).toBe(state.entries); expect(result.finalEquityUsdt).toBeCloseTo(portfolioResult(state, runSettings).finalEquityUsdt);
+describe('new high settings migration', () => {
+  it('discards obsolete rule inputs while retaining the selected stake and enough history for each direction', () => {
+    const current = currentNewHighSettings({ ...settings, interval: '15m', newHighLookback: 'invalid',
+      newHighSlEnabled: false, newHighTpMultiplier: 'invalid', newHighDailyMa20Enabled: true, betAmountUsdt: '25' });
+    expect(current).toMatchObject({ interval: '1h', betAmountUsdt: '25', newHighSizingMode: 'BET' });
+    for (const field of ['newHighLookback', 'newHighSlEnabled', 'newHighTpMultiplier', 'newHighDailyMa20Enabled']) expect(current).not.toHaveProperty(field);
+    expect(newHighWarmup({ ...settings, side: 'LONG' })).toBe(41 * day);
+    expect(newHighWarmup({ ...settings, side: 'SHORT' })).toBe(64 * day);
+    expect(newHighWarmup(current)).toBe(20 * day + 21 * 3600);
   });
 });

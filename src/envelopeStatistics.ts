@@ -282,7 +282,7 @@ async function searchEnvelopeInstrument(job: EnvelopeStatisticsJob, checkpoint: 
         const directional = { ...settings, side };
         const baseParameters = { ...directional, envelopeMaPeriod: String(maPeriod), envelopeDeviationPercent: firstDeviation, envelopeStopLossPercent: firstStop };
         const prepare = (minutes?: Candle[]) => {
-          const prepared = prepareSymbolBlock(instrument.symbol, candles, baseParameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, minutes);
+          const prepared = prepareSymbolBlock(instrument.symbol, candles, baseParameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, minutes);
           for (const bar of prepared.bars) if (bar.envelope) { bar.envelope.long &&= instrument.LONG; bar.envelope.short &&= instrument.SHORT; }
           return prepared;
         };

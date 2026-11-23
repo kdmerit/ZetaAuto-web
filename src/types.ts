@@ -100,6 +100,7 @@ export interface BacktestSettings {
   envelopeSideRatio50Enabled?: boolean;
   envelopeDailyTrend?: boolean;
   envelopeResultOptions?: EnvelopeResultOptions;
+  /** Earlier NEW_HIGH rules, retained for the settings stored with completed results. */
   newHighLookback?: string;
   newHighBreakoutCandleMinEnabled?: boolean;
   newHighBreakoutCandleMinAtr?: string;
@@ -311,7 +312,7 @@ export interface Signal {
   volatilityEntryLimit?: number;
   /** Maximum net loss budget used to size a NEW_HIGH position. */
   riskAmount?: number;
-  /** ATR fixed at the NEW_HIGH entry, used by the fixed SL/TP and optional trailing stop. */
+  /** Entry ATR for older NEW_HIGH trades with ATR-based exits. */
   newHighAtr?: number;
   /** Whether the NEW_HIGH fixed stop loss is active for this signal. */
   newHighSlEnabled?: boolean;

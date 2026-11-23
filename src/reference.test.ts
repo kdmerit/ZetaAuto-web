@@ -90,7 +90,7 @@ describe('reference candle strategy', () => {
       { openTime: referenceOpen + 1800, closeTime: referenceOpen + 2700, open: 110, high: 140, low: 105, close: 138, volume: 1 },
     ];
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', referenceOpen, rows.at(-1)!.closeTime,
-      undefined, undefined, undefined, undefined, lowerTimeframe);
+      undefined, undefined, undefined, lowerTimeframe);
     const state = initialPortfolio(1_000);
     replayPortfolioBlock(state, [document], settings, rows[1]!.openTime, rows.at(-1)!.closeTime, 3600);
     const result = portfolioResult(state, settings);
@@ -120,7 +120,7 @@ describe('reference candle strategy', () => {
       open: 130, high: 140, low: 99, close: 99, volume: 1,
     }];
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', rows[1]!.openTime, rows.at(-1)!.closeTime,
-      undefined, undefined, undefined, undefined, lowerTimeframe);
+      undefined, undefined, undefined, lowerTimeframe);
     expect(document.bars[0]!.signal).toBeNull();
     expect(document.bars[1]!.signal).toMatchObject({ strategy: 'REFERENCE', referenceRole: 'NEXT', entry: 115, stop: 80 });
     const state = initialPortfolio(1_000);
@@ -152,7 +152,7 @@ describe('reference candle strategy', () => {
       child(4, [99, 100, 69, 65]),
     ];
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', referenceOpen, rows.at(-1)!.closeTime,
-      undefined, undefined, undefined, undefined, lowerTimeframe);
+      undefined, undefined, undefined, lowerTimeframe);
     expect(document.bars[0]!.referenceIntrabarCandles).toHaveLength(4);
     const state = initialPortfolio(1_000);
     replayPortfolioBlock(state, [document], settings, referenceOpen, rows.at(-1)!.closeTime, 3600);
@@ -174,7 +174,7 @@ describe('reference candle strategy', () => {
       { openTime: referenceOpen + 900, closeTime: referenceOpen + 1800, open: 110, high: 150, low: 105, close: 130, volume: 1 },
     ];
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', referenceOpen, rows.at(-1)!.closeTime,
-      undefined, undefined, undefined, undefined, lowerTimeframe);
+      undefined, undefined, undefined, lowerTimeframe);
     const state = initialPortfolio(1_000);
     replayPortfolioBlock(state, [document], settings, referenceOpen, rows.at(-1)!.closeTime, 3600);
     expect(state.entries).toBe(0);
@@ -189,7 +189,7 @@ describe('reference candle strategy', () => {
       { openTime: referenceOpen + 1800, closeTime: referenceOpen + 2700, open: 120, high: 140, low: 99, close: 110, volume: 1 },
     ];
     const document = prepareSymbolBlock('BTCUSDT', rows, settings, 'REFERENCE', referenceOpen, rows.at(-1)!.closeTime,
-      undefined, undefined, undefined, undefined, lowerTimeframe);
+      undefined, undefined, undefined, lowerTimeframe);
     const state = initialPortfolio(1_000);
     replayPortfolioBlock(state, [document], settings, referenceOpen, rows.at(-1)!.closeTime, 3600);
     expect(state.entries).toBe(1);
@@ -216,7 +216,7 @@ describe('reference candle strategy', () => {
       { openTime: referenceOpen + 1800, closeTime: referenceOpen + 2700, open: 105, high: 110, low: 95, close: 90, volume: 1 },
     ];
     const document = prepareSymbolBlock('BTCUSDT', rows, { ...settings, interval, side: 'SHORT' }, 'REFERENCE', referenceOpen, rows.at(-1)!.closeTime,
-      undefined, undefined, undefined, undefined, lowerTimeframe);
+      undefined, undefined, undefined, lowerTimeframe);
     const state = initialPortfolio(1_000);
     replayPortfolioBlock(state, [document], { ...settings, interval, side: 'SHORT' }, referenceOpen, rows.at(-1)!.closeTime, seconds);
     expect(state.entries).toBe(1);

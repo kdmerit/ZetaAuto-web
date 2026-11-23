@@ -184,7 +184,7 @@ describe('archived 15m entry execution, independent SL and persisted filters', (
       let all = crossing ? [...parents.slice(0, -1), candle(100, 100, 97, 100, origin, 3600)] : parents;
       if (side === 'SHORT') { lower = lower.map(reflected); all = all.map(reflected); }
       const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', origin, origin + 3600,
-        undefined, undefined, undefined, undefined, undefined, undefined, lower);
+        undefined, undefined, undefined, undefined, undefined, lower);
       const denied = context();
       if (rule === 'BODY') denied.previousDaily = candle(105, 105, 100, 100, origin - 86400);
       else if (rule === 'CURRENT_WICK') denied.daily = candle(98, 104, 94, 97);
@@ -205,7 +205,7 @@ describe('archived 15m entry execution, independent SL and persisted filters', (
       if (side === 'SHORT') { lower = lower.map(reflected); all = all.map(reflected); }
       const parameters = { ...settings, side, envelopeSideRatio50Enabled: limited };
       const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', origin, origin + 3600,
-        undefined, undefined, undefined, undefined, undefined, undefined, lower);
+        undefined, undefined, undefined, undefined, undefined, lower);
       const state = initialPortfolio(1000);
       replayPortfolioBlock(state, [document], parameters, origin, origin + 3600, 3600);
       expect(state.entries).toBe(1);

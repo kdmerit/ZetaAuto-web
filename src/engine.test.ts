@@ -32,7 +32,7 @@ function qualifyingLong(index = 0): Candle {
 
 function prepared(rows: readonly Candle[], side: 'LONG' | 'SHORT' = 'LONG', extra: Partial<BacktestSettings> = {}, volatilityIntrabarCandles?: Candle[]) {
   const candles = [...rows];
-  return prepareSymbolBlock('BTCUSDT', candles, { ...settings, ...extra, side }, 'VOLATILITY', candles[0]!.openTime, candles.at(-1)!.closeTime, undefined, undefined, undefined, undefined, undefined, volatilityIntrabarCandles);
+  return prepareSymbolBlock('BTCUSDT', candles, { ...settings, ...extra, side }, 'VOLATILITY', candles[0]!.openTime, candles.at(-1)!.closeTime, undefined, undefined, undefined, undefined, volatilityIntrabarCandles);
 }
 
 function replay(rows: readonly Candle[], side: 'LONG' | 'SHORT') {

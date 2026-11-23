@@ -38,9 +38,10 @@ describe('backtest history setting summaries', () => {
     expect(formatBacktestHistorySettings({ ...settings, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '6' }, 'ENVELOPE')).toContain('TP 6%');
   });
 
-  it('shows only enabled dependent inputs for the new-high strategy', () => {
+  it('shows old new-high inputs only on history using the previous rules', () => {
     const settings = {
       ...defaultSettings('NEW_HIGH'),
+      newHighLookback: '20',
       newHighBreakoutCandleMinEnabled: true,
       newHighBreakoutCandleMinAtr: '1.5',
       newHighBreakoutCandleMaxEnabled: false,
@@ -60,6 +61,12 @@ describe('backtest history setting summaries', () => {
     expect(summary).toContain('TP 배수 4 ATR');
     expect(summary).toContain('트레일링 스탑 배수 2 ATR');
     expect(summary).not.toContain('1d MA20 방향 필터');
+
+    const current = formatBacktestHistorySettings({ ...defaultSettings('NEW_HIGH'), newHighSizingMode: 'RISK', newHighRiskAmount: '40' }, 'NEW_HIGH');
+    expect(current).toContain('고정 손실액 40 USDT');
+    for (const option of ['신고가 기준 봉수', '돌파봉', 'SL 배수', 'TP 배수', '트레일링 스탑', '1d MA20 방향 필터']) {
+      expect(current.join(' · ')).not.toContain(option);
+    }
   });
 
   it('uses the statistics period and displays saved result filters', () => {

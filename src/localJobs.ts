@@ -2,12 +2,12 @@
 import { intervalSeconds } from './api';
 import { deletePrefix, deleteValue, lease, maintainCache, readValue, writeValue } from './database';
 import { envelopeEntryMayTouch, prepareSymbolBlock, type PreparedSymbol, type WaveState } from './engine';
-import { analysisWindow, completedCandleEnd, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument, type Instrument } from './marketData';
+import { analysisWindow, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
 import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvelopeBreakoutSettings, currentEnvelopeSettings, currentPullbackSettings, envelopeBreakoutLookback, envelopeLocalJobVersion, envelopeParameters, envelopeWarmupBars, isEnvelopeStrategy, isSmaEnvelopeStrategy } from './envelope';
 import { envelopeCandleDataStart } from './envelopeCandleFilter';
-import { currentNewHighSettings, newHighExecutionInterval, newHighWarmup } from './newHigh';
+import { currentNewHighSettings, newHighWarmup } from './newHigh';
 import { currentReferenceSettings } from './reference';
 import { candleBreakoutWarmup, currentCandleBreakoutSettings } from './candleBreakout';
 import type { AtrEnvelopeState } from './marketIndicators';
@@ -27,7 +27,8 @@ export function engineVersionFor(strategy: Strategy): string {
   if (strategy === 'ATR_ENVELOPE') return '2.10.100';
   if (strategy === 'CANDLE_BREAKOUT') return '2.11.5';
   if (strategy === 'ENVELOPE_BREAKOUT') return '2.11.4';
-  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.93' : strategy === 'ENVELOPE' ? envelopeLocalJobVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
+  if (strategy === 'NEW_HIGH') return '2.11.6';
+  return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'ENVELOPE' ? envelopeLocalJobVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
   return job.version === engineVersionFor(job.strategy);
@@ -119,10 +120,6 @@ function applyInstrumentEligibility(prepared: PreparedSymbol, instrument: Eligib
   for (const bar of prepared.bars) if (bar.envelope) {
     bar.envelope.long &&= instrument.LONG;
     bar.envelope.short &&= instrument.SHORT;
-  }
-  for (const bar of prepared.bars) if (bar.newHigh) {
-    bar.newHigh.long &&= instrument.LONG;
-    bar.newHigh.short &&= instrument.SHORT;
   }
 }
 
@@ -280,31 +277,34 @@ async function executeWithLease(
         const activeJob = job;
         try {
           let candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
-          const dailySeconds = intervalSeconds('1d');
-          const completedDailyEnd = completedCandleEnd('1d', blockEnd);
-          const dailyCandles = job.strategy === 'NEW_HIGH' && job.settings.newHighDailyMa20Enabled === true
-            ? await ensureCandles(instrument, '1d', job.blockStart - 25 * dailySeconds, completedDailyEnd, Math.min(job.end, completedDailyEnd), signal)
+          const referenceIntrabarCandles = job.strategy === 'REFERENCE'
+            ? await ensureCandles(instrument, '15m', job.blockStart, blockEnd, blockEnd, signal)
             : undefined;
-          const executionInterval = job.strategy === 'NEW_HIGH' ? newHighExecutionInterval(job.settings.interval)
-            : job.strategy === 'REFERENCE' ? '15m' : null;
-          const executionCandles = executionInterval
-            ? await ensureCandles(instrument, executionInterval, job.blockStart, blockEnd, blockEnd, signal)
-            : undefined;
-          const newHighIntrabarCandles = job.strategy === 'NEW_HIGH' ? executionCandles : undefined;
-          const referenceIntrabarCandles = job.strategy === 'REFERENCE' ? executionCandles : undefined;
-          const prepare = (volatilityIntrabarCandles?: Candle[], envelopeIntrabarCandles?: Candle[]) => prepareSymbolBlock(
+          const prepare = (lower: { newHigh?: Candle[]; volatility?: Candle[]; envelope?: Candle[] } = {}) => prepareSymbolBlock(
             instrument.symbol, candles, activeJob.settings, activeJob.strategy, activeJob.blockStart, blockEnd,
-            activeJob.waveStates[instrument.symbol], undefined, dailyCandles, newHighIntrabarCandles, referenceIntrabarCandles,
-            volatilityIntrabarCandles, envelopeIntrabarCandles, activeJob.atrEnvelopeStates?.[instrument.symbol],
+            activeJob.waveStates[instrument.symbol], undefined, lower.newHigh, referenceIntrabarCandles,
+            lower.volatility, lower.envelope, activeJob.atrEnvelopeStates?.[instrument.symbol],
           );
           let prepared = prepare();
           applyInstrumentEligibility(prepared, instrument);
-          if (job.strategy === 'VOLATILITY' && job.settings.interval !== '15m') {
+          if (job.strategy === 'NEW_HIGH' || (job.strategy === 'VOLATILITY' && job.settings.interval !== '15m')) {
             const firstSignal = prepared.bars.find(bar => bar.signal !== null);
             const lowerFrom = job.state.positions[instrument.symbol] ? job.blockStart : firstSignal?.candle.closeTime;
             if (lowerFrom !== undefined && lowerFrom < blockEnd) {
-              const volatilityIntrabarCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
-              prepared = prepare(volatilityIntrabarCandles);
+              let lowerCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
+              if (job.strategy === 'NEW_HIGH') {
+                const parents = prepared.bars.filter(bar => bar.candle.openTime >= lowerFrom).map(bar => bar.candle);
+                if (await refreshMismatchedLowerTimeframes(instrument, job.settings.interval, parents, lowerCandles, signal)) {
+                  candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
+                  lowerCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
+                }
+                prepared = prepare({ newHigh: lowerCandles });
+                for (const bar of prepared.bars) {
+                  if (bar.candle.openTime >= lowerFrom) validateLowerTimeframeCandles(bar.candle, bar.newHighIntrabarCandles ?? [], 900, '15분봉');
+                }
+              } else {
+                prepared = prepare({ volatility: lowerCandles });
+              }
               applyInstrumentEligibility(prepared, instrument);
             }
           }
@@ -314,13 +314,13 @@ async function executeWithLease(
             const lowerFrom = first === undefined ? undefined : envelopeCandleDataStart(activeJob.settings, first);
             if (lowerFrom !== undefined && lowerFrom < blockEnd) {
               let envelopeIntrabarCandles = await ensureCandles(instrument, '1m', lowerFrom, blockEnd, blockEnd, signal);
-              prepared = prepare(undefined, envelopeIntrabarCandles);
+              prepared = prepare({ envelope: envelopeIntrabarCandles });
               applyInstrumentEligibility(prepared, instrument);
               const parents = prepared.bars.flatMap(bar => bar.envelopeIntrabarCandles ? [bar.candle] : []);
               if (await refreshMismatchedLowerTimeframes(instrument, job.settings.interval, parents, envelopeIntrabarCandles, signal, '1m')) {
                 candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
                 envelopeIntrabarCandles = await ensureCandles(instrument, '1m', lowerFrom, blockEnd, blockEnd, signal);
-                prepared = prepare(undefined, envelopeIntrabarCandles);
+                prepared = prepare({ envelope: envelopeIntrabarCandles });
                 applyInstrumentEligibility(prepared, instrument);
               }
               for (const bar of prepared.bars) {

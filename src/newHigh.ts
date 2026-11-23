@@ -1,69 +1,22 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { atrWindowSeconds, calendarAtr } from './atr';
-import type { BacktestInterval, BacktestSettings, Candle } from './types';
+import { priorMovingAverages } from './envelope';
+import type { BacktestInterval, BacktestSettings, Candle, EnrichedCandle, Signal } from './types';
 
-export interface PreparedNewHigh {
-  atr: number | null;
-  sum4: number;
-  sum9: number;
-  sum19: number;
-  /** Sum of the 59 completed closes immediately before the execution candle. */
-  sum59?: number;
-  high: number;
-  low: number;
-  long: boolean;
-  short: boolean;
-  /** The last fully closed 1d candle before the parent candle's open. */
-  dailyLongAllowed?: boolean;
-  dailyShortAllowed?: boolean;
+const longLookback = 10;
+const shortLookback = 5;
+const longHighLookback = 20;
+
+export interface NewHighExitLevels {
+  previousLow: number | null;
+  ma60Touch: number | null;
 }
 
-export function newHighPeriod(settings: BacktestSettings): number {
-  const text = settings.newHighLookback ?? '20';
-  if (!/^\d+$/.test(text) || Number(text) < 1 || Number(text) > 1000) throw new Error('신고가 기준 봉수는 1~1000 정수로 입력해 주세요.');
-  if (settings.interval !== '1h' && settings.interval !== '4h' && settings.interval !== '1d') throw new Error('신고가 백테스트는 1h·4h·1d만 사용할 수 있습니다.');
-  return Number(text);
+function newHighIntervalSeconds(interval: BacktestInterval): number {
+  if (interval === '15m') throw new Error('신고가 백테스트는 1h·4h·1d만 사용할 수 있습니다.');
+  return intervalSeconds(interval);
 }
-function breakoutCandleSizeMultiplier(text: string, label: string): number {
-  const value = Number(text);
-  if (!/^\d+(?:\.\d{1,2})?$/.test(text) || !Number.isFinite(value) || value < 0.1 || value > 10) {
-    throw new Error(`신고가 ${label} 배수는 0.1~10.0으로 입력해 주세요.`);
-  }
-  return value;
-}
-export function newHighBreakoutCandleMinMultiplier(settings: BacktestSettings): number {
-  return breakoutCandleSizeMultiplier(settings.newHighBreakoutCandleMinAtr ?? '1', '돌파봉 최소크기');
-}
-export function newHighBreakoutCandleMaxMultiplier(settings: BacktestSettings): number {
-  return breakoutCandleSizeMultiplier(settings.newHighBreakoutCandleMaxAtr ?? '2', '돌파봉 최대크기');
-}
-export function newHighExecutionInterval(interval: BacktestInterval): BacktestInterval | null {
-  return interval === '1h' || interval === '4h' || interval === '1d' ? '15m' : null;
-}
-export function newHighSlMultiplier(settings: BacktestSettings): number {
-  const text = settings.newHighSlMultiplier ?? '2';
-  const value = Number(text);
-  if (!/^\d+(?:\.\d{1,2})?$/.test(text) || !Number.isFinite(value) || value < 0.1 || value > 10) {
-    throw new Error('신고가 SL 배수는 0.1~10.0으로 입력해 주세요.');
-  }
-  return value;
-}
-export function newHighTpMultiplier(settings: BacktestSettings): number {
-  const text = settings.newHighTpMultiplier ?? '2';
-  const value = Number(text);
-  if (!/^\d+(?:\.\d{1,2})?$/.test(text) || !Number.isFinite(value) || value < 0.1 || value > 10) {
-    throw new Error('신고가 TP 배수는 0.1~10.0으로 입력해 주세요.');
-  }
-  return value;
-}
-export function newHighTrailingStopMultiplier(settings: BacktestSettings): number {
-  const text = settings.newHighTrailingStopMultiplier ?? '3';
-  const value = Number(text);
-  if (!/^\d+(?:\.\d{1,2})?$/.test(text) || !Number.isFinite(value) || value < 0.1 || value > 10) {
-    throw new Error('신고가 트레일링 스탑 배수는 0.1~10.0으로 입력해 주세요.');
-  }
-  return value;
-}
+
 export function newHighRiskAmount(settings: BacktestSettings): number {
   const text = settings.newHighRiskAmount ?? settings.betAmountUsdt;
   const value = Number(text);
@@ -72,95 +25,145 @@ export function newHighRiskAmount(settings: BacktestSettings): number {
   }
   return value;
 }
+
 export function newHighWarmup(settings: BacktestSettings): number {
-  return Math.max(atrWindowSeconds + intervalSeconds(settings.interval), (newHighPeriod(settings) + 20) * intervalSeconds(settings.interval));
+  const seconds = newHighIntervalSeconds(settings.interval);
+  // The oldest comparison in the long setup is 10 bars before the oldest
+  // potential prior signal. ATR needs one more close to form its first TR.
+  const atrLookback = settings.side === 'SHORT' ? shortLookback : 2 * longLookback;
+  const maLookback = settings.side === 'LONG' ? 19 + 2 * longLookback : 59 + shortLookback;
+  return Math.max(atrWindowSeconds + (atrLookback + 1) * seconds, maLookback * seconds);
 }
+
 export function currentNewHighSettings(settings: BacktestSettings): BacktestSettings {
-  const slEnabled = settings.newHighSlEnabled !== false;
-  const tpEnabled = settings.newHighTpEnabled !== false;
-  return { ...settings, interval: settings.interval === '1d' ? '1d' : settings.interval === '4h' ? '4h' : '1h', newHighLookback: settings.newHighLookback ?? '20', newHighBreakoutCandleMinEnabled: settings.newHighBreakoutCandleMinEnabled === true, newHighBreakoutCandleMinAtr: settings.newHighBreakoutCandleMinAtr ?? '1', newHighBreakoutCandleMaxEnabled: settings.newHighBreakoutCandleMaxEnabled === true, newHighBreakoutCandleMaxAtr: settings.newHighBreakoutCandleMaxAtr ?? '2', newHighSlEnabled: slEnabled, newHighSlMultiplier: settings.newHighSlMultiplier ?? '2', newHighTpEnabled: tpEnabled, newHighTpMultiplier: settings.newHighTpMultiplier ?? '2', newHighTrailingStopEnabled: settings.newHighTrailingStopEnabled === true, newHighTrailingStopMultiplier: settings.newHighTrailingStopMultiplier ?? '3', newHighMa60Enabled: false, newHighMa10Enabled: false, newHighDailyMa20Enabled: settings.newHighDailyMa20Enabled === true, newHighSizingMode: slEnabled && settings.newHighSizingMode === 'RISK' ? 'RISK' : 'BET', newHighRiskAmount: settings.newHighRiskAmount ?? settings.betAmountUsdt, partialTpEnabled: false };
-}
-
-interface DailyMa20Filter {
-  dailyLongAllowed: boolean;
-  dailyShortAllowed: boolean;
-}
-
-/** Resolve only fully closed daily candles so intraday bars cannot see future OHLC. */
-function dailyMa20FiltersAt(parentCandles: Candle[], dailyCandles: Candle[]): (DailyMa20Filter | undefined)[] {
-  const rows = [...dailyCandles].sort((a, b) => a.openTime - b.openTime);
-  const prefix = [0];
-  for (const row of rows) prefix.push(prefix.at(-1)! + row.close);
-  let latest = -1;
-  return parentCandles.map(parent => {
-    while (latest + 1 < rows.length && rows[latest + 1]!.closeTime <= parent.openTime) latest += 1;
-    if (latest < 19) return undefined;
-    const daily = rows[latest]!;
-    const ma20 = (prefix[latest + 1]! - prefix[latest - 19]!) / 20;
-    return { dailyLongAllowed: daily.low > ma20, dailyShortAllowed: daily.high < ma20 };
-  });
-}
-
-/** The signal is fixed at the completed current candle; its channel and prior MA zone use only earlier candles. */
-export function prepareNewHigh(candles: Candle[], settings: BacktestSettings, dailyCandles: Candle[] = []): (PreparedNewHigh | undefined)[] {
-  const period = newHighPeriod(settings); const minSizeEnabled = settings.newHighBreakoutCandleMinEnabled === true; const maxSizeEnabled = settings.newHighBreakoutCandleMaxEnabled === true;
-  const minSize = minSizeEnabled ? newHighBreakoutCandleMinMultiplier(settings) : null; const maxSize = maxSizeEnabled ? newHighBreakoutCandleMaxMultiplier(settings) : null;
-  if (minSize !== null && maxSize !== null && minSize > maxSize) throw new Error('신고가 돌파봉 최소크기 배수는 최대크기 배수보다 클 수 없습니다.');
-  const enriched = enrichCandles(candles); const atr = calendarAtr(candles, settings.interval);
-  const sums = [0]; for (const row of candles) sums.push(sums.at(-1)! + row.close);
-  const dailyFilters = settings.newHighDailyMa20Enabled === true ? dailyMa20FiltersAt(candles, dailyCandles) : [];
-  const extremes = (field: 'high' | 'low', direction: number): number[] => {
-    const deque: number[] = []; let left = 0;
-    return candles.map((_row, index) => {
-      while (left < deque.length && deque[left]! < index - period) left += 1;
-      const extreme = left < deque.length ? candles[deque[left]!]![field] : NaN;
-      while (deque.length > left && direction * candles[deque.at(-1)!]![field] <= direction * candles[index]![field]) deque.pop();
-      deque.push(index); return extreme;
-    });
+  const {
+    newHighLookback: _lookback,
+    newHighBreakoutCandleMinEnabled: _minEnabled,
+    newHighBreakoutCandleMinAtr: _minAtr,
+    newHighBreakoutCandleMaxEnabled: _maxEnabled,
+    newHighBreakoutCandleMaxAtr: _maxAtr,
+    newHighSlEnabled: _slEnabled,
+    newHighSlMultiplier: _sl,
+    newHighTpEnabled: _tpEnabled,
+    newHighTpMultiplier: _tp,
+    newHighTrailingStopEnabled: _trailingEnabled,
+    newHighTrailingStopMultiplier: _trailing,
+    newHighMa60Enabled: _ma60,
+    newHighMa10Enabled: _ma10,
+    newHighDailyMa20Enabled: _dailyMa20,
+    ...current
+  } = settings;
+  return {
+    ...current,
+    interval: current.interval === '15m' ? '1h' : current.interval,
+    newHighSizingMode: current.newHighSizingMode ?? 'BET',
+    newHighRiskAmount: current.newHighRiskAmount ?? current.betAmountUsdt,
+    partialTpEnabled: false,
   };
-  const highs = extremes('high', 1); const lows = extremes('low', -1);
-  return candles.map((_candle, index) => {
-    if (index < Math.max(period, 20)) return undefined;
-    const current = enriched[index]!;
-    const previous = enriched[index - 1];
-    const prior = enriched.slice(index - period, index);
-    const previousHigh = highs[index - 1];
-    const previousLow = lows[index - 1];
-    const currentLongMa = current.ma10 !== null && current.ma20 !== null && current.ma10 > current.ma20;
-    const currentShortMa = current.ma10 !== null && current.ma20 !== null && current.ma10 < current.ma20;
-    const priorLongMa = prior.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 < row.ma20);
-    const priorShortMa = prior.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 > row.ma20);
-    const currentAtr = atr[index]!.complete ? atr[index]!.value : null;
-    const breakoutSize = _candle.high - _candle.low;
-    const sizeTolerance = currentAtr === null ? 0 : Math.max(1, Math.abs(breakoutSize), Math.abs(currentAtr)) * 1e-10;
-    const breakoutSizeAllowed = currentAtr !== null && Number.isFinite(breakoutSize)
-      && (!minSizeEnabled || breakoutSize + sizeTolerance >= currentAtr * minSize!)
-      && (!maxSizeEnabled || breakoutSize - sizeTolerance <= currentAtr * maxSize!);
-    const firstLongBreak = previous === undefined || previousHigh === undefined || !Number.isFinite(previousHigh) || previous.close <= previousHigh;
-    const firstShortBreak = previous === undefined || previousLow === undefined || !Number.isFinite(previousLow) || previous.close >= previousLow;
-    return { atr: atr[index]!.complete ? atr[index]!.value : null,
-      sum4: sums[index]! - sums[index - 4]!, sum9: sums[index]! - sums[index - 9]!, sum19: sums[index]! - sums[index - 19]!,
-      ...(index >= 59 ? { sum59: sums[index]! - sums[index - 59]! } : {}),
-      high: highs[index]!, low: lows[index]!,
-      long: settings.side !== 'SHORT' && Number.isFinite(highs[index]!) && _candle.close > highs[index]! && firstLongBreak && currentLongMa && priorLongMa && breakoutSizeAllowed,
-      short: settings.side !== 'LONG' && Number.isFinite(lows[index]!) && _candle.close < lows[index]! && firstShortBreak && currentShortMa && priorShortMa && breakoutSizeAllowed,
-      ...(dailyFilters[index] ?? {}),
-    };
+}
+
+function gapChanges(gaps: (number | null)[], index: number, direction: 1 | -1, tolerance: number): boolean {
+  const older = gaps[index - 2];
+  const previous = gaps[index - 1];
+  const current = gaps[index];
+  return older != null && previous != null && current != null
+    && direction * (previous - older) > tolerance
+    && direction * (current - previous) > tolerance;
+}
+
+function matchesLong(rows: EnrichedCandle[], gaps: (number | null)[], atrs: (number | null)[], index: number): boolean {
+  if (index < longHighLookback) return false;
+  const { open, high, low, close, volume, ma5, ma10, ma20 } = rows[index]!;
+  const previous = rows[index - 1]!;
+  const body = close - open;
+  // Price subtraction can round an exact 5× body or 1.5× wick comparison.
+  const candleTolerance = Number.EPSILON * 8 * Math.max(high, previous.high);
+  if (body <= 0 || body + candleTolerance < 5 * Math.abs(previous.close - previous.open)
+    || volume < 5 * previous.volume || body <= 1.5 * (high - close) + candleTolerance) return false;
+  if (ma5 === null || ma10 === null || ma20 === null) return false;
+  const tolerance = Math.max(ma5, ma10, ma20) * 1e-10;
+  if (!((high + low) / 2 > ma5 + tolerance && ma5 > ma10 + tolerance && ma10 > ma20 + tolerance)) return false;
+  if (!gapChanges(gaps, index, 1, tolerance)) return false;
+  if (!rows.slice(index - longHighLookback, index).every(row => close > row.high)) return false;
+  for (let earlier = index - longLookback; earlier < index; earlier += 1) {
+    const gap = gaps[earlier];
+    const atr = atrs[earlier];
+    if (gap != null && atr != null && Math.abs(gap) + rows[earlier]!.close * 1e-10 < atr) return true;
+  }
+  return false;
+}
+
+function matchesShort(rows: EnrichedCandle[], gaps: (number | null)[], atrs: (number | null)[], index: number): boolean {
+  const { open, close, ma10, ma20, ma60 } = rows[index]!;
+  const atr = atrs[index];
+  if (index < shortLookback || close >= open || ma10 === null || ma20 === null || ma60 === null || atr == null) return false;
+  const tolerance = Math.max(ma10, ma20, ma60) * 1e-10;
+  if (!(close < ma10 - tolerance && close < ma20 - tolerance && close > ma60 + tolerance && ma20 > ma60 + tolerance)) return false;
+  if (!(close - ma60 > atr + tolerance && Math.abs(ma20 - ma60) > 2 * Math.abs(ma10 - ma20) + tolerance)) return false;
+  if (!gapChanges(gaps, index, -1, tolerance)) return false;
+  const prior = rows.slice(index - shortLookback, index);
+  return prior.every(row => close < row.low)
+    && prior.some(row => row.ma20 !== null && row.close > row.ma20 + row.ma20 * 1e-10)
+    && prior.some(row => row.ma10 !== null && row.ma20 !== null && row.ma10 > row.ma20 + row.ma20 * 1e-10);
+}
+
+export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): { signal: Signal | null; newHigh: NewHighExitLevels }[] {
+  const seconds = newHighIntervalSeconds(settings.interval);
+  const rows = enrichCandles(candles);
+  const atrs = calendarAtr(candles, settings.interval).map(atr => atr.complete ? atr.value : null);
+  const gaps = rows.map(row => row.ma10 === null || row.ma20 === null ? null : row.ma10 - row.ma20);
+  // Price = (59 completed closes + price) / 60 at the touch, so the
+  // crossing level is the mean of those 59 closes, known at the bar open.
+  const ma60Touches = priorMovingAverages(candles, 59);
+  const riskAmount = settings.newHighSizingMode === 'RISK' ? newHighRiskAmount(settings) : undefined;
+  let lastLongSetup = -Infinity;
+  let lastShortSetup = -Infinity;
+  return rows.map((row, index) => {
+    const long = settings.side !== 'SHORT' && matchesLong(rows, gaps, atrs, index);
+    const short = settings.side !== 'LONG' && matchesShort(rows, gaps, atrs, index);
+    const firstLong = long && index - lastLongSetup > longLookback;
+    const firstShort = short && index - lastShortSetup > shortLookback;
+    // A matching setup blocks a repeat even if no order was placed at that setup.
+    if (long) lastLongSetup = index;
+    if (short) lastShortSetup = index;
+    let signal: Signal | null = null;
+    if (firstLong || firstShort) {
+      const side = firstLong ? 'LONG' : 'SHORT';
+      const older = rows[index - 2]!;
+      const previous = rows[index - 1]!;
+      const stop = firstLong ? Math.min(older.low, previous.low, row.low) : Math.max(older.high, previous.high, row.high);
+      signal = {
+        strategy: 'NEW_HIGH', side, index: row.openTime / seconds, entry: row.close,
+        stop, initialStop: stop, target: 0, initialTarget: 0, exitMode: 'NEW_HIGH_TOUCH',
+        ...(riskAmount === undefined ? {} : { riskAmount }),
+      };
+    }
+    return { signal, newHigh: { previousLow: rows[index - 1]?.low ?? null, ma60Touch: ma60Touches[index] ?? null } };
   });
 }
 
 export const newHighRules = {
   long: [
-    '현재 봉 종가가 이전 N봉의 최고가를 처음으로 돌파하면 종가에서 매수합니다. N은 입력값입니다.',
-    '매수 봉의 MA10이 MA20보다 높아야 하고, 이전 N봉 안에 MA10이 MA20보다 낮았던 봉이 하나 이상 있어야 합니다.',
-    'SL을 체크하면 손절가는 실제 매수가 − (입력한 손절 배수×ATR)입니다.',
-    'TP를 체크하면 목표가는 실제 매수가 + (입력한 TP 배수×ATR)입니다. 체크한 청산 조건에 닿으면 전량 청산하며, 트레일링 스탑을 켜면 입력한 ATR 간격으로 손절선이 유리한 방향으로만 따라갑니다.',
+    '현재 봉이 양봉이고, 몸통 길이와 거래량이 각각 직전 봉의 5배 이상이어야 합니다.',
+    '현재 몸통 길이가 윗꼬리의 1.5배보다 커야 합니다.',
+    '직전 10봉 중 적어도 한 봉에서 |MA10 − MA20|이 해당 봉의 ATR보다 작아야 합니다.',
+    '현재 봉의 고가·저가 중간값 > MA5 > MA10 > MA20이어야 합니다.',
+    '현재 봉을 포함한 최근 3봉에서 MA10 − MA20 값이 연속으로 증가해야 합니다.',
+    '현재 종가가 직전 20봉의 최고가를 넘어야 합니다.',
+    '직전 10봉에 위 진입 조건을 모두 충족한 봉이 없으면 현재 봉 종가에 진입합니다.',
+    '손절가는 진입봉을 포함한 최근 3봉의 최저가에 고정합니다.',
+    '진입 후 종가가 실제 매수가보다 높고 직전 봉 저가보다 낮은 봉이 나오면 그 종가에 청산합니다.',
   ],
   short: [
-    '현재 봉 종가가 이전 N봉의 최저가를 처음으로 이탈하면 종가에서 매도합니다. N은 입력값입니다.',
-    '매도 봉의 MA10이 MA20보다 낮아야 하고, 이전 N봉 안에 MA10이 MA20보다 높았던 봉이 하나 이상 있어야 합니다.',
-    'SL을 체크하면 손절가는 실제 매도가 + (입력한 손절 배수×ATR)입니다.',
-    'TP를 체크하면 목표가는 실제 매도가 − (입력한 TP 배수×ATR)입니다. 체크한 청산 조건에 닿으면 전량 청산하며, 트레일링 스탑을 켜면 입력한 ATR 간격으로 손절선이 유리한 방향으로만 따라갑니다.',
+    '현재 봉이 음봉이고 종가가 직전 5봉의 최저가보다 낮아야 합니다.',
+    '직전 5봉 안에 종가 > MA20인 봉과 MA10 > MA20인 봉이 각각 있어야 합니다.',
+    '현재 종가는 MA10과 MA20보다 낮고 MA60보다 높아야 합니다. MA20도 MA60보다 높아야 합니다.',
+    '현재 종가 − MA60이 현재 봉의 ATR보다 커야 합니다.',
+    '|MA20 − MA60|이 |MA10 − MA20|의 2배보다 커야 합니다.',
+    '현재 봉을 포함한 최근 3봉에서 MA10 − MA20 값이 연속으로 감소해야 합니다.',
+    '직전 5봉에 위 진입 조건을 모두 충족한 봉이 없으면 현재 봉 종가에 진입합니다.',
+    '손절가는 진입봉을 포함한 최근 3봉의 최고가에 고정합니다.',
+    '진입 다음 봉부터 가격이 선택 주기의 MA60에 닿으면 청산합니다. 터치 가격은 직전 완료 59봉의 종가 평균으로 계산합니다.',
   ],
-  common: 'ATR은 선택 주기 TR의 직전 20일 단순평균(1h 480봉·4h 120봉·1d 20봉)이며 현재 봉이 시작할 때 확정합니다. 매수는 현재 선택 주기 봉이 완전히 끝난 종가에서만 합니다. 돌파봉 최소크기·최대크기를 체크하면 현재 돌파봉의 고가−저가를 확정 ATR×입력 배수와 비교합니다. 1h·4h·1d 모두 15분봉을 보조 데이터로 사용해 다음 봉부터 체크한 SL·TP·트레일링 스탑의 도달 순서를 확인합니다. 매수한 봉 안에서는 청산 조건을 소급하지 않습니다. 트레일링 스탑을 켜면 진입 후 가장 유리했던 가격에서 입력한 ATR×배수만큼 떨어진 손절선을 유지하며, 손절선은 불리한 방향으로 되돌리지 않습니다. 자료가 부족하면 신규 진입하지 않습니다. 1d MA20 필터를 켜면 선택 주기와 관계없이 진입 전에 확정된 1d 캔들의 저가가 1d MA20보다 높은 경우에만 롱, 고가가 1d MA20보다 낮은 경우에만 숏으로 진입합니다. 1d 캔들이 MA20에 닿거나 걸치면 진입하지 않습니다. 고정 베팅액 또는 고정 손실액 중 선택한 기준으로 종목당 한 번만 진입합니다. 고정 손실액을 선택하면 손절 거리와 수수료·슬리피지를 기준으로 수량을 계산합니다. SL을 끄면 고정 베팅액 기준으로 전환합니다. 자금이 부족하거나 활성화된 손절가가 유효하지 않으면 진입하지 않습니다. 단계형 트레일링, 다음 캔들 진입봉 이탈 청산, MA5·MA20 청산은 사용하지 않습니다. 진입·청산 0.02% 슬리피지·편도 0.055% 수수료를 반영합니다. 보조 봉 안의 OHLC 경로를 시간순으로 확인하고, 같은 봉에서 순서를 알 수 없으면 계좌에 더 불리한 경로를 선택합니다. 정확한 틱 재현은 아닙니다. 한 선택 주기에서 청산 후 재진입하지 않으며 전체종목은 한 계좌·종목명 순서·봉 시작 가용자금만 사용합니다.',
+  common: '이동평균은 선택 주기의 종가를 사용합니다. ATR은 각 봉이 시작하기 전 20일간 선택 주기의 실제 변동폭(TR) 평균입니다. 손절과 숏의 MA60 터치는 진입 다음 봉부터 15분봉 순서로 확인합니다. 같은 15분봉 안에서 두 선을 모두 건드려 순서를 알 수 없으면 손절을 우선합니다. 진입·청산 슬리피지 0.02%와 편도 수수료 0.055%를 반영합니다.',
 };

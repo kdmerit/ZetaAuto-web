@@ -135,7 +135,7 @@ describe('envelope band-touch entries and exits', () => {
     const all = [...rows, short ? { ...parent, open: 100, high: 103, low: 98.8, close: 102 } : parent];
     const parameters = { ...settings, side: short ? 'SHORT' as const : 'LONG' as const };
     const start = all[20]!.openTime; const end = all.at(-1)!.closeTime;
-    const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, source);
+    const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, source);
     const state = initialPortfolio(1000);
     replayPortfolioBlock(state, [document], parameters, start, end, 3600);
     const result = portfolioResult(state, parameters);
@@ -171,7 +171,7 @@ describe('envelope band-touch entries and exits', () => {
     const all = [...rows, parent];
     const parameters = { ...settings, envelopeCloseOnConfirmedBreakout: true };
     const start = parent.openTime; const end = parent.closeTime;
-    const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, source);
+    const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, source);
     const state = initialPortfolio(1000);
     replayPortfolioBlock(state, [document], parameters, start, end, 3600);
     const result = portfolioResult(state, parameters);
@@ -204,7 +204,7 @@ describe('envelope center-touch then entry-band return exits', () => {
     const parameters = { ...settings, interval, side: short ? 'SHORT' as const : 'LONG' as const, envelopeCloseOnCenterReturn: enabled };
     const all = [...Array.from({ length: 20 }, (_, index) => ({ ...candle(index), openTime: origin + index * seconds, closeTime: origin + (index + 1) * seconds })), ...parents];
     const start = parents[0]!.openTime; const end = parents.at(-1)!.closeTime;
-    const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, undefined, source);
+    const document = prepareSymbolBlock('BTCUSDT', all, parameters, 'ENVELOPE', start, end, undefined, undefined, undefined, undefined, undefined, source);
     const state = initialPortfolio(1000);
     replayPortfolioBlock(state, [document], parameters, start, end, seconds);
     return { state, document, parameters, start, end };

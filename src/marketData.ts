@@ -248,7 +248,6 @@ export async function ensureCandles(instrument: Instrument, interval: CandleInte
   let prefix = previousPrefix ?? { emptyUntil: listingBucket };
   const start = Math.max(Math.floor(from / seconds) * seconds, listingBucket, prefix.emptyUntil);
   // Never require a candle that is still forming at the current clock boundary.
-  // This is especially important for the 1d MA20 auxiliary series used by NEW_HIGH.
   const completedEnd = completedCandleEnd(interval, end);
   const completedPrefetchEnd = completedCandleEnd(interval, prefetchEnd);
   if (completedEnd <= start) return [];
