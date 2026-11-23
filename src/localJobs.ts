@@ -9,7 +9,7 @@ import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvel
 import { envelopeCandleDataStart } from './envelopeCandleFilter';
 import { currentNewHighSettings, newHighExecutionInterval, newHighWarmup } from './newHigh';
 import { currentReferenceSettings } from './reference';
-import { candleBreakoutWarmup } from './candleBreakout';
+import { candleBreakoutWarmup, currentCandleBreakoutSettings } from './candleBreakout';
 import type { AtrEnvelopeState } from './marketIndicators';
 import type { BacktestResult, BacktestSettings, Candle, Strategy } from './types';
 import { loadWeeklyUniverse, saveWeeklyUniverse, type WeeklyUniverseSnapshot } from './universeCache';
@@ -25,7 +25,7 @@ export interface LocalRunOptions {
 export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
   if (strategy === 'ATR_ENVELOPE') return '2.10.100';
-  if (strategy === 'CANDLE_BREAKOUT') return '2.10.106';
+  if (strategy === 'CANDLE_BREAKOUT') return '2.11.5';
   if (strategy === 'ENVELOPE_BREAKOUT') return '2.11.4';
   return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.93' : strategy === 'ENVELOPE' ? envelopeLocalJobVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
 }
@@ -197,7 +197,8 @@ async function executeWithLease(
         : options.strategy === 'ENVELOPE_BREAKOUT' ? currentEnvelopeBreakoutSettings(copied)
         : options.strategy === 'ATR_ENVELOPE' ? currentAtrEnvelopeSettings(copied)
         : options.strategy === 'PULLBACK' ? currentPullbackSettings(copied)
-        : options.strategy === 'REFERENCE' ? currentReferenceSettings(copied) : copied;
+        : options.strategy === 'REFERENCE' ? currentReferenceSettings(copied)
+        : options.strategy === 'CANDLE_BREAKOUT' ? currentCandleBreakoutSettings(copied) : copied;
       if (isSmaEnvelopeStrategy(options.strategy)) envelopeParameters(settings);
       if (options.strategy === 'ATR_ENVELOPE') atrEnvelopeBacktestParameters(settings);
       const { start, end } = analysisWindow(settings);

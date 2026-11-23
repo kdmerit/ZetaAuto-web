@@ -48,14 +48,15 @@ describe('one-month backtest start defaults', () => {
     expect(renderToStaticMarkup(<EnvelopeWorkspace context={context} />)).toMatch(/시작일<input[^>]*value="2025-02-03"/);
   });
 
-  it('starts candle-breakout MA filters disabled', () => {
-    expect(defaultSettings('CANDLE_BREAKOUT')).toMatchObject({
-      candleBreakoutCloseMa20Enabled: false,
-      candleBreakoutCloseMa20BelowEnabled: false,
-      candleBreakoutCloseMa60Enabled: false,
-      candleBreakoutMa20DistanceEnabled: false,
-      candleBreakoutMa20AboveMa60Enabled: false,
-      candleBreakoutAtrStopEnabled: false,
+  it('shows the candle-breakout rule with the usual analysis inputs and removes the old options', () => {
+    saveSettings('CANDLE_BREAKOUT', { ...defaultSettings('CANDLE_BREAKOUT'),
+      candleBreakoutCloseMa20Enabled: true, candleBreakoutCloseMa20BelowEnabled: true, candleBreakoutCloseMa60Enabled: true,
+      candleBreakoutMa20DistanceEnabled: true, candleBreakoutMa20AboveMa60Enabled: true, candleBreakoutAtrStopEnabled: true,
     });
+    const markup = renderToStaticMarkup(<StrategyBacktest strategy="CANDLE_BREAKOUT" context={context} />);
+    expect(markup).toContain('캔들돌파 백테스트');
+    expect(markup).toContain('전체 범위가 ATR을 넘는 반대색 봉');
+    expect(markup).toContain('고정 베팅액');
+    expect(markup).not.toContain('type="checkbox"');
   });
 });

@@ -49,6 +49,8 @@ interface Holding {
   newHighEntryParentOpenTime?: number;
   newHighEntryParentLow?: number;
   newHighEntryParentHigh?: number;
+  /** Entry high (long) or low (short), and the previous candle's opposite extreme. */
+  candleBreakoutExit?: { entryExtreme: number; previousExitLevel: number };
   /** State for the post-entry volatility candle rule. */
   volatilityEntryOpen?: number;
   volatilityEntryClose?: number;
@@ -203,8 +205,8 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
     'SL', 'TRAILING_STOP', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE',
     'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'VOLATILITY_WICK_EXIT', 'NEXT_CANDLE_CLOSE',
     'NEW_HIGH_TRAILING', 'NEW_HIGH_NEXT_CANDLE_BREAK', 'NEW_HIGH_BREAKOUT_FAIL', 'NEW_HIGH_CANDLE_REJECTION',
-    'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE', 'ENVELOPE_CLOSE_CONFIRM', 'ENVELOPE_CENTER', 'ENVELOPE_CENTER_RETURN', 'CANDLE_BREAKOUT_ATR_CLOSE',
-    'ENVELOPE_BREAKOUT_CLOSE',
+    'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE', 'ENVELOPE_CLOSE_CONFIRM', 'ENVELOPE_CENTER', 'ENVELOPE_CENTER_RETURN',
+    'ENVELOPE_BREAKOUT_CLOSE', 'CANDLE_BREAKOUT_REVERSAL_CLOSE',
   ].includes(reason);
   const minuteMarket = p.signal.envelopeExecutionModel === 'MINUTE_POLL'
     && (reason === 'ENVELOPE_OPPOSITE' || reason === 'ENVELOPE_15M_WICK');
@@ -221,7 +223,7 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   p.qty -= qty;
   state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + 1;
   recordFill(p, reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE', fill, qty, candle, opening,
-    reason === 'CANDLE_BREAKOUT_ATR_CLOSE' || reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT'
+    reason === 'CANDLE_BREAKOUT_REVERSAL_CLOSE' || reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT'
     || reason === 'VOLATILITY_CANDLE_EXIT' || reason === 'VOLATILITY_WICK_EXIT' || reason === 'ENVELOPE_MA20_CLOSE' || reason === 'ENVELOPE_CLOSE_CONFIRM'
     || reason === 'ENVELOPE_BREAKOUT_CLOSE');
   const withoutAtrStop = p.signal.strategy === 'ATR_ENVELOPE' && !hasFixedStop(p.signal);
@@ -295,9 +297,6 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   let activeStop = signal.stop;
   if (signal.atrEnvelopeStopDistance !== undefined) {
     activeStop = entry - direction * signal.atrEnvelopeStopDistance;
-  } else if (signal.candleBreakoutAtrStopDistance !== undefined) {
-    activeStop = entry - direction * signal.candleBreakoutAtrStopDistance;
-    if (!Number.isFinite(activeStop) || activeStop <= 0) return;
   } else if (signal.strategy === 'VOLATILITY'
     && signal.exitMode !== 'VOLATILITY_CANDLE_RULE'
     && signal.exitMode !== 'VOLATILITY_WICK_RULE'
@@ -321,6 +320,9 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     target,
     partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && !envelope && signal.strategy !== 'NEW_HIGH' && signal.strategy !== 'REFERENCE' && signal.strategy !== 'CANDLE_BREAKOUT' && signal.exitMode !== 'PULLBACK_ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
     partialDone: false, stop: envelopeStop, mark: envelope && settings.envelopeSideRatio50Enabled === true ? signal.entry : candle.close, net: -fee, executions: [],
+    ...(signal.strategy === 'CANDLE_BREAKOUT' ? {
+      candleBreakoutExit: { entryExtreme: signal.side === 'LONG' ? candle.high : candle.low, previousExitLevel: signal.stop },
+    } : {}),
     ...(signal.exitMode === 'VOLATILITY_CANDLE_RULE' ? {
       volatilityEntryOpen: candle.open,
       volatilityEntryClose: candle.close,
@@ -1285,14 +1287,15 @@ function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, set
   mergePath(state, worstPath(candidates), symbol);
   closeEnvelopeOnConfirmedClose(state, symbol, bar.candle);
   const remaining = state.positions[symbol];
-  if (remaining?.signal.strategy === 'CANDLE_BREAKOUT' && remaining.signal.candleBreakoutEntryAtr !== undefined
-    && bar.candle.openTime >= remaining.opened) {
+  if (remaining?.candleBreakoutExit && bar.candle.openTime >= remaining.opened) {
     const { candle } = bar;
-    const atr = remaining.signal.candleBreakoutEntryAtr;
-    const reached = remaining.signal.side === 'LONG'
-      ? candle.close >= remaining.entry + atr
-      : candle.close <= remaining.entry - atr;
-    if (reached) close(state, remaining, candle.close, remaining.qty, 'CANDLE_BREAKOUT_ATR_CLOSE', candle);
+    const levels = remaining.candleBreakoutExit;
+    const long = remaining.signal.side === 'LONG';
+    const reversal = long
+      ? candle.high > levels.entryExtreme && candle.close < levels.previousExitLevel
+      : candle.low < levels.entryExtreme && candle.close > levels.previousExitLevel;
+    if (reversal) close(state, remaining, candle.close, remaining.qty, 'CANDLE_BREAKOUT_REVERSAL_CLOSE', candle);
+    else levels.previousExitLevel = long ? candle.low : candle.high;
   }
   if (remaining?.signal.strategy === 'PULLBACK' && remaining.signal.exitMode === 'PULLBACK_ENVELOPE') {
     const long = remaining.signal.side === 'LONG';
@@ -1649,7 +1652,9 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
       if (limitedSymbols.has(symbol)) continue;
       const signal = bar.signal;
       const completedEntry = signal?.exitMode !== 'VOLATILITY_MA5' && signal?.exitMode !== 'VOLATILITY_CANDLE_RULE' && signal?.exitMode !== 'REFERENCE_TOUCH';
-      if (signal && signal.exitMode !== 'VOLATILITY_TP' && completedEntry) enter(state, symbol, signal, bar.candle, options.settingsForSymbol?.[symbol] ?? settings);
+      if (signal && signal.exitMode !== 'VOLATILITY_TP' && completedEntry) {
+        enter(state, symbol, signal, bar.candle, options.settingsForSymbol?.[symbol] ?? settings, signal.strategy === 'CANDLE_BREAKOUT');
+      }
     }
     if (!rows.length) continue;
     state.observedBars += 1;

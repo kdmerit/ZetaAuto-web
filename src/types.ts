@@ -118,6 +118,7 @@ export interface BacktestSettings {
   newHighRiskAmount?: string;
   referenceTpPercent?: string;
   referenceMa10Enabled?: boolean;
+  /** Candle-breakout settings saved on earlier history cards. */
   candleBreakoutCloseMa20Enabled?: boolean;
   candleBreakoutCloseMa20BelowEnabled?: boolean;
   candleBreakoutCloseMa60Enabled?: boolean;
@@ -321,10 +322,6 @@ export interface Signal {
   /** Optional continuous ATR trailing stop for NEW_HIGH positions. */
   newHighTrailingStopEnabled?: boolean;
   newHighTrailingStopMultiplier?: number;
-  /** ATR available before the candle-breakout entry bar opened, fixed until exit. */
-  candleBreakoutEntryAtr?: number;
-  /** When enabled, the candle-breakout stop is fixed at the filled entry price ± ATR. */
-  candleBreakoutAtrStopDistance?: number;
   volatilityTpEnabled?: boolean;
   volatilityNextCloseEnabled?: boolean;
   breakoutRangePercent?: number;
