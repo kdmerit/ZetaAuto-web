@@ -95,7 +95,7 @@ describe('durable local analysis', () => {
   it('resumes a held NEW_HIGH short and fetches 15m candles only from the first possible exit', async () => {
     const hour = 3600;
     const entryBar = 127;
-    const exitAt = origin + (entryBar + 1) * hour;
+    const nextBlockStart = origin + (entryBar + 1) * hour;
     const end = origin + 135 * hour;
     const input: BacktestSettings = { ...settings, mode: 'SINGLE', symbol: 'BTC', side: 'SHORT',
       endDate: '2026-01-07', endTime: '00:00', newHighDailyMa20Enabled: true };
@@ -103,13 +103,15 @@ describe('durable local analysis', () => {
     vi.mocked(listInstruments).mockResolvedValue([instrument]);
     const parents: Candle[] = [];
     for (let index = -500; index < 135; index += 1) {
-      const price = index < entryBar - 20 ? 80 : 110;
-      const [open, high, low, close] = index === entryBar ? [110, 111, 103, 104]
-        : index === entryBar + 1 ? [104, 110, 85, 105] : [price, price + 1, price - 1, price];
+      const [open, high, low, close] = index === entryBar - 2 ? [99.25, 102.5, 98, 99]
+        : index === entryBar - 1 ? [99, 100, 97, 98]
+        : index === entryBar ? [98, 98.5, 92, 93]
+        : index === entryBar + 1 ? [91.5, 91.5, 89, 90]
+        : index === entryBar + 2 ? [90, 93, 89.5, 92] : [100, 102, 98, 100];
       const openTime = origin + index * hour;
-      parents.push({ openTime, closeTime: openTime + hour, open: open!, high: high!, low: low!, close: close!, volume: 10 });
+      parents.push({ openTime, closeTime: openTime + hour, open: open!, high: high!, low: low!, close: close!, volume: index === entryBar ? 50 : 10 });
     }
-    const lower = parents.filter(row => row.openTime >= exitAt).flatMap(row => Array.from({ length: 4 }, (_, i) => {
+    const lower = parents.filter(row => row.openTime >= nextBlockStart).flatMap(row => Array.from({ length: 4 }, (_, i) => {
       const openTime = row.openTime + i * 900;
       const prices = i === 0 ? row : { open: row.close, high: row.close, low: row.close, close: row.close };
       return { ...prices, openTime, closeTime: openTime + 900, volume: row.volume / 4 };
@@ -123,7 +125,7 @@ describe('durable local analysis', () => {
 
     const pause = new AbortController();
     await executeLocalJob({ strategy: 'NEW_HIGH', settings: input }, view => {
-      if (view.phase === 'DATA' && view.blockStart === exitAt) pause.abort();
+      if (view.phase === 'DATA' && view.blockStart === nextBlockStart) pause.abort();
     }, pause.signal);
     const paused = (await loadLocalJob('NEW_HIGH'))!;
     expect(paused).toMatchObject({ status: 'PAUSED', completed: 128, total: 135, result: { entryCount: 1, openPositionCount: 1 } });
@@ -132,8 +134,9 @@ describe('durable local analysis', () => {
     await executeLocalJob({ strategy: 'NEW_HIGH', resumeId: paused.id }, () => {}, new AbortController().signal);
     const resumed = (await loadLocalJob('NEW_HIGH'))!;
     expect(resumed).toMatchObject({ id: paused.id, status: 'COMPLETED', completed: 135,
-      result: { exitReasons: { MA60_TOUCH: 1 }, openPositionCount: 0 } });
-    expect(vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === '15m').map(call => call.slice(2, 4))).toEqual([[exitAt, end]]);
+      result: { exitReasons: { NEW_HIGH_PREVIOUS_HIGH_CLOSE: 1 }, openPositionCount: 0 } });
+    expect(resumed.result?.recentTrades[0]).toMatchObject({ side: 'SHORT', entryAt: nextBlockStart, exitAt: nextBlockStart + 2 * hour });
+    expect(vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === '15m').map(call => call.slice(2, 4))).toEqual([[nextBlockStart, end]]);
     expect(fetcher).not.toHaveBeenCalled();
 
     await executeLocalJob({ strategy: 'NEW_HIGH', settings: input }, () => {}, new AbortController().signal);
@@ -150,9 +153,10 @@ describe('durable local analysis', () => {
     const firstParent = vi.mocked(ensureCandles).mock.calls.find(call => call[1] === interval);
     expect(firstParent?.[2]).toBe(origin - (20 * 86400 + 21 * seconds));
     if (paused.status === 'PAUSED') {
+      expect(canResumeLocalJob({ ...paused, version: '2.11.6' })).toBe(false);
       await executeLocalJob({ strategy: 'NEW_HIGH', settings: { ...input, betAmountUsdt: '1' }, resumeId: paused.id }, () => {}, new AbortController().signal);
     }
-    const completed = (await loadLocalJob('NEW_HIGH'))!; expect(completed.status).toBe('COMPLETED'); expect(completed.version).toBe('2.11.6');
+    const completed = (await loadLocalJob('NEW_HIGH'))!; expect(completed.status).toBe('COMPLETED'); expect(completed.version).toBe('2.11.7');
     expect(canResumeLocalJob({ ...completed, version: '2.10.93' })).toBe(false);
     expect(completed.id).toBe(paused.id); expect(completed.settings.newHighLookback).toBeUndefined(); expect(completed.settings.betAmountUsdt).toBe('100');
     expect(completed.settings.interval).toBe(interval); expect(completed.total).toBe((completed.end - completed.start) / seconds * 2);

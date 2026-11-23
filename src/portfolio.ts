@@ -188,7 +188,7 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   const market = [
     'SL', 'TRAILING_STOP', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE',
     'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'VOLATILITY_WICK_EXIT', 'NEXT_CANDLE_CLOSE',
-    'NEW_HIGH_PREVIOUS_LOW_CLOSE',
+    'NEW_HIGH_PREVIOUS_LOW_CLOSE', 'NEW_HIGH_PREVIOUS_HIGH_CLOSE',
     'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE', 'ENVELOPE_CLOSE_CONFIRM', 'ENVELOPE_CENTER', 'ENVELOPE_CENTER_RETURN',
     'ENVELOPE_BREAKOUT_CLOSE', 'CANDLE_BREAKOUT_REVERSAL_CLOSE',
   ].includes(reason);
@@ -207,7 +207,8 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   p.qty -= qty;
   state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + 1;
   recordFill(p, reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE', fill, qty, candle, opening,
-    reason === 'CANDLE_BREAKOUT_REVERSAL_CLOSE' || reason === 'NEW_HIGH_PREVIOUS_LOW_CLOSE' || reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT'
+    reason === 'CANDLE_BREAKOUT_REVERSAL_CLOSE' || reason === 'NEW_HIGH_PREVIOUS_LOW_CLOSE' || reason === 'NEW_HIGH_PREVIOUS_HIGH_CLOSE'
+    || reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT'
     || reason === 'VOLATILITY_CANDLE_EXIT' || reason === 'VOLATILITY_WICK_EXIT' || reason === 'ENVELOPE_MA20_CLOSE' || reason === 'ENVELOPE_CLOSE_CONFIRM'
     || reason === 'ENVELOPE_BREAKOUT_CLOSE');
   const withoutAtrStop = p.signal.strategy === 'ATR_ENVELOPE' && !hasFixedStop(p.signal);
@@ -1305,36 +1306,22 @@ function processNewHighHolding(state: PortfolioState, position: Holding, bar: Pr
   const { candle } = bar;
   if (candle.openTime < position.opened) return;
   const long = position.signal.side === 'LONG';
-  const { previousLow, ma60Touch } = bar.newHigh!;
-  const target = long ? null : ma60Touch;
-  const touchTolerance = target === null ? 0 : target * 1e-10;
 
   for (const row of bar.newHighIntrabarCandles ?? [candle]) {
-    const executionCandle = { ...row, parentOpenTime: candle.openTime };
     const stopAtOpen = long ? row.open <= position.stop : row.open >= position.stop;
-    if (stopAtOpen) {
-      close(state, position, row.open, position.qty, 'SL', executionCandle, true);
-      return;
-    }
-    if (target !== null && row.open <= target + touchTolerance) {
-      close(state, position, row.open, position.qty, 'MA60_TOUCH', executionCandle, true);
-      return;
-    }
-
-    // When both levels occur inside the same OHLC candle, their order is unknown.
     const stopped = long ? row.low <= position.stop : row.high >= position.stop;
-    if (stopped) {
-      close(state, position, position.stop, position.qty, 'SL', executionCandle);
-      return;
-    }
-    if (target !== null && row.low <= target + touchTolerance) {
-      close(state, position, target, position.qty, 'MA60_TOUCH', executionCandle);
+    if (stopAtOpen || stopped) {
+      const executionCandle = { ...row, parentOpenTime: candle.openTime };
+      close(state, position, stopAtOpen ? row.open : position.stop, position.qty, 'SL', executionCandle, stopAtOpen);
       return;
     }
   }
 
-  if (long && previousLow !== null && candle.close > position.entry && candle.close < previousLow) {
-    close(state, position, candle.close, position.qty, 'NEW_HIGH_PREVIOUS_LOW_CLOSE', candle);
+  const { previousLow, previousHigh } = bar.newHigh!;
+  const reversal = long ? previousLow !== null && candle.close > position.entry && candle.close < previousLow
+    : previousHigh !== null && candle.close < position.entry && candle.close > previousHigh;
+  if (reversal) {
+    close(state, position, candle.close, position.qty, long ? 'NEW_HIGH_PREVIOUS_LOW_CLOSE' : 'NEW_HIGH_PREVIOUS_HIGH_CLOSE', candle);
   } else {
     position.mark = candle.close;
   }
