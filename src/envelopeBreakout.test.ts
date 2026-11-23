@@ -34,12 +34,12 @@ function fixture(overrides: Record<number, Prices>, count: number, settings = de
 }
 
 describe('first envelope breakout at the selected candle close', () => {
-  it.each([['LONG', '1h'], ['SHORT', '4h'], ['LONG', '1d']] as const)('uses the midpoint for %s %s entry and only the later close for the band exit', (side, interval) => {
+  it.each([['LONG', '1h'], ['SHORT', '4h'], ['LONG', '1d']] as const)('uses two midpoints and a short wick for %s %s entry and only the later close for the band exit', (side, interval) => {
     const settings = { ...defaults, side, interval };
     const { candles, minutes, replay, seconds } = fixture({
-      0: [100, 106, 100, 102], // Exactly half outside, even though the close is inside.
-      1: [102, 106, 100, 106], // Midpoint and intrabar low return, but the close is outside.
-      2: [106, 115, 105, 108], // Midpoint stays outside and the close returns.
+      0: [100, 108, 100, 106], // The close-to-low midpoint is exactly at the band.
+      1: [106, 111, 100, 110], // Both midpoints return inside and the close stays outside.
+      2: [110, 120, 110, 112], // The close returns inside while the high-to-low midpoint stays outside.
     }, 3, settings);
     expect(replay(start + 2 * seconds)).toMatchObject({ entries: 1, closed: 0 });
     const result = runBacktest(candles, settings, 'ENVELOPE_BREAKOUT', undefined, undefined, undefined, undefined, undefined, minutes);
@@ -47,16 +47,16 @@ describe('first envelope breakout at the selected candle close', () => {
     const trade = result.recentTrades[0]!;
     expect(trade).toMatchObject({ side, entryAt: start + seconds, exitAt: start + 3 * seconds,
       signal: { strategy: 'ENVELOPE_BREAKOUT', envelopeMaPeriod: 1 } });
-    expect(trade.entryPrice).toBeCloseTo(side === 'LONG' ? 102 * 1.0002 : 98 * .9998, 9);
-    expect(trade.exitPrice).toBeCloseTo(side === 'LONG' ? 108 * .9998 : 92 * 1.0002, 9);
+    expect(trade.entryPrice).toBeCloseTo(side === 'LONG' ? 106 * 1.0002 : 94 * .9998, 9);
+    expect(trade.exitPrice).toBeCloseTo(side === 'LONG' ? 112 * .9998 : 88 * 1.0002, 9);
     expect(trade.executions.map(fill => fill.timing)).toEqual(['BAR_CLOSE', 'BAR_CLOSE']);
     expect(buildLocalChart(result, trade, settings).envelope?.bands.find(band => band.openTime === start))
       .toMatchObject({ upper: 103, lower: 97 });
   });
 
   it('excludes breakouts in exactly the previous five candles and uses each candle’s own band', () => {
-    const breakout: Prices = [100, 106, 100, 100];
-    const current: Prices = [102, 110, 102, 105];
+    const breakout: Prices = [100, 115, 100, 106]; // A band breakout with a wick too long for entry.
+    const current: Prices = [102, 113, 102, 109];
     const prior: Record<number, Prices> = { [-1]: [100, 102, 100, 102], 0: current };
     const blocked = fixture({ ...prior, [-5]: breakout }, 1);
     const blockedBar = blocked.prepare().bars[0]!;
@@ -64,19 +64,35 @@ describe('first envelope breakout at the selected candle close', () => {
     expect(envelopeEntryMayTouch(blockedBar, defaults)).toBe(false);
     expect(blocked.replay().entries).toBe(0);
     expect(fixture({ ...prior, [-6]: breakout }, 1).replay().entries).toBe(1);
-    expect(fixture({ ...prior, [-5]: [100, 105, 100, 100] }, 1).replay().entries).toBe(1);
-    expect(fixture({ 0: breakout }, 1, defaults, 5).replay().entries).toBe(0);
+    expect(fixture({ ...prior, [-5]: [100, 115, 100, 105] }, 1).replay().entries).toBe(1);
+    expect(fixture({ 0: current }, 1, defaults, 5).replay().entries).toBe(0);
   });
 
-  it('does not buy a close above the upper band with less than half outside or exit exactly on the band', () => {
-    expect(fixture({ 0: [100, 104, 100, 104] }, 1).replay().entries).toBe(0);
-    const replay = fixture({ 0: [100, 106, 100, 100], 1: [100, 104, 99, 103] }, 2).replay();
+  it.each(['LONG', 'SHORT'] as const)('requires both midpoint checks and a wick strictly shorter than the body for %s', side => {
+    const settings = { ...defaults, side };
+    const failsEntry: Prices[] = [
+      [100, 108, 100, 105], // Only the high-to-low midpoint crosses.
+      [100, 112, 100, 106], // Wick and body have equal length.
+      [100, 113, 100, 106], // Wick is longer than the body.
+      [100.1, 112.3, 100, 106.2], // Equal lengths represented by different floating-point differences.
+      [106, 106, 100, 106], // Zero-length wick and body.
+    ];
+    for (const prices of failsEntry) {
+      const { prepare, replay } = fixture({ 0: prices }, 1, settings);
+      expect(envelopeEntryMayTouch(prepare().bars[0]!, settings)).toBe(false);
+      expect(replay().entries).toBe(0);
+    }
+    expect(fixture({ 0: [110, 111, 103, 106] }, 1, settings).replay().entries).toBe(1);
+  });
+
+  it('keeps the position open when the next close equals the band', () => {
+    const replay = fixture({ 0: [100, 108, 100, 106], 1: [106, 111, 99, 106 * 1.03] }, 2).replay();
     expect(replay).toMatchObject({ entries: 1, closed: 0 });
   });
 
   it.each(['LONG', 'SHORT'] as const)('keeps %s open on a band-return close until the enabled fixed TP fills', side => {
     const settings = { ...defaults, side, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '4' };
-    const { replay, seconds } = fixture({ 0: [100, 108, 100, 104], 1: [104, 105, 100, 104], 2: [104, 111, 104, 104] }, 3, settings);
+    const { replay, seconds } = fixture({ 0: [100, 108, 100, 106], 1: [106, 107, 102, 106], 2: [106, 113, 105, 106] }, 3, settings);
     expect(replay(start + 2 * seconds)).toMatchObject({ entries: 1, closed: 0 });
     const result = replay();
     expect(result.exitReasons).toEqual({ ENVELOPE_TP: 1 });
@@ -87,7 +103,7 @@ describe('first envelope breakout at the selected candle close', () => {
 
   it('keeps the fill-relative fixed stop active when TP replaces the band-return rule', () => {
     const settings = { ...defaults, envelopeStopLossPercent: '3', envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '10' };
-    const result = fixture({ 0: [100, 108, 100, 104], 1: [104, 105, 99, 104] }, 2, settings).replay();
+    const result = fixture({ 0: [100, 108, 100, 106], 1: [106, 107, 100, 106] }, 2, settings).replay();
     expect(result.exitReasons).toEqual({ SL: 1 });
     const trade = result.trades[0]!;
     expect(trade.signal.stop).toBeCloseTo(trade.entryPrice * .97, 9);

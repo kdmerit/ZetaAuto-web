@@ -168,16 +168,19 @@ export function bandFor(center: number, percent: number): EnvelopeBand {
   return { center, upper: center * (1 + percent / 100), lower: center * (1 - percent / 100) };
 }
 
-export function envelopeMidpointBrokeBand(
-  candle: Pick<Candle, 'high' | 'low'>,
+function envelopeMidpointsBrokeBand(
+  candle: Pick<Candle, 'high' | 'low' | 'close'>,
   band: Pick<EnvelopeBand, 'lower' | 'upper'>,
   side: 'LONG' | 'SHORT',
 ): boolean {
-  const midpoint = (candle.high + candle.low) / 2;
-  return side === 'LONG' ? midpoint >= band.upper : midpoint <= band.lower;
+  const rangeMidpoint = (candle.high + candle.low) / 2;
+  const closeMidpoint = (candle.close + (side === 'LONG' ? candle.low : candle.high)) / 2;
+  return side === 'LONG'
+    ? closeMidpoint >= band.upper && rangeMidpoint >= band.upper
+    : closeMidpoint <= band.lower && rangeMidpoint <= band.lower;
 }
 
-/** Each of the five completed candles is compared with the band known at its own open. */
+/** Check each prior candle against its own band. Wick length filters the entry candle. */
 export function priorEnvelopeBreakoutAllows(candles: Candle[], centers: (number | null)[], index: number, percent: number): { long: boolean; short: boolean } {
   let long = true;
   let short = true;
@@ -186,20 +189,29 @@ export function priorEnvelopeBreakoutAllows(candles: Candle[], centers: (number 
     const center = centers[cursor];
     if (!candle || center == null || candle.closeTime !== candles[cursor + 1]?.openTime) return { long: false, short: false };
     const band = bandFor(center, percent);
-    long &&= !envelopeMidpointBrokeBand(candle, band, 'LONG');
-    short &&= !envelopeMidpointBrokeBand(candle, band, 'SHORT');
+    long &&= !envelopeMidpointsBrokeBand(candle, band, 'LONG');
+    short &&= !envelopeMidpointsBrokeBand(candle, band, 'SHORT');
   }
   return { long, short };
 }
 
-/** Use the close for close-only entries and the relevant extreme for touch entries. */
+/** Evaluate the strategy's entry condition using the candle available at entry. */
 export function envelopeEntryBandReached(
   candle: Candle,
   band: Pick<EnvelopeBand, 'lower' | 'upper'> & { breakout?: true },
   side: 'LONG' | 'SHORT',
   closeOnly: boolean,
 ): boolean {
-  if (band.breakout) return envelopeMidpointBrokeBand(candle, band, side);
+  if (band.breakout) {
+    if (!envelopeMidpointsBrokeBand(candle, band, side)) return false;
+    const body = Math.abs(candle.close - candle.open);
+    const wick = side === 'LONG'
+      ? candle.high - Math.max(candle.open, candle.close)
+      : Math.min(candle.open, candle.close) - candle.low;
+    // Decimal prices can produce slightly different differences for equal lengths.
+    const tolerance = Number.EPSILON * 8 * Math.max(candle.high, Math.abs(candle.low));
+    return wick < body - tolerance;
+  }
   const price = closeOnly ? candle.close : side === 'LONG' ? candle.low : candle.high;
   return Number.isFinite(price) && (side === 'LONG' ? price <= band.lower : price >= band.upper);
 }

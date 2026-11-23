@@ -1316,7 +1316,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
-  if (strategy === 'ENVELOPE_BREAKOUT') return '직전 5개 봉이 돌파하지 않고 현재 봉의 고가·저가 중간값이 상단 이상(롱) 또는 하단 이하(숏)이면 확정 종가에서 진입합니다. 이후 봉의 종가가 같은 밴드 안으로 들어오면 청산하며, TP사용을 켜면 고정 TP를 적용합니다.';
+  if (strategy === 'ENVELOPE_BREAKOUT') return '직전 5봉에 같은 방향의 돌파가 없을 때, 롱은 저가·종가와 저가·고가의 중간값이 모두 상단 이상이고 윗꼬리가 몸통보다 짧으면 확정 종가에 진입합니다. 숏은 고가·종가와 고가·저가의 중간값이 모두 하단 이하이고 아랫꼬리가 몸통보다 짧으면 진입합니다. 이후 봉의 종가가 같은 밴드 안으로 들어오면 청산하며, TP사용을 켜면 고정 TP를 적용합니다.';
   if (strategy === 'ATR_ENVELOPE') return '직전 완성봉까지의 EMA ± ATR × 배수로 밴드를 정합니다. 롱은 하단에서 진입해 상단에서 청산하고 숏은 반대로 적용합니다. SL 배수가 0보다 크면 같은 ATR × SL 배수만큼 실제 체결가 아래(롱) 또는 위(숏)에 손절가를 고정합니다. 매수 필터와 청산 조건은 1분봉 순서로 확인합니다.';
   if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return '현재 봉 종가가 이전 N봉 신고가·신저가를 처음 돌파하고 MA10/20 전환을 확인해 진입합니다. 선택한 돌파봉 크기 필터와 SL·TP 항목을 적용하며, 트레일링 스탑 선택 시 다음 15분봉부터 ATR 배수 연속 추적을 함께 적용합니다.';

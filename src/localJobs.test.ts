@@ -65,7 +65,7 @@ describe('durable local analysis', () => {
       envelopeMaPeriod: '240', envelopeDeviationPercent: '3', envelopeStopLossPercent: '20' };
     const parents: Candle[] = Array.from({ length: warmup + 25 }, (_, index) => {
       const offset = index - warmup;
-      const [open, high, low, close] = offset === 23 ? [100, 108, 100, 104] : offset === 24 ? [104, 105, 100, 102] : [100, 100, 100, 100];
+      const [open, high, low, close] = offset === 23 ? [100, 108, 100, 106] : offset === 24 ? [106, 107, 100, 102] : [100, 100, 100, 100];
       return { openTime: origin + offset * seconds, closeTime: origin + (offset + 1) * seconds,
         open: open!, high: high!, low: low!, close: close!, volume: 1 };
     });
@@ -81,6 +81,8 @@ describe('durable local analysis', () => {
     }, pause.signal);
     const paused = (await loadLocalJob('ENVELOPE_BREAKOUT'))!;
     expect(paused).toMatchObject({ status: 'PAUSED', blockStart: entryAt, result: { entryCount: 1, openPositionCount: 1 } });
+    expect(canResumeLocalJob(paused)).toBe(true);
+    expect(canResumeLocalJob({ ...paused, version: '2.11.3' })).toBe(false);
     expect(vi.mocked(ensureCandles).mock.calls[0]?.slice(1, 4)).toEqual(['1h', origin - warmup * seconds, entryAt]);
     expect(instrumentEligibility).not.toHaveBeenCalled();
 

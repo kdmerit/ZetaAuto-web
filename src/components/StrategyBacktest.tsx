@@ -10,7 +10,7 @@ import {
   type BacktestRequestBody,
 } from '../api';
 import { chartForLocalTrade, isLocalBacktestRunning, pauseLocalBacktest, restoreLocalBacktest, startLocalBacktest, subscribeLocalBacktest } from '../localBacktest';
-import { loadLocalResult, engineVersionFor, canResumeLocalJob, type LocalJobView } from '../localJobs';
+import { loadLocalResult, engineVersionFor, canResumeLocalJob, skipsSingleEnvelopeSlippage, type LocalJobView } from '../localJobs';
 import { estimateBars } from '../engine';
 import {
   loadBacktestHistory,
@@ -838,11 +838,11 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
             ) : usesEnvelopeBreakout ? (
               <div className="condition-copy">
                 <p>중심선은 직전 완료봉의 평균 종가입니다. 각 봉의 상·하단은 그 중심선과 입력한 이격률로 계산합니다.</p>
-                <p>돌파 판정에는 캔들의 고가와 저가를 더해 2로 나눈 중간값을 사용합니다.</p>
+                <p>직전 5봉은 두 중간값으로 각 봉의 당시 밴드 돌파 여부를 확인합니다. 같은 방향의 돌파가 없을 때 아래 진입 조건을 적용합니다.</p>
                 <strong>롱 포지션</strong>
-                <p>직전 5봉의 중간값이 각 봉의 상단 미만이고, 이번 봉의 중간값이 상단 이상이면 확정 종가에 진입합니다. 다음 봉부터 종가가 해당 봉의 상단 미만으로 확정되면 그 종가를 기준으로 청산합니다.</p>
+                <p>(저가 + 종가) ÷ 2와 (저가 + 고가) ÷ 2가 모두 상단 이상이고, 윗꼬리가 몸통보다 짧으면 확정 종가에 진입합니다. 다음 봉부터 종가가 해당 봉의 상단 미만으로 확정되면 그 종가를 기준으로 청산합니다.</p>
                 <strong>숏 포지션</strong>
-                <p>직전 5봉의 중간값이 각 봉의 하단 초과이고, 이번 봉의 중간값이 하단 이하이면 확정 종가에 진입합니다. 다음 봉부터 종가가 해당 봉의 하단 초과로 확정되면 그 종가를 기준으로 청산합니다.</p>
+                <p>(고가 + 종가) ÷ 2와 (고가 + 저가) ÷ 2가 모두 하단 이하이고, 아랫꼬리가 몸통보다 짧으면 확정 종가에 진입합니다. 다음 봉부터 종가가 해당 봉의 하단 초과로 확정되면 그 종가를 기준으로 청산합니다.</p>
                 <p>‘TP사용’을 켜면 밴드 복귀 종가 청산 대신 실제 체결가 기준 고정 TP를 사용합니다. 손절과 선택한 트레일링 스탑은 1분봉으로 확인합니다.</p>
               </div>
             ) : envelopeStrategy ? (
@@ -995,7 +995,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
               <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnlyEntryEnabled === true} disabled={usesEnvelopeBreakout} onChange={event => update('envelopeCloseOnlyEntryEnabled', event.target.checked)} /><span>종가에서만 매수</span></label>
               <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} disabled={usesEnvelopeBreakout} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />
-              {usesEnvelopeBreakout ? <p className="muted small">직전 5봉에 돌파가 없고 현재 캔들의 절반 이상이 밴드 밖에 있으면 종가에 진입합니다. 밴드 복귀도 종가로 확인합니다.</p> : null}
+              {usesEnvelopeBreakout ? <p className="muted small">직전 5봉에 돌파가 없고 두 중간값이 밴드를 돌파하면, 윗꼬리(롱)·아랫꼬리(숏)가 몸통보다 짧을 때 종가에 진입합니다.</p> : null}
               <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
               {usesAtrEnvelope ? <>
                 <h2>ATR 엔벨로프 설정</h2>
@@ -1078,7 +1078,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           {notice && notice !== error ? <p className="notice">{notice}</p> : null}
           {error ? <p className="error" role="alert">{error}</p> : null}
           {running || localJob?.status === 'PAUSED' ? <ProgressBar completed={progress.completed} total={progress.total || Math.max(estimateBars(settings), 1)} label={progress.phase} /> : null}
-          {localJob ? <p className="muted small">분석 대상 {localJob.universeCount.toLocaleString()}종목{envelopeStrategy && localJob.settings.mode === 'SINGLE' && localJob.version === engineVersionFor(strategy) ? ' · 슬리피지 검사 안 함' : ` · 슬리피지 제외 ${localJob.excludedCount.toLocaleString()}종목`}{localJob.failedSymbols.length ? ` · 캔들 누락 제외 ${localJob.failedSymbols.length}종목` : ''}{localJob.status === 'COMPLETED' ? ' · 완료' : localJob.status === 'PAUSED' ? ' · 일시정지' : ''}</p> : null}
+          {localJob ? <p className="muted small">분석 대상 {localJob.universeCount.toLocaleString()}종목{skipsSingleEnvelopeSlippage(localJob) ? ' · 슬리피지 검사 안 함' : ` · 슬리피지 제외 ${localJob.excludedCount.toLocaleString()}종목`}{localJob.failedSymbols.length ? ` · 캔들 누락 제외 ${localJob.failedSymbols.length}종목` : ''}{localJob.status === 'COMPLETED' ? ' · 완료' : localJob.status === 'PAUSED' ? ' · 일시정지' : ''}</p> : null}
           {localJob?.settings.mode === 'ALL' && localJob.universeCheckedAt ? <p className="muted small">전체종목 필터: {new Date(localJob.universeCheckedAt).toLocaleString('ko-KR')} 검사 · 7일 공통 재사용</p> : null}
           {activeServer ? <ProgressBar completed={serverJob.completedBars} total={Math.max(serverJob.totalBars, 1)} label={`${serverJob.phase === 'UNIVERSE' ? '종목 확인' : serverJob.phase === 'DATA' ? '캔들 조회' : '전략 계산'} · ${serverJob.status === 'QUEUED' ? '대기 중' : '분석 중'}`} /> : null}
         </section>

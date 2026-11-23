@@ -26,7 +26,7 @@ export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
   if (strategy === 'ATR_ENVELOPE') return '2.10.100';
   if (strategy === 'CANDLE_BREAKOUT') return '2.10.106';
-  if (strategy === 'ENVELOPE_BREAKOUT') return '2.11.3';
+  if (strategy === 'ENVELOPE_BREAKOUT') return '2.11.4';
   return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.93' : strategy === 'ENVELOPE' ? envelopeLocalJobVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
@@ -109,9 +109,9 @@ function blockSize(job: LocalJob): number {
   return job.settings.envelopeExecutionModel === 'MINUTE_POLL' ? Math.min(size, Math.max(1, Math.floor(86400 / intervalSeconds(job.settings.interval)))) : size;
 }
 
-function skipsSingleEnvelopeSlippage(job: Pick<LocalJob, 'strategy' | 'settings' | 'version'>): boolean {
+export function skipsSingleEnvelopeSlippage(job: Pick<LocalJob, 'strategy' | 'settings' | 'version'>): boolean {
   return isEnvelopeStrategy(job.strategy) && job.settings.mode === 'SINGLE'
-    && job.version === engineVersionFor(job.strategy);
+    && (job.strategy === 'ENVELOPE_BREAKOUT' || job.version === engineVersionFor(job.strategy));
 }
 
 function applyInstrumentEligibility(prepared: PreparedSymbol, instrument: EligibleInstrument): void {
