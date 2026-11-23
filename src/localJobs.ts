@@ -5,7 +5,7 @@ import { envelopeEntryMayTouch, prepareSymbolBlock, type PreparedSymbol, type Wa
 import { analysisWindow, completedCandleEnd, ensureCandles, instrumentEligibility, isMissingCandleError, listInstruments, refreshMismatchedLowerTimeframes, type EligibleInstrument, type Instrument } from './marketData';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock, type PortfolioState } from './portfolio';
 import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar';
-import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvelopeSettings, currentPullbackSettings, envelopeLocalJobVersion, envelopeParameters, envelopeWarmupBars, isEnvelopeStrategy } from './envelope';
+import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvelopeBreakoutSettings, currentEnvelopeSettings, currentPullbackSettings, envelopeBreakoutLookback, envelopeLocalJobVersion, envelopeParameters, envelopeWarmupBars, isEnvelopeStrategy, isSmaEnvelopeStrategy } from './envelope';
 import { envelopeCandleDataStart } from './envelopeCandleFilter';
 import { currentNewHighSettings, newHighExecutionInterval, newHighWarmup } from './newHigh';
 import { currentReferenceSettings } from './reference';
@@ -26,6 +26,7 @@ export const localEngineVersion = '2.10.26';
 export function engineVersionFor(strategy: Strategy): string {
   if (strategy === 'ATR_ENVELOPE') return '2.10.100';
   if (strategy === 'CANDLE_BREAKOUT') return '2.10.106';
+  if (strategy === 'ENVELOPE_BREAKOUT') return '2.11.3';
   return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'NEW_HIGH' ? '2.10.93' : strategy === 'ENVELOPE' ? envelopeLocalJobVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
@@ -193,10 +194,11 @@ async function executeWithLease(
       const copied = structuredClone(options.settings);
       const settings = options.strategy === 'NEW_HIGH' ? currentNewHighSettings(copied)
         : options.strategy === 'ENVELOPE' ? currentEnvelopeSettings({ ...copied, envelopeTakeProfitReplacesBand: true })
+        : options.strategy === 'ENVELOPE_BREAKOUT' ? currentEnvelopeBreakoutSettings(copied)
         : options.strategy === 'ATR_ENVELOPE' ? currentAtrEnvelopeSettings(copied)
         : options.strategy === 'PULLBACK' ? currentPullbackSettings(copied)
         : options.strategy === 'REFERENCE' ? currentReferenceSettings(copied) : copied;
-      if (options.strategy === 'ENVELOPE') envelopeParameters(settings);
+      if (isSmaEnvelopeStrategy(options.strategy)) envelopeParameters(settings);
       if (options.strategy === 'ATR_ENVELOPE') atrEnvelopeBacktestParameters(settings);
       const { start, end } = analysisWindow(settings);
       previousJob = await readValue<SavedJob>('jobs', options.strategy);
@@ -260,7 +262,10 @@ async function executeWithLease(
       await checkpoint();
     }
     const seconds = intervalSeconds(job.settings.interval);
-    const warmupBars = job.strategy === 'ENVELOPE' ? Math.max(envelopeWarmupBars, envelopeParameters(job.settings).period) : envelopeWarmupBars;
+    const extraWarmup = job.strategy === 'ENVELOPE_BREAKOUT' ? envelopeBreakoutLookback : 0;
+    const warmupBars = isSmaEnvelopeStrategy(job.strategy)
+      ? Math.max(envelopeWarmupBars, envelopeParameters(job.settings).period + extraWarmup)
+      : envelopeWarmupBars;
     const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings)
       : job.strategy === 'CANDLE_BREAKOUT' ? candleBreakoutWarmup(job.settings) : warmupBars * seconds;
     while (job.blockStart < job.end) {

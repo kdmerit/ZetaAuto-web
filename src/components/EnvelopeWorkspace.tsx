@@ -104,23 +104,25 @@ function StatisticsPage({ onChoose }: { onChoose: (settings: BacktestSettings) =
   </div>;
 }
 
-export function EnvelopeWorkspace({ context, strategy = 'ENVELOPE' }: { context: ApiContext; strategy?: 'ENVELOPE' | 'ATR_ENVELOPE' }) {
+export function EnvelopeWorkspace({ context, strategy = 'ENVELOPE' }: { context: ApiContext; strategy?: 'ENVELOPE' | 'ATR_ENVELOPE' | 'ENVELOPE_BREAKOUT' }) {
   const usesAtr = strategy === 'ATR_ENVELOPE';
-  const availableViews = usesAtr ? views.slice(0, 2) : views;
-  const viewKey = usesAtr ? 'zetaauto.web.atrEnvelope.view' : 'zetaauto.web.envelope.view';
-  const title = usesAtr ? 'ATR 엔벨로프 백테스트' : '엔벨로프 백테스트';
+  const breakout = strategy === 'ENVELOPE_BREAKOUT';
+  const hasStatistics = strategy === 'ENVELOPE';
+  const availableViews = hasStatistics ? views : views.slice(0, 2);
+  const viewKey = breakout ? 'zetaauto.web.envelopeBreakout.view' : usesAtr ? 'zetaauto.web.atrEnvelope.view' : 'zetaauto.web.envelope.view';
+  const title = breakout ? '엔벨돌파 백테스트' : usesAtr ? 'ATR 엔벨로프 백테스트' : '엔벨로프 백테스트';
   const [preset, setPreset] = useState<BacktestSettings>();
   const [view, setView] = useState<View>(() => {
     try {
       const saved = localStorage.getItem(viewKey);
-      if (!usesAtr && saved === 'ALL_STATS') return 'SINGLE_STATS';
+      if (hasStatistics && saved === 'ALL_STATS') return 'SINGLE_STATS';
       return availableViews.find(item => item.id === saved)?.id ?? 'SINGLE';
     } catch { return 'SINGLE'; }
   });
   const navigate = (next: View): void => { setPreset(undefined); setView(next); try { localStorage.setItem(viewKey, next); } catch { /* Optional preference. */ } };
   const choose = (settings: BacktestSettings): void => { const selected = { ...settings, mode: 'SINGLE' as const }; saveSettings('ENVELOPE', selected); navigate('SINGLE'); setPreset(selected); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-  return <main className="screen"><div className="content strategy-content envelope-workspace"><header className="page-header strategy-header"><div><p className="eyebrow">{usesAtr ? 'ATR ENVELOPE' : 'ENVELOPE'} · BACKTEST</p><h1>{title}</h1></div></header>
-    <h2>분석 대상</h2><div className={`segmented${usesAtr ? '' : ' three'} envelope-mode-tabs`} role="group" aria-label="엔벨로프 분석 대상">{availableViews.map(item => <button key={item.id} type="button" aria-pressed={view === item.id} className={view === item.id ? 'selected' : ''} onClick={() => navigate(item.id)}>{item.label}</button>)}</div>
+  return <main className="screen"><div className="content strategy-content envelope-workspace"><header className="page-header strategy-header"><div><p className="eyebrow">{breakout ? 'ENVELOPE BREAKOUT' : usesAtr ? 'ATR ENVELOPE' : 'ENVELOPE'} · BACKTEST</p><h1>{title}</h1></div></header>
+    <h2>분석 대상</h2><div className={`segmented${hasStatistics ? ' three' : ''} envelope-mode-tabs`} role="group" aria-label="엔벨로프 분석 대상">{availableViews.map(item => <button key={item.id} type="button" aria-pressed={view === item.id} className={view === item.id ? 'selected' : ''} onClick={() => navigate(item.id)}>{item.label}</button>)}</div>
     {view === 'SINGLE_STATS' ? <StatisticsPage onChoose={choose} /> : <StrategyBacktest key={view} strategy={strategy} context={context} embedded forcedMode={view} preferredSettings={view === 'SINGLE' ? preset : undefined} />}
   </div></main>;
 }

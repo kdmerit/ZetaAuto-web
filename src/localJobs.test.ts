@@ -56,6 +56,40 @@ beforeEach(async () => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('durable local analysis', () => {
+  it('resumes an envelope breakout across minute-replay blocks with all 245 warmup candles', async () => {
+    const seconds = 3600;
+    const warmup = 245;
+    const entryAt = origin + 24 * seconds;
+    const exitAt = entryAt + seconds;
+    const input: BacktestSettings = { ...settings, mode: 'SINGLE', side: 'LONG', endDate: '2026-01-02', endTime: '10:00',
+      envelopeMaPeriod: '240', envelopeDeviationPercent: '3', envelopeStopLossPercent: '20' };
+    const parents: Candle[] = Array.from({ length: warmup + 25 }, (_, index) => {
+      const offset = index - warmup;
+      const [open, high, low, close] = offset === 23 ? [100, 108, 100, 104] : offset === 24 ? [104, 105, 100, 102] : [100, 100, 100, 100];
+      return { openTime: origin + offset * seconds, closeTime: origin + (offset + 1) * seconds,
+        open: open!, high: high!, low: low!, close: close!, volume: 1 };
+    });
+    const minutes = minuteRows(parents.slice(warmup));
+    vi.mocked(listInstruments).mockResolvedValue([{ symbol: 'AAAUSDT', launchAt: origin - warmup * seconds }]);
+    vi.mocked(instrumentEligibility).mockClear();
+    vi.mocked(ensureCandles).mockImplementation(async (_instrument, interval, from, end) =>
+      (interval === '1m' ? minutes : parents).filter(candle => candle.openTime >= from && candle.closeTime <= end));
+
+    const pause = new AbortController();
+    await executeLocalJob({ strategy: 'ENVELOPE_BREAKOUT', settings: input }, view => {
+      if (view.phase === 'DATA' && view.blockStart === entryAt) pause.abort();
+    }, pause.signal);
+    const paused = (await loadLocalJob('ENVELOPE_BREAKOUT'))!;
+    expect(paused).toMatchObject({ status: 'PAUSED', blockStart: entryAt, result: { entryCount: 1, openPositionCount: 1 } });
+    expect(vi.mocked(ensureCandles).mock.calls[0]?.slice(1, 4)).toEqual(['1h', origin - warmup * seconds, entryAt]);
+    expect(instrumentEligibility).not.toHaveBeenCalled();
+
+    await executeLocalJob({ strategy: 'ENVELOPE_BREAKOUT', resumeId: paused.id }, () => {}, new AbortController().signal);
+    const completed = (await loadLocalJob('ENVELOPE_BREAKOUT'))!;
+    expect(completed).toMatchObject({ status: 'COMPLETED', result: { exitReasons: { ENVELOPE_BREAKOUT_CLOSE: 1 } } });
+    expect(completed.result?.recentTrades[0]).toMatchObject({ entryAt, exitAt });
+  });
+
   it('resumes the NEW_HIGH 640/759 checkpoint and completes a fresh run using cached closed daily candles', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-11-11T06:29:00Z'));

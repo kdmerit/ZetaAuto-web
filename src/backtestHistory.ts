@@ -1,5 +1,5 @@
 import type { BacktestSettings, Strategy } from './types';
-import { defaultEnvelopeTakeProfitPercent } from './envelope';
+import { defaultEnvelopeTakeProfitPercent, isEnvelopeStrategy, isSmaEnvelopeStrategy } from './envelope';
 import { isCurrentEnvelopeStatisticsVersion, statisticsCenterRange, statisticsPercentRange, usesCustomStatisticsRanges, usesOptimizedEnvelopeStopLoss } from './envelopeStatistics';
 import { statisticsRangeLabels } from './envelopeStatisticsRanges';
 
@@ -110,7 +110,7 @@ export function formatBacktestHistorySettings(
     return values;
   }
 
-  if (strategy === 'ENVELOPE' || strategy === 'ATR_ENVELOPE') {
+  if (isEnvelopeStrategy(strategy)) {
     addEnabled(values, settings.envelopeMa20Enabled === true, 'MA20 위·아래 방향 필터');
     addEnabled(values, settings.envelopeCloseOnCenterReturn === true, '중심선 터치후 이탈시 매도');
     addEnabled(values, strategy === 'ENVELOPE' && settings.envelopeCloseOnCenterTouch === true, '중심선 터치시 청산');
@@ -138,7 +138,7 @@ export function formatBacktestHistorySettings(
       add(values, '엔벨로프 이격', `${settings.envelopeDeviationPercent ?? '3'}%`);
       add(values, 'SL', `${settings.envelopeStopLossPercent ?? '3'}%`);
     }
-    addEnabled(values, strategy === 'ENVELOPE' && settings.envelopeTakeProfitEnabled === true && !searchesTakeProfit, 'TP', `${settings.envelopeTakeProfitPercent ?? defaultEnvelopeTakeProfitPercent}%`);
+    addEnabled(values, isSmaEnvelopeStrategy(strategy) && settings.envelopeTakeProfitEnabled === true && !searchesTakeProfit, 'TP', `${settings.envelopeTakeProfitPercent ?? defaultEnvelopeTakeProfitPercent}%`);
     addEnabled(values, settings.envelopeTrailingStopEnabled === true, '트레일링 스탑', `${settings.envelopeTrailingStopPercent ?? '3'}%`);
 
     if (statistics) {

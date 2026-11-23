@@ -1,6 +1,6 @@
 import { enrichCandles, intervalSeconds } from './api';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
-import { atrEnvelopeBacktestParameters, bandFor, currentAtrEnvelopeSettings, envelopeEntryBandReached, envelopeHalfCandleAllowsEntry, envelopeParameters, isEnvelopeStrategy, priorMovingAverages, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
+import { atrEnvelopeBacktestParameters, bandFor, currentAtrEnvelopeSettings, currentEnvelopeBreakoutSettings, envelopeEntryBandReached, envelopeHalfCandleAllowsEntry, envelopeParameters, isEnvelopeStrategy, isSmaEnvelopeStrategy, priorEnvelopeBreakoutAllows, priorMovingAverages, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
 import { envelopeCandleContexts, type EnvelopeCandleContext } from './envelopeCandleFilter';
 import { prepareNewHigh, type PreparedNewHigh } from './newHigh';
 import { referenceTpPercent } from './reference';
@@ -537,6 +537,7 @@ function referenceSignals(
 export interface PreparedEnvelope extends EnvelopeBand {
   long: boolean;
   short: boolean;
+  breakout?: true;
   atrEnvelope?: AtrEnvelopeParameters;
   atrEnvelopeStopDistance?: number;
   priorUpperTouch?: boolean;
@@ -618,7 +619,8 @@ export function prepareSymbolBlock(
     }]) };
   }
   if (isEnvelopeStrategy(strategy)) {
-    const sma = strategy === 'ENVELOPE' ? envelopeParameters(settings) : undefined;
+    const breakout = strategy === 'ENVELOPE_BREAKOUT';
+    const sma = isSmaEnvelopeStrategy(strategy) ? envelopeParameters(settings) : undefined;
     const atr = strategy === 'ATR_ENVELOPE' ? atrEnvelopeBacktestParameters(settings) : undefined;
     const centers = sma ? priorMovingAverages(candles, sma.period) : [];
     const useAtr = atr !== undefined && atrEnvelopeEnabled(atr.band);
@@ -626,7 +628,7 @@ export function prepareSymbolBlock(
     const priorMa20 = priorMovingAverages(candles, 19);
     const seconds = intervalSeconds(settings.interval);
     const envelopeGroups = new Map<number, Candle[]>();
-    const minutePoll = settings.envelopeExecutionModel === 'MINUTE_POLL';
+    const minutePoll = breakout || settings.envelopeExecutionModel === 'MINUTE_POLL';
     const candleContexts = settings.envelopeCandleFilterEnabled === true ? envelopeCandleContexts(envelopeIntrabarCandles ?? [],
       minutePoll ? new Set(candles.filter(candle => candle.openTime >= start && candle.openTime < end).map(candle => candle.openTime)) : undefined) : undefined;
     for (const intrabar of envelopeIntrabarCandles ?? []) {
@@ -649,6 +651,7 @@ export function prepareSymbolBlock(
       }
       if (candle.openTime < start || candle.openTime >= end) return [];
       const children = envelopeGroups.get(candle.openTime)?.sort((a, b) => a.openTime - b.openTime);
+      const breakoutSides = breakout && sma && band ? priorEnvelopeBreakoutAllows(candles, centers, index, sma.percent) : undefined;
       // A partial first candle has no earlier closes for a band. Its minutes only inform candle shape history.
       const partialFirstBar = minutePoll && !band && index === 0 && children !== undefined && children[0]!.openTime > candle.openTime;
       return [{ candle, signal: null, ma20: candle.ma20, ma60Exit: null,
@@ -657,7 +660,9 @@ export function prepareSymbolBlock(
           : candleContexts ? { envelopeCandleContexts: candleContexts } : {}),
         ...(children && !partialFirstBar ? { envelopeIntrabarCandles: children } : {}),
         ...(band ? { envelope: {
-          ...band, long: settings.side !== 'SHORT', short: settings.side !== 'LONG',
+          ...band, ...(breakout ? { breakout: true as const } : {}),
+          long: settings.side !== 'SHORT' && breakoutSides?.long !== false,
+          short: settings.side !== 'LONG' && breakoutSides?.short !== false,
         } } : {}),
       }];
     });
@@ -1109,6 +1114,7 @@ export function runBacktest(
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
   if (strategy === 'VOLATILITY' || isEnvelopeStrategy(strategy) || strategy === 'NEW_HIGH' || strategy === 'PULLBACK' || strategy === 'REFERENCE' || strategy === 'CANDLE_BREAKOUT') {
     if (strategy === 'ATR_ENVELOPE') settings = currentAtrEnvelopeSettings(settings);
+    if (strategy === 'ENVELOPE_BREAKOUT') settings = currentEnvelopeBreakoutSettings(settings);
     const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
     const start = candles[0]!.openTime;
     const end = candles.at(-1)!.closeTime;
@@ -1251,9 +1257,9 @@ export function buildLocalChart(
       lines.push(...(trade.priceLines ?? []).filter(value => value.kind === 'TRAILING_SL'));
     } else if (signal.strategy !== 'ENVELOPE' || signal.exitMode !== 'ENVELOPE_MA20_CLOSE') {
       if (signal.strategy !== 'NEW_HIGH' || signal.newHighSlEnabled !== false) lines.push(line('SL', signal.activeStop ?? signal.stop));
-      if (signal.strategy === 'ENVELOPE') {
-        if (signal.envelopeTakeProfitReplacesBand !== true || signal.envelopeExitMode === 'CENTER') lines.push(line('TP', signal.target));
-        lines.push(...(trade.priceLines ?? []).filter(value => value.kind === 'FIXED_TP'));
+      if (isSmaEnvelopeStrategy(signal.strategy)) {
+        if (signal.strategy === 'ENVELOPE' && (signal.envelopeTakeProfitReplacesBand !== true || signal.envelopeExitMode === 'CENTER')) lines.push(line('TP', signal.target));
+        lines.push(...(trade.priceLines ?? []).filter(value => value.kind === 'FIXED_TP' || signal.strategy === 'ENVELOPE_BREAKOUT' && value.kind === 'TRAILING_SL'));
       }
     }
     if (signal.strategy === 'NEW_HIGH' && signal.newHighSlEnabled !== false && signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
@@ -1299,7 +1305,7 @@ export function buildLocalChart(
     priceLines: lines.filter((value): value is PriceLine => value !== null),
     exitReason: trade.reason,
     exitProfit: trade.netProfitUsdt > 0,
-    ...(signal.strategy === 'ENVELOPE' || signal.exitMode === 'PULLBACK_ENVELOPE' ? { envelope: projectEnvelopeBands(result.candles, candles, {
+    ...(isSmaEnvelopeStrategy(signal.strategy) || signal.exitMode === 'PULLBACK_ENVELOPE' ? { envelope: projectEnvelopeBands(result.candles, candles, {
       interval, period: signal.envelopeMaPeriod ?? Number(settings.envelopeMaPeriod ?? '20'),
       deviationPercent: signal.envelopeDeviationPercent ?? Number(settings.envelopeDeviationPercent ?? '5.0'),
     }) } : {}),
@@ -1310,6 +1316,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
+  if (strategy === 'ENVELOPE_BREAKOUT') return '직전 5개 봉이 돌파하지 않고 현재 봉의 고가·저가 중간값이 상단 이상(롱) 또는 하단 이하(숏)이면 확정 종가에서 진입합니다. 이후 봉의 종가가 같은 밴드 안으로 들어오면 청산하며, TP사용을 켜면 고정 TP를 적용합니다.';
   if (strategy === 'ATR_ENVELOPE') return '직전 완성봉까지의 EMA ± ATR × 배수로 밴드를 정합니다. 롱은 하단에서 진입해 상단에서 청산하고 숏은 반대로 적용합니다. SL 배수가 0보다 크면 같은 ATR × SL 배수만큼 실제 체결가 아래(롱) 또는 위(숏)에 손절가를 고정합니다. 매수 필터와 청산 조건은 1분봉 순서로 확인합니다.';
   if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';
   if (strategy === 'NEW_HIGH') return '현재 봉 종가가 이전 N봉 신고가·신저가를 처음 돌파하고 MA10/20 전환을 확인해 진입합니다. 선택한 돌파봉 크기 필터와 SL·TP 항목을 적용하며, 트레일링 스탑 선택 시 다음 15분봉부터 ATR 배수 연속 추적을 함께 적용합니다.';

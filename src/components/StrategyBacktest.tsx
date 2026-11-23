@@ -35,7 +35,7 @@ import { chartTimestamp, mergeChartPages } from '../chartData';
 import { chartAtInterval, withChartExecutionTimes } from '../chartIntervals';
 import { serverSettingsSnapshot } from '../backtestSettings';
 import { ProgressBar } from './ProgressBar';
-import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvelopeSettings, currentPullbackSettings, defaultAtrEnvelopeStopMultiplier, defaultEnvelopeTakeProfitPercent, envelopeMaxPeriod, envelopeParameters, envelopePeriod, isEnvelopeStrategy, pullbackEnvelopeParameters } from '../envelope';
+import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvelopeBreakoutSettings, currentEnvelopeSettings, currentPullbackSettings, defaultAtrEnvelopeStopMultiplier, defaultEnvelopeTakeProfitPercent, envelopeMaxPeriod, envelopeParameters, envelopePeriod, isEnvelopeStrategy, isSmaEnvelopeStrategy, pullbackEnvelopeParameters } from '../envelope';
 import { atrEnvelopeFields, atrEnvelopeMultiplierInput, defaultAtrEnvelopeInputs } from '../marketIndicators';
 import { EnvelopeMa20Control } from './EnvelopeMa20Control';
 import { EnvelopeCenterReturnControl } from './EnvelopeCenterReturnControl';
@@ -58,6 +58,7 @@ function strategySettings(strategy: Strategy, settings: BacktestSettings): Backt
     case 'REFERENCE': return currentReferenceSettings(settings);
     case 'ENVELOPE': return currentEnvelopeSettings(settings);
     case 'ATR_ENVELOPE': return currentAtrEnvelopeSettings(settings);
+    case 'ENVELOPE_BREAKOUT': return currentEnvelopeBreakoutSettings(settings);
     case 'PULLBACK': return currentPullbackSettings(settings);
     default: return settings;
   }
@@ -66,6 +67,7 @@ function strategySettings(strategy: Strategy, settings: BacktestSettings): Backt
 const strategyTitles: Record<Strategy, string> = {
   NEW_HIGH: '신고가', CANDLE_BREAKOUT: '캔들돌파', REFERENCE: '기준봉', PULLBACK: '눌림목',
   DISPARITY: '이격매매', ENVELOPE: '엔벨로프', ATR_ENVELOPE: 'ATR 엔벨로프', VOLATILITY: '변동성 돌파',
+  ENVELOPE_BREAKOUT: '엔벨돌파',
 };
 
 interface StrategyBacktestProps {
@@ -86,6 +88,8 @@ function defaultStartDate(): string {
 
 export function defaultSettings(strategy?: Strategy): BacktestSettings {
   const envelope = isEnvelopeStrategy(strategy);
+  const smaEnvelope = isSmaEnvelopeStrategy(strategy);
+  const envelopeBreakout = strategy === 'ENVELOPE_BREAKOUT';
   return {
     mode: 'SINGLE',
     symbol: 'BTC',
@@ -112,7 +116,7 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     volatilityMa10DistancePercent: '1',
     volatilityMa60Enabled: false,
     volatilityMa60BelowEnabled: false,
-    envelopeDeviationPercent: strategy === 'ATR_ENVELOPE' ? undefined : strategy === 'ENVELOPE' ? '3' : '0.5',
+    envelopeDeviationPercent: strategy === 'ATR_ENVELOPE' ? undefined : smaEnvelope ? '3' : '0.5',
     ...(strategy === 'ATR_ENVELOPE' ? { atrEnvelope: { ...defaultAtrEnvelopeInputs }, atrEnvelopeStopMultiplier: defaultAtrEnvelopeStopMultiplier } : {}),
     envelopeStatisticsInterval: strategy === 'ENVELOPE' ? '1d' : undefined,
     envelopeMaPeriod: strategy === 'ATR_ENVELOPE' ? undefined : String(envelopePeriod),
@@ -123,15 +127,15 @@ export function defaultSettings(strategy?: Strategy): BacktestSettings {
     envelopeMa20BelowEnabled: false,
     envelopeCloseOnConfirmedBreakout: false,
     envelopeCloseOnCenterReturn: false,
-    envelopeCloseOnCenterTouch: strategy === 'ENVELOPE' ? false : undefined,
+    envelopeCloseOnCenterTouch: smaEnvelope ? false : undefined,
     envelopeSideRatio50Enabled: false,
-    envelopeStopLossPercent: strategy === 'ENVELOPE' ? '3' : undefined,
-    envelopeTakeProfitEnabled: strategy === 'ENVELOPE' ? false : undefined,
-    envelopeTakeProfitPercent: strategy === 'ENVELOPE' ? defaultEnvelopeTakeProfitPercent : undefined,
+    envelopeStopLossPercent: smaEnvelope ? '3' : undefined,
+    envelopeTakeProfitEnabled: smaEnvelope ? false : undefined,
+    envelopeTakeProfitPercent: smaEnvelope ? defaultEnvelopeTakeProfitPercent : undefined,
     envelopeTrailingStopEnabled: envelope ? false : undefined,
     envelopeTrailingStopPercent: envelope ? '3' : undefined,
-    envelopeCloseOnlyEntryEnabled: false,
-    envelopeHalfCandleEnabled: envelope,
+    envelopeCloseOnlyEntryEnabled: envelopeBreakout,
+    envelopeHalfCandleEnabled: envelope && !envelopeBreakout,
     envelopeCandleFilterEnabled: false,
     newHighLookback: '20',
     newHighBreakoutCandleMinEnabled: false,
@@ -219,6 +223,7 @@ const reasonLabels: Record<string, string> = {
   ENVELOPE_MA20_CLOSE: '엔벨로프 MA20 이탈 종가 청산',
   ENVELOPE_CLOSE_CONFIRM: '엔벨로프 돌파 종가 확정 청산',
   ENVELOPE_CENTER_RETURN: '엔벨로프 중심선 터치 후 이탈 청산',
+  ENVELOPE_BREAKOUT_CLOSE: '엔벨돌파 밴드 복귀 종가 청산',
   NEW_HIGH_TRAILING: '트레일링 스탑 청산',
   NEW_HIGH_NEXT_CANDLE_BREAK: '다음 캔들 진입봉 저가·고가 이탈 청산',
   NEW_HIGH_TP: '신고가 TP 청산',
@@ -284,6 +289,7 @@ function restoredServerJob(entry: BacktestHistoryEntry): ServerJob {
 export function StrategyBacktest({ strategy, context, embedded = false, forcedMode, preferredSettings }: StrategyBacktestProps) {
   const envelopeStrategy = isEnvelopeStrategy(strategy);
   const usesAtrEnvelope = strategy === 'ATR_ENVELOPE';
+  const usesEnvelopeBreakout = strategy === 'ENVELOPE_BREAKOUT';
   const defaults = useMemo(() => strategySettings(strategy, strategy === 'PULLBACK' ? { ...defaultSettings(), envelopeDeviationPercent: undefined } : defaultSettings(strategy)), [strategy]);
   const [settings, setSettings] = useState<BacktestSettings>(() => {
     const value = { ...(preferredSettings ?? loadSettings(strategy, defaults)), ...(forcedMode ? { mode: forcedMode } : {}), ...(forcedMode === 'ALL' ? { envelopeRisk: undefined } : {}) };
@@ -393,7 +399,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
       }
       if (local && (!forcedMode || local.settings.mode === forcedMode)) { receive(local); return; }
       if (forcedMode) {
-        const entry = loadBacktestHistory(strategy, forcedMode, historyScopeSymbol(fallback))[0];
+        const entry = loadBacktestHistory(strategy, forcedMode, historyScopeSymbol(fallback)).find(item => item.strategy === strategy);
         const saved = entry?.localRunId ? await loadLocalResult(entry.localRunId) : null;
         if (saved && requestId === resultRequestRef.current) { setResult(saved.result); analysisSettingsRef.current = { ...defaults, ...saved.settings }; }
         return;
@@ -490,7 +496,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     if (!/^\d{1,4}(\.\d{1,2})?$/.test(settings.leverage) || Number(settings.leverage) < 1 || Number(settings.leverage) > leverageMaximum) throw new Error(`레버리지는 1~${leverageMaximum}배로 입력해 주세요.`);
     if (strategy === 'DISPARITY' && (!/^(0\.[1-9]|[1-9](\.\d)?|10(\.0)?)$/.test(settings.minDisparityPercent))) throw new Error('MA60 이격률은 0.1~10.0%로 입력해 주세요.');
     if (strategy === 'DISPARITY' && (!/^([1-9]|[1-9]\d|100)$/.test(settings.roiClosePercent))) throw new Error('ROI 손실 청산은 1~100 정수로 입력해 주세요.');
-    if (strategy === 'ENVELOPE') envelopeParameters(settings);
+    if (isSmaEnvelopeStrategy(strategy)) envelopeParameters(settings);
     if (usesAtrEnvelope) atrEnvelopeBacktestParameters(settings);
     if (strategy === 'PULLBACK') pullbackEnvelopeParameters(settings);
     if (strategy === 'NEW_HIGH') {
@@ -605,12 +611,15 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     if (requestId !== resultRequestRef.current) return;
     const snapshot = { ...defaults, ...entry.settings };
     if (usesAtrEnvelope) snapshot.atrEnvelopeStopMultiplier = entry.settings.atrEnvelopeStopMultiplier ?? '0';
+    const legacyDisparity = usesEnvelopeBreakout && entry.strategy === 'DISPARITY';
     analysisSettingsRef.current = snapshot;
     restoringHistoryRef.current = true;
-    const displaySettings = strategySettings(strategy, snapshot);
-    setSettings(displaySettings);
-    saveSettings(strategy, displaySettings);
-    saveCachedResult(strategy, restored);
+    if (!legacyDisparity) {
+      const displaySettings = strategySettings(strategy, snapshot);
+      setSettings(displaySettings);
+      saveSettings(strategy, displaySettings);
+      saveCachedResult(strategy, restored);
+    }
     setResult(restored);
     setServerJob(entry.serverJobId ? restoredServerJob(entry) : null);
     setHistoryOpen(false);
@@ -618,7 +627,8 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
     setChart(null);
     setSelectedTrade(null);
     setError(null);
-    setNotice(strategy === 'ENVELOPE' && entry.settings.envelopeEntryMode !== 'BAND_TOUCH'
+    setNotice(legacyDisparity ? '이전 이격매매 분석 이력을 불러왔습니다.'
+      : strategy === 'ENVELOPE' && entry.settings.envelopeEntryMode !== 'BAND_TOUCH'
       ? '이전 엔벨로프 조건의 저장 결과입니다. 차트는 당시 설정으로 표시하며 새 분석은 1h·4h·1d 주기와 현재 조건으로 계산합니다.'
       : strategy === 'VOLATILITY' && (entry.serverJobId || typeof entry.settings.volatilityTpEnabled !== 'boolean')
       ? '이전 변동성 돌파 조건의 이력입니다. 새 분석을 시작하면 변경된 조건으로 계산합니다.'
@@ -825,6 +835,16 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <strong>숏 포지션</strong>
                 <p>위 조건을 반대로 적용합니다. ROI 손실은 레버리지가 반영된 가격 기준입니다.</p>
               </div>
+            ) : usesEnvelopeBreakout ? (
+              <div className="condition-copy">
+                <p>중심선은 직전 완료봉의 평균 종가입니다. 각 봉의 상·하단은 그 중심선과 입력한 이격률로 계산합니다.</p>
+                <p>돌파 판정에는 캔들의 고가와 저가를 더해 2로 나눈 중간값을 사용합니다.</p>
+                <strong>롱 포지션</strong>
+                <p>직전 5봉의 중간값이 각 봉의 상단 미만이고, 이번 봉의 중간값이 상단 이상이면 확정 종가에 진입합니다. 다음 봉부터 종가가 해당 봉의 상단 미만으로 확정되면 그 종가를 기준으로 청산합니다.</p>
+                <strong>숏 포지션</strong>
+                <p>직전 5봉의 중간값이 각 봉의 하단 초과이고, 이번 봉의 중간값이 하단 이하이면 확정 종가에 진입합니다. 다음 봉부터 종가가 해당 봉의 하단 초과로 확정되면 그 종가를 기준으로 청산합니다.</p>
+                <p>‘TP사용’을 켜면 밴드 복귀 종가 청산 대신 실제 체결가 기준 고정 TP를 사용합니다. 손절과 선택한 트레일링 스탑은 1분봉으로 확인합니다.</p>
+              </div>
             ) : envelopeStrategy ? (
               <div className="condition-copy">
                 {usesAtrEnvelope ? <>
@@ -970,11 +990,12 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
           ) : envelopeStrategy ? (
             <>
               <EnvelopeMa20Control enabled={settings.envelopeMa20Enabled === true} onChange={enabled => update('envelopeMa20Enabled', enabled)} />
-              <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
-              {!usesAtrEnvelope ? <EnvelopeCenterTouchControl enabled={settings.envelopeCloseOnCenterTouch === true} onChange={enabled => update('envelopeCloseOnCenterTouch', enabled)} /> : null}
+              <EnvelopeCenterReturnControl enabled={settings.envelopeCloseOnCenterReturn === true} disabled={usesEnvelopeBreakout} onChange={enabled => update('envelopeCloseOnCenterReturn', enabled)} />
+              {!usesAtrEnvelope ? <EnvelopeCenterTouchControl enabled={settings.envelopeCloseOnCenterTouch === true} disabled={usesEnvelopeBreakout} onChange={enabled => update('envelopeCloseOnCenterTouch', enabled)} /> : null}
               <EnvelopeSideRatioControl enabled={settings.envelopeSideRatio50Enabled === true} onChange={enabled => update('envelopeSideRatio50Enabled', enabled)} />
-              <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnlyEntryEnabled === true} onChange={event => update('envelopeCloseOnlyEntryEnabled', event.target.checked)} /><span>종가에서만 매수</span></label>
-              <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />
+              <label className="checkbox-row"><input type="checkbox" checked={settings.envelopeCloseOnlyEntryEnabled === true} disabled={usesEnvelopeBreakout} onChange={event => update('envelopeCloseOnlyEntryEnabled', event.target.checked)} /><span>종가에서만 매수</span></label>
+              <EnvelopeHalfCandleControl enabled={settings.envelopeHalfCandleEnabled === true} disabled={usesEnvelopeBreakout} onChange={enabled => update('envelopeHalfCandleEnabled', enabled)} />
+              {usesEnvelopeBreakout ? <p className="muted small">직전 5봉에 돌파가 없고 현재 캔들의 절반 이상이 밴드 밖에 있으면 종가에 진입합니다. 밴드 복귀도 종가로 확인합니다.</p> : null}
               <EnvelopeCandleFilterControl enabled={settings.envelopeCandleFilterEnabled === true} onChange={enabled => update('envelopeCandleFilterEnabled', enabled)} />
               {usesAtrEnvelope ? <>
                 <h2>ATR 엔벨로프 설정</h2>
@@ -1000,6 +1021,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
                 <label className="field-label">엔벨로프 이격 (%)<span className="suffix-field"><input type="number" min="0.1" max="20" step="0.1" inputMode="decimal" value={settings.envelopeDeviationPercent ?? '3'} onChange={event => update('envelopeDeviationPercent', event.target.value)} /><b>%</b></span><small>0.1~20.0 · 상단·하단 각각 적용</small></label>
                 <EnvelopeStopLossControl value={settings.envelopeStopLossPercent ?? '3'} onChange={value => update('envelopeStopLossPercent', value)} />
                 <EnvelopeTakeProfitControl enabled={settings.envelopeTakeProfitEnabled === true} value={settings.envelopeTakeProfitPercent}
+                  replacesExit={usesEnvelopeBreakout ? '밴드 복귀 종가 청산' : undefined}
                   onToggle={enabled => update('envelopeTakeProfitEnabled', enabled)} onChange={value => update('envelopeTakeProfitPercent', value)} />
               </>}
               <EnvelopeTrailingStopControl enabled={settings.envelopeTrailingStopEnabled === true} fixedStop={!usesAtrEnvelope || Number(atrStopMultiplier) > 0} value={settings.envelopeTrailingStopPercent ?? '3'} onToggle={enabled => update('envelopeTrailingStopEnabled', enabled)} onChange={value => update('envelopeTrailingStopPercent', value)} />
@@ -1090,7 +1112,7 @@ function HistoryList({
             <em className={entry.result.returnPercent >= 0 ? 'positive' : 'negative'}>{percent(entry.result.returnPercent)}</em>
           </span>
           <span className="history-card-settings">{formatBacktestHistorySettings(entry.settings, entry.strategy).map(value => <span className="history-card-setting" key={value}>{value}</span>)}</span>
-          <small>저장 {new Date(entry.savedAt).toLocaleDateString('ko-KR')}</small>
+          <small>{entry.strategy === 'DISPARITY' ? '이전 이격매매 · ' : ''}저장 {new Date(entry.savedAt).toLocaleDateString('ko-KR')}</small>
         </button>
       ))}
     </div>

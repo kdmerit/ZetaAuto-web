@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { chartMaStorageKey, loadChartMas, loadSettings, saveChartMas, saveSettings } from './storage';
-import type { BacktestSettings } from './types';
+import { chartMaStorageKey, loadBacktestHistory, loadChartMas, loadSettings, saveBacktestHistory, saveChartMas, saveSettings } from './storage';
+import type { BacktestResult, BacktestSettings } from './types';
 
 let values: Map<string, string>;
 beforeEach(() => {
@@ -33,6 +33,19 @@ describe('volatility settings migration and persistence', () => {
   });
 });
 afterEach(() => vi.unstubAllGlobals());
+
+describe('envelope breakout history', () => {
+  it('includes prior disparity results without storing them as breakout calculations', () => {
+    const settings = { mode: 'SINGLE', symbol: 'BTC', interval: '1h' } as BacktestSettings;
+    const card = { savedAt: Date.now(), mode: settings.mode, symbol: 'BTC', interval: settings.interval,
+      settings, result: { returnPercent: 1 } as BacktestResult, serverJobId: null };
+    saveBacktestHistory({ ...card, id: 'old', strategy: 'DISPARITY' });
+    saveBacktestHistory({ ...card, id: 'new', strategy: 'ENVELOPE_BREAKOUT', savedAt: card.savedAt + 1 });
+    expect(loadBacktestHistory('ENVELOPE_BREAKOUT', 'SINGLE', 'BTC').map(entry => entry.strategy)).toEqual(['ENVELOPE_BREAKOUT', 'DISPARITY']);
+    expect(loadBacktestHistory('DISPARITY', 'SINGLE', 'BTC').map(entry => entry.id)).toEqual(['old']);
+    expect(loadBacktestHistory('ENVELOPE_BREAKOUT', 'SINGLE', 'ETH')).toEqual([]);
+  });
+});
 
 describe('chart moving-average preferences', () => {
   it('uses defaults only when no stored choices exist', () => {

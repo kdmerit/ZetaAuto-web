@@ -13,16 +13,19 @@ describe('standalone market chart presentation', () => {
   it('puts chart browsing first and removes all menu explanation controls/content', () => {
     const html = renderToStaticMarkup(<BacktestMenu onOpen={() => {}} onOpenChart={() => {}} onSignOut={() => {}} email="tester@example.com" />);
     expect(html).not.toContain('눌림목 백테스트');
+    expect(html).not.toContain('이격매매 백테스트'); expect(html).toContain('엔벨돌파 백테스트');
     expect(html.indexOf('종합차트')).toBeLessThan(html.indexOf('신고가 백테스트')); expect(html.indexOf('신고가 백테스트')).toBeLessThan(html.indexOf('캔들돌파 백테스트')); expect(html.indexOf('캔들돌파 백테스트')).toBeLessThan(html.indexOf('ATR 엔벨로프 백테스트'));
     expect(html).toContain('메뉴 순서 편집'); expect(html).not.toContain('상세설명'); expect(html).not.toContain('분석할 전략'); expect(html).toContain('엔벨로프 백테스트'); expect(html).toContain('로그아웃');
   });
-  it('replaces the pullback slot in a saved custom menu order', () => {
+  it('keeps the pullback and disparity slots in the saved custom menu order', () => {
     const order = ['CHART', 'ENVELOPE', 'PULLBACK', 'CANDLE_BREAKOUT', 'NEW_HIGH', 'DISPARITY', 'REFERENCE', 'VOLATILITY'];
     vi.stubGlobal('window', { localStorage: { getItem: (key: string) => key === backtestMenuOrderStorageKey ? JSON.stringify(order) : null } });
     try {
       const html = renderToStaticMarkup(<BacktestMenu onOpen={() => {}} onOpenChart={() => {}} onSignOut={() => {}} email={null} />);
       expect(html.indexOf('aria-label="엔벨로프 백테스트"')).toBeLessThan(html.indexOf('aria-label="ATR 엔벨로프 백테스트"'));
       expect(html.indexOf('aria-label="ATR 엔벨로프 백테스트"')).toBeLessThan(html.indexOf('aria-label="캔들돌파 백테스트"'));
+      expect(html.indexOf('aria-label="엔벨돌파 백테스트"')).toBeGreaterThan(html.indexOf('aria-label="신고가 백테스트"'));
+      expect(html.indexOf('aria-label="엔벨돌파 백테스트"')).toBeLessThan(html.indexOf('aria-label="기준봉 백테스트"'));
     } finally { vi.unstubAllGlobals(); }
   });
   it('omits position/entry/exit labels and includes twenty-day ATR, prior volume ratio and independent indicator bands', () => {

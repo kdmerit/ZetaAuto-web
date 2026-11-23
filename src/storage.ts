@@ -99,7 +99,7 @@ function isHistoryEntry(value: unknown): value is BacktestHistoryEntry {
   const entry = value as Partial<BacktestHistoryEntry>;
   return (
     typeof entry.id === 'string' &&
-    (entry.strategy === 'PULLBACK' || entry.strategy === 'DISPARITY' || entry.strategy === 'VOLATILITY' || entry.strategy === 'ENVELOPE' || entry.strategy === 'ATR_ENVELOPE' || entry.strategy === 'NEW_HIGH' || entry.strategy === 'REFERENCE' || entry.strategy === 'CANDLE_BREAKOUT') &&
+    (entry.strategy === 'PULLBACK' || entry.strategy === 'DISPARITY' || entry.strategy === 'VOLATILITY' || entry.strategy === 'ENVELOPE' || entry.strategy === 'ATR_ENVELOPE' || entry.strategy === 'ENVELOPE_BREAKOUT' || entry.strategy === 'NEW_HIGH' || entry.strategy === 'REFERENCE' || entry.strategy === 'CANDLE_BREAKOUT') &&
     typeof entry.savedAt === 'number' &&
     Number.isFinite(entry.savedAt) &&
     (entry.mode === 'SINGLE' || entry.mode === 'ALL') &&
@@ -139,7 +139,11 @@ export function loadBacktestHistory(
   mode: BacktestSettings['mode'],
   symbol: string,
 ): BacktestHistoryEntry[] {
-  return loadStoredHistory(strategy).filter(
+  const current = loadStoredHistory(strategy);
+  const entries = strategy === 'ENVELOPE_BREAKOUT'
+    ? [...current, ...loadStoredHistory('DISPARITY')].sort((left, right) => right.savedAt - left.savedAt)
+    : current;
+  return entries.filter(
     (entry) => entry.mode === mode && entry.symbol === symbol,
   );
 }

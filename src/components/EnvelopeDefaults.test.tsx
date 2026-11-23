@@ -101,6 +101,30 @@ describe('envelope input defaults and arrangement', () => {
     expect(all).toMatch(/SL 배수 \(ATR\)\s*<input[^>]*value="1\.2"/);
   });
 
+  it('shares envelope inputs with the breakout form and locks the conflicting choices', () => {
+    const saved = { ...defaultSettings('ENVELOPE_BREAKOUT'), envelopeCloseOnlyEntryEnabled: false, envelopeCloseOnCenterTouch: true,
+      envelopeCloseOnCenterReturn: true, envelopeHalfCandleEnabled: true, envelopeTakeProfitEnabled: true, envelopeTakeProfitPercent: '4' };
+    saveSettings('ENVELOPE_BREAKOUT', saved);
+    const single = renderToStaticMarkup(<EnvelopeWorkspace strategy="ENVELOPE_BREAKOUT" context={context} />);
+    expect(single).toContain('<h1>엔벨돌파 백테스트</h1>');
+    for (const label of ['가상 초기자금', '고정 베팅액', '레버리지', '엔벨로프 중심선 봉수', '엔벨로프 이격 (%)', 'SL (%)', 'TP사용', '트레일링 스탑 적용']) {
+      expect(single).toContain(label);
+    }
+    expect(single).toMatch(/TP \(%\)[\s\S]*?<input[^>]*value="4"/);
+    const rows = options(single);
+    const close = rows.find(row => row.includes('종가에서만 매수'));
+    expect(close).toContain('disabled=""'); expect(close).toContain('checked=""');
+    for (const label of ['중심선 터치후 이탈시 매도', '중심선 터치시 청산', '캔들 절반 엔벨 이내']) {
+      const option = rows.find(row => row.includes(label));
+      expect(option).toContain('disabled=""'); expect(option).not.toContain('checked=""');
+    }
+    expect(single).not.toContain('MA60 최소 이격률');
+    values.set('zetaauto.web.envelopeBreakout.view', 'ALL');
+    const all = renderToStaticMarkup(<EnvelopeWorkspace strategy="ENVELOPE_BREAKOUT" context={context} />);
+    expect(all).toContain('전체종목 이력보기');
+    expect(all).not.toContain('placeholder="BTC"');
+  });
+
   it('places the center-return exit immediately after the above-MA20 filter', () => {
     const html = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
     const above = html.indexOf('MA20 위에서만 매수 (롱)');

@@ -11,10 +11,13 @@ export const envelopeModelVersion = '2.10.97';
 // All new envelope jobs share the causal minute execution model.
 export const envelopeLocalJobVersion = envelopeModelVersion;
 export const envelopeWarmupBars = 200;
+export const envelopeBreakoutLookback = 5;
 export const defaultEnvelopeTakeProfitPercent = '6';
 export const defaultAtrEnvelopeStopMultiplier = '0.5';
-export const isEnvelopeStrategy = (strategy: Strategy | undefined): strategy is 'ENVELOPE' | 'ATR_ENVELOPE' =>
-  strategy === 'ENVELOPE' || strategy === 'ATR_ENVELOPE';
+export const isSmaEnvelopeStrategy = (strategy: Strategy | undefined): strategy is 'ENVELOPE' | 'ENVELOPE_BREAKOUT' =>
+  strategy === 'ENVELOPE' || strategy === 'ENVELOPE_BREAKOUT';
+export const isEnvelopeStrategy = (strategy: Strategy | undefined): strategy is 'ENVELOPE' | 'ATR_ENVELOPE' | 'ENVELOPE_BREAKOUT' =>
+  isSmaEnvelopeStrategy(strategy) || strategy === 'ATR_ENVELOPE';
 export const envelopeExitModes: EnvelopeExitMode[] = ['MA20', 'CENTER', 'OPPOSITE', 'HALF'];
 export const envelopeExitLabels: Record<EnvelopeExitMode, string> = {
   CENTER: '중심선 전량 청산', OPPOSITE: '반대 밴드 전량 청산', HALF: '중심선 50% · 반대 밴드 나머지', MA20: 'MA20 이탈 종가 청산',
@@ -73,6 +76,17 @@ export function currentAtrEnvelopeSettings(settings: BacktestSettings): Backtest
     envelopeStatisticsInterval: _statistics, ...shared } = currentEnvelopeSettings(settings);
   return { ...shared, atrEnvelope: { ...defaultAtrEnvelopeInputs, ...settings.atrEnvelope },
     atrEnvelopeStopMultiplier: settings.atrEnvelopeStopMultiplier ?? defaultAtrEnvelopeStopMultiplier };
+}
+
+export function currentEnvelopeBreakoutSettings(settings: BacktestSettings): BacktestSettings {
+  return {
+    ...currentEnvelopeSettings(settings),
+    envelopeCloseOnlyEntryEnabled: true,
+    envelopeHalfCandleEnabled: false,
+    envelopeCloseOnCenterTouch: false,
+    envelopeCloseOnCenterReturn: false,
+    envelopeTakeProfitReplacesBand: true,
+  };
 }
 
 export function atrEnvelopeBacktestParameters(settings: BacktestSettings): { band: AtrEnvelopeParameters; stopMultiplier: number } {
@@ -154,13 +168,38 @@ export function bandFor(center: number, percent: number): EnvelopeBand {
   return { center, upper: center * (1 + percent / 100), lower: center * (1 - percent / 100) };
 }
 
+export function envelopeMidpointBrokeBand(
+  candle: Pick<Candle, 'high' | 'low'>,
+  band: Pick<EnvelopeBand, 'lower' | 'upper'>,
+  side: 'LONG' | 'SHORT',
+): boolean {
+  const midpoint = (candle.high + candle.low) / 2;
+  return side === 'LONG' ? midpoint >= band.upper : midpoint <= band.lower;
+}
+
+/** Each of the five completed candles is compared with the band known at its own open. */
+export function priorEnvelopeBreakoutAllows(candles: Candle[], centers: (number | null)[], index: number, percent: number): { long: boolean; short: boolean } {
+  let long = true;
+  let short = true;
+  for (let cursor = index - envelopeBreakoutLookback; cursor < index; cursor += 1) {
+    const candle = candles[cursor];
+    const center = centers[cursor];
+    if (!candle || center == null || candle.closeTime !== candles[cursor + 1]?.openTime) return { long: false, short: false };
+    const band = bandFor(center, percent);
+    long &&= !envelopeMidpointBrokeBand(candle, band, 'LONG');
+    short &&= !envelopeMidpointBrokeBand(candle, band, 'SHORT');
+  }
+  return { long, short };
+}
+
 /** Use the close for close-only entries and the relevant extreme for touch entries. */
 export function envelopeEntryBandReached(
   candle: Candle,
-  band: Pick<EnvelopeBand, 'lower' | 'upper'>,
+  band: Pick<EnvelopeBand, 'lower' | 'upper'> & { breakout?: true },
   side: 'LONG' | 'SHORT',
   closeOnly: boolean,
 ): boolean {
+  if (band.breakout) return envelopeMidpointBrokeBand(candle, band, side);
   const price = closeOnly ? candle.close : side === 'LONG' ? candle.low : candle.high;
   return Number.isFinite(price) && (side === 'LONG' ? price <= band.lower : price >= band.upper);
 }
