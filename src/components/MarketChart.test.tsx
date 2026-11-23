@@ -46,6 +46,16 @@ describe('standalone market chart presentation', () => {
     expect(html).toContain('백테스트 차트'); expect(html).toContain('BACKTEST'); expect(html).toContain('롱'); expect(html).toContain('매수가'); expect(html).toContain('청산가');
     expect(html).not.toContain('ATR 엔벨로프 설정'); expect(html).toContain('market-true-range'); expect(html).toContain('ATR 10 (10.00%)');
   });
+  it('shows selected MA pair differences and gap percentages', () => {
+    vi.stubGlobal('localStorage', { getItem: (key: string) => key === 'zetaauto.web.chart.visibleMas' ? JSON.stringify({ ma5: false, ma10: true, ma20: true, ma60: true, ma120: false }) : null });
+    try {
+      const candles = chart.candles.map(candle => ({ ...candle, ma10: 105, ma20: 100, ma60: 80 }));
+      const html = renderToStaticMarkup(<ChartModal chart={{ ...chart, market: undefined, candles, side: 'LONG' }} onClose={() => {}} />);
+      expect(html).toContain('MA10 - MA20 +5 <em>(+5.00%)</em>');
+      expect(html).toContain('MA20 - MA60 +20 <em>(+25.00%)</em>');
+      expect(html).not.toContain('MA5 -');
+    } finally { vi.unstubAllGlobals(); }
+  });
   it('draws the final exit price and colors a profitable close green', () => {
     const entry = { id: 'entry', orderId: 'entry', kind: 'ENTRY' as const, label: 'B' as const, openTime: rows.at(-1)!.openTime, price: 100, quantity: 1, candleIndex: 129 };
     const close = { id: 'close', orderId: 'close', kind: 'CLOSE' as const, label: 'C' as const, openTime: rows.at(-1)!.openTime, price: 105, quantity: 1, candleIndex: 129 };

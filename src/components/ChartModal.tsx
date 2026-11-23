@@ -34,6 +34,10 @@ const maDefinitions = [
   { key: 'ma60' as const, label: 'MA60', color: '#39C98A' },
   { key: 'ma120' as const, label: 'MA120', color: '#AAB4C6' },
 ];
+const maGapDefinitions = [
+  { key: 'ma10-ma20', label: 'MA10 - MA20', first: 'ma10' as const, second: 'ma20' as const },
+  { key: 'ma20-ma60', label: 'MA20 - MA60', first: 'ma20' as const, second: 'ma60' as const },
+] as const;
 const MIN_CHART_ZOOM = 0.25;
 const MAX_CHART_ZOOM = 10;
 const MAX_CHART_WIDTH = 80_000;
@@ -62,6 +66,11 @@ function formatBandPrice(value: number): string {
   if (!Number.isFinite(value)) return '—';
   const truncated = Math.trunc(value * 10_000) / 10_000;
   return truncated.toLocaleString('ko-KR', { maximumFractionDigits: 4 });
+}
+
+function signedPrice(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '—';
+  return `${value >= 0 ? '+' : ''}${formatPrice(value)}`;
 }
 
 function formatDate(value: number | string): string {
@@ -564,6 +573,18 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
         const deviation = typeof value === 'number' && value !== 0 ? (infoCandle.close - value) / value * 100 : null;
         return { ...definition, value, deviation, angle: movingAverageAngle(chart.candles, infoIndex, definition.key) };
       });
+  const selectedMaGaps = !infoCandle
+    ? []
+    : maGapDefinitions.filter((definition) => visibleMas[definition.first] && visibleMas[definition.second]).map((definition) => {
+        const first = infoCandle[definition.first];
+        const second = infoCandle[definition.second];
+        const difference = typeof first === 'number' && typeof second === 'number'
+          && Number.isFinite(first) && Number.isFinite(second)
+          ? first - second
+          : null;
+        const percent = difference !== null && typeof second === 'number' && second !== 0 ? difference / second * 100 : null;
+        return { ...definition, difference, percent };
+      });
   return (
     <div className="modal-backdrop" role="presentation"
       onPointerDown={(event) => { backdropPointer.current = event.target === event.currentTarget ? event.pointerId : null; }}
@@ -633,6 +654,9 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
               <div className="candle-ma-grid">
                 {selectedReadings.map((reading) => (
                   <span key={reading.key} style={{ color: reading.color }} title="현재봉·이전 2봉의 고정 각도 · 1봉당 1% 상승=45° · 확대/축소와 무관">{reading.label} {signedPercent(reading.deviation)} <em>({reading.angle === null ? '—' : `${reading.angle >= 0 ? '+' : ''}${reading.angle.toFixed(1)}°`})</em></span>
+                ))}
+                {selectedMaGaps.map((gap) => (
+                  <span key={gap.key} className="candle-ma-gap" title="이격률 = (앞쪽 이동평균선 − 뒤쪽 이동평균선) ÷ 뒤쪽 이동평균선 × 100">{gap.label} {signedPrice(gap.difference)} <em>({signedPercent(gap.percent)})</em></span>
                 ))}
               </div>
             </div>
