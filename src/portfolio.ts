@@ -154,6 +154,7 @@ function priceLines(p: Holding): PriceLine[] {
   if (p.signal.strategy === 'CANDLE_BREAKOUT' || p.signal.strategy === 'NEW_HIGH') return [
     { kind: 'ENTRY', price: p.first },
     { kind: 'SL', price: p.stop },
+    ...(p.partial === null ? [] : [{ kind: 'PARTIAL_TP' as const, price: p.partial }]),
   ];
   if (p.signal.strategy === 'PULLBACK' && p.signal.exitMode === 'PULLBACK_ENVELOPE') return [{ kind: 'ENTRY', price: p.first }];
   const split = p.signal.strategy === 'PULLBACK';
@@ -188,7 +189,7 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   const market = [
     'SL', 'TRAILING_STOP', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE',
     'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'VOLATILITY_WICK_EXIT', 'NEXT_CANDLE_CLOSE',
-    'NEW_HIGH_MA10_CLOSE',
+    'NEW_HIGH_MA20_CLOSE',
     'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE', 'ENVELOPE_CLOSE_CONFIRM', 'ENVELOPE_CENTER', 'ENVELOPE_CENTER_RETURN',
     'ENVELOPE_BREAKOUT_CLOSE', 'CANDLE_BREAKOUT_REVERSAL_CLOSE',
   ].includes(reason);
@@ -207,7 +208,7 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   p.qty -= qty;
   state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + 1;
   recordFill(p, reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE', fill, qty, candle, opening,
-    reason === 'CANDLE_BREAKOUT_REVERSAL_CLOSE' || reason === 'NEW_HIGH_MA10_CLOSE'
+    reason === 'CANDLE_BREAKOUT_REVERSAL_CLOSE' || reason === 'NEW_HIGH_MA20_CLOSE'
     || reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT'
     || reason === 'VOLATILITY_CANDLE_EXIT' || reason === 'VOLATILITY_WICK_EXIT' || reason === 'ENVELOPE_MA20_CLOSE' || reason === 'ENVELOPE_CLOSE_CONFIRM'
     || reason === 'ENVELOPE_BREAKOUT_CLOSE');
@@ -289,6 +290,14 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
   if (smaEnvelope && signal.exitMode !== 'ENVELOPE_MA20_CLOSE' && (!Number.isFinite(envelopeStop) || envelopeStop <= 0)) return;
   const effectiveSignal = envelopeStop === signal.stop ? signal : { ...signal, stop: envelopeStop };
   const intrabarEntry = signal.exitMode === 'VOLATILITY_TP' || signal.exitMode === 'VOLATILITY_MA5' || signal.exitMode === 'VOLATILITY_CANDLE_RULE' || signal.exitMode === 'ENVELOPE_TOUCH' || signal.exitMode === 'NEW_HIGH_TOUCH' || signal.exitMode === 'REFERENCE_TOUCH';
+  let partial: number | null = null;
+  if (signal.strategy === 'NEW_HIGH') {
+    const partialTarget = entry + (entry - signal.stop);
+    if (partialTarget > 0) partial = partialTarget;
+  } else if (settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && !envelope
+    && signal.strategy !== 'REFERENCE' && signal.strategy !== 'CANDLE_BREAKOUT' && signal.exitMode !== 'PULLBACK_ENVELOPE') {
+    partial = (entry + signal.initialTarget) / 2;
+  }
   const p: Holding = {
     symbol, signal: effectiveSignal, opened: intrabarEntry && !confirmedClose ? candle.openTime : candle.closeTime, first: entry, entry, betAmountUsdt: bet, qty: riskSizedQuantity ?? margin * leverage / entry,
     margin, reserved: bet - margin, reservedFee: (bet - margin) * leverage * feeRate,
@@ -296,7 +305,7 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     second: split ? signal.strategy === 'ENVELOPE' && signal.second !== undefined ? signal.second : (entry + signal.stop) / 2 : entry,
     ...(signal.strategy === 'ENVELOPE' && settings.envelopeRisk?.symbol === symbol ? { risk: settings.envelopeRisk } : {}),
     target,
-    partial: settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && !envelope && signal.strategy !== 'NEW_HIGH' && signal.strategy !== 'REFERENCE' && signal.strategy !== 'CANDLE_BREAKOUT' && signal.exitMode !== 'PULLBACK_ENVELOPE' ? (entry + signal.initialTarget) / 2 : null,
+    partial,
     partialDone: false, stop: envelopeStop, mark: envelope && settings.envelopeSideRatio50Enabled === true ? signal.entry : candle.close, net: -fee, executions: [],
     ...(signal.strategy === 'CANDLE_BREAKOUT' ? {
       candleBreakoutExit: { entryExtreme: signal.side === 'LONG' ? candle.high : candle.low, previousExitLevel: signal.stop },
@@ -1301,7 +1310,7 @@ function replayReferenceIntrabarHolding(position: Holding, bar: PreparedBar, set
   return state;
 }
 
-/** The entry is at the parent close. Only later bars can hit either exit. */
+/** The entry is at the parent close. Check exits only in later bars. */
 function processNewHighHolding(state: PortfolioState, position: Holding, bar: PreparedBar): void {
   const { candle } = bar;
   if (candle.openTime < position.opened) return;
@@ -1310,6 +1319,17 @@ function processNewHighHolding(state: PortfolioState, position: Holding, bar: Pr
   for (const row of bar.newHighIntrabarCandles ?? [candle]) {
     const stopAtOpen = long ? row.open <= position.stop : row.open >= position.stop;
     const stopped = long ? row.low <= position.stop : row.high >= position.stop;
+    const partial = position.partialDone ? null : position.partial;
+    if (partial !== null && !stopAtOpen) {
+      const partialAtOpen = long ? row.open >= partial : row.open <= partial;
+      const partialTouched = long ? row.high >= partial : row.low <= partial;
+      // A target hit at the opening precedes any later stop. Otherwise give an ambiguous stop priority.
+      if (partialAtOpen || (!stopped && partialTouched)) {
+        position.partialDone = true;
+        const executionCandle = { ...row, parentOpenTime: candle.openTime };
+        close(state, position, partial, position.qty / 2, 'PARTIAL_TP', executionCandle, partialAtOpen);
+      }
+    }
     if (stopAtOpen || stopped) {
       const executionCandle = { ...row, parentOpenTime: candle.openTime };
       close(state, position, stopAtOpen ? row.open : position.stop, position.qty, 'SL', executionCandle, stopAtOpen);
@@ -1317,11 +1337,11 @@ function processNewHighHolding(state: PortfolioState, position: Holding, bar: Pr
     }
   }
 
-  const { ma10 } = bar.newHigh!;
+  const { ma20 } = bar.newHigh!;
   // Ignore rounding noise when the close and moving average are equal.
-  const exitAtClose = ma10 !== null && (long ? ma10 - candle.close : candle.close - ma10) > ma10 * 1e-10;
+  const exitAtClose = ma20 !== null && (long ? ma20 - candle.close : candle.close - ma20) > ma20 * 1e-10;
   if (exitAtClose) {
-    close(state, position, candle.close, position.qty, 'NEW_HIGH_MA10_CLOSE', candle);
+    close(state, position, candle.close, position.qty, 'NEW_HIGH_MA20_CLOSE', candle);
   } else {
     position.mark = candle.close;
   }

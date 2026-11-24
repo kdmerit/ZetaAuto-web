@@ -212,6 +212,7 @@ const reasonLabels: Record<string, string> = {
   NEW_HIGH_PREVIOUS_LOW_CLOSE: '신고가 직전 봉 저가 이탈 종가 청산',
   NEW_HIGH_PREVIOUS_HIGH_CLOSE: '신고가 직전 봉 고가 이탈 종가 청산',
   NEW_HIGH_MA10_CLOSE: '신고가 MA10 종가 청산',
+  NEW_HIGH_MA20_CLOSE: '신고가 MA20 종가 청산',
   REFERENCE_TP: '기준봉 TP 청산',
   CANDLE_BREAKOUT_TP: '캔들돌파 TP 청산',
   CANDLE_BREAKOUT_ATR_CLOSE: '캔들돌파 ATR 종가 청산',
@@ -914,7 +915,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <label className="field-label">고정 베팅액<input inputMode="decimal" disabled={settings.newHighSizingMode === 'RISK'} value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /><small>고정 베팅액 선택 시 활성화</small></label>
               <label className="field-label">고정 손실액<input type="number" inputMode="decimal" min="0.01" step="0.01" disabled={settings.newHighSizingMode !== 'RISK'} value={settings.newHighRiskAmount ?? settings.betAmountUsdt} onChange={event => update('newHighRiskAmount', event.target.value)} /><small>진입 시 손절 거리·수수료·슬리피지 기준 1회 허용 손실</small></label>
             </div>
-            <p className="notice small">롱은 고가가 직전 10봉의 최고가를 넘고, 숏은 저가가 직전 10봉의 최저가를 밑돌아야 합니다. 첫 신호의 확정 종가에 진입하며, 진입봉의 MA20·MA60 이격은 ATR 이하여야 합니다. 손절가는 진입봉의 저가(롱)·고가(숏)입니다.</p>
+            <p className="notice small">직전 5봉의 최고가(롱)·최저가(숏) 돌파와 MA60 돌파 조건을 충족한 첫 신호의 확정 종가에 진입합니다. 손절가는 직전 5봉 최저가(롱)·최고가(숏)입니다. 실제 체결가에서 손절 거리만큼 유리하게 움직이면 50%를 익절하고, 롱은 종가가 MA20보다 낮고 숏은 높을 때 남은 수량을 청산합니다.</p>
           </> : strategy === 'REFERENCE' ? (
             <>
               <label className="field-label">TP 비율 (%)<input type="number" inputMode="decimal" min="51" max="200" step="1" value={settings.referenceTpPercent ?? '80'} onChange={event => update('referenceTpPercent', event.target.value)} /><small>51~200 · 기본 80 · SL라인과 기준봉 고가/저가 사이 간격 기준</small></label>
@@ -1069,6 +1070,8 @@ function ResultCard({ result, leverage, onOpenTrade }: { result: BacktestResult;
   const reasonLabel = (trade: BacktestTrade): string => trade.reason === 'NEW_HIGH_TRAILING' && trade.newHighTrailStep
     ? `기존 단계형 트레일링 청산 (+${trade.newHighTrailStep}ATR 단계)`
     : reasonLabels[trade.reason] ?? trade.reason;
+  const profitLabel = (trade: BacktestTrade): string => trade.signal.strategy === 'NEW_HIGH' && trade.executions.some(fill => fill.kind === 'PARTIAL_TP')
+    ? '포지션 누적 실현손익' : '청산 손익';
   return (
     <section className="surface-card result-card">
       <div className="result-heading">
@@ -1096,7 +1099,7 @@ function ResultCard({ result, leverage, onOpenTrade }: { result: BacktestResult;
               <span>{new Date(trade.entryAt * 1000).toLocaleString('ko-KR')} {trade.executions.find(fill => fill.kind === 'ENTRY')?.timing === 'INTRABAR' ? '진입봉 (봉 중간 체결 추정)' : '진입'}</span>
               <span>{new Date(trade.exitAt * 1000).toLocaleString('ko-KR')} {trade.executions.at(-1)?.timing === 'INTRABAR' ? '청산봉 (봉 중간 체결 추정)' : '청산'}</span>
               <span>베팅 금액 {money(trade.betAmountUsdt ?? result.betAmountUsdt)} USDT{trade.newHighTrailStep ? ` · 도달 +${trade.newHighTrailStep}ATR` : ''}</span>
-              <em className={trade.netProfitUsdt >= 0 ? 'positive' : 'negative'}>청산 손익 {money(trade.netProfitUsdt)} USDT · 체결 차트 보기 ›</em>
+              <em className={trade.netProfitUsdt >= 0 ? 'positive' : 'negative'}>{profitLabel(trade)} {money(trade.netProfitUsdt)} USDT · 체결 차트 보기 ›</em>
             </button>
           ))}
         </div>

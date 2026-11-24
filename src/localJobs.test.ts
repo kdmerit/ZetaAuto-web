@@ -92,10 +92,11 @@ describe('durable local analysis', () => {
     expect(completed.result?.recentTrades[0]).toMatchObject({ entryAt, exitAt });
   });
 
-  it('resumes a held NEW_HIGH short and fetches 15m candles only from the first possible exit', async () => {
+  it('resumes a half-closed NEW_HIGH short and fetches 15m candles only from the first possible exit', async () => {
     const hour = 3600;
-    const entryBar = 127;
-    const nextBlockStart = origin + (entryBar + 1) * hour;
+    const entryBar = 126;
+    const entryAt = origin + (entryBar + 1) * hour;
+    const nextBlockStart = entryAt + hour;
     const end = origin + 135 * hour;
     const input: BacktestSettings = { ...settings, mode: 'SINGLE', symbol: 'BTC', side: 'SHORT',
       endDate: '2026-01-07', endTime: '00:00', newHighDailyMa20Enabled: true };
@@ -103,16 +104,16 @@ describe('durable local analysis', () => {
     vi.mocked(listInstruments).mockResolvedValue([instrument]);
     const parents: Candle[] = [];
     for (let index = -500; index < 135; index += 1) {
-      const [open, high, low, close] = index === entryBar - 10 ? [100, 102, 92.5, 100]
-        : index === entryBar - 2 ? [99.25, 102.5, 98, 99]
+      const [open, high, low, close] = index === entryBar - 5 ? [100, 102, 92.5, 100]
+        : index === entryBar - 2 ? [100.5, 102.5, 100.25, 100.5]
         : index === entryBar - 1 ? [99, 100, 97, 98]
         : index === entryBar ? [98, 98.5, 92, 93]
-        : index === entryBar + 1 ? [91.5, 98.25, 89, 90]
-        : index === entryBar + 2 ? [90, 98.25, 89.5, 98] : [100, 102, 98, 100];
+        : index === entryBar + 1 ? [91.5, 98.25, 82, 90]
+        : index === entryBar + 2 ? [90, 101, 82, 100] : [100, 102, 98, 100];
       const openTime = origin + index * hour;
-      parents.push({ openTime, closeTime: openTime + hour, open: open!, high: high!, low: low!, close: close!, volume: index === entryBar ? 50 : 10 });
+      parents.push({ openTime, closeTime: openTime + hour, open: open!, high: high!, low: low!, close: close!, volume: 10 });
     }
-    const lower = parents.filter(row => row.openTime >= nextBlockStart).flatMap(row => Array.from({ length: 4 }, (_, i) => {
+    const lower = parents.filter(row => row.openTime >= entryAt).flatMap(row => Array.from({ length: 4 }, (_, i) => {
       const openTime = row.openTime + i * 900;
       const prices = i === 0 ? row : { open: row.close, high: row.close, low: row.close, close: row.close };
       return { ...prices, openTime, closeTime: openTime + 900, volume: row.volume / 4 };
@@ -129,15 +130,18 @@ describe('durable local analysis', () => {
       if (view.phase === 'DATA' && view.blockStart === nextBlockStart) pause.abort();
     }, pause.signal);
     const paused = (await loadLocalJob('NEW_HIGH'))!;
-    expect(paused).toMatchObject({ status: 'PAUSED', completed: 128, total: 135, result: { entryCount: 1, openPositionCount: 1 } });
-    expect(vi.mocked(ensureCandles).mock.calls.map(call => call[1])).toEqual(['1h']);
+    expect(paused).toMatchObject({ status: 'PAUSED', completed: 128, total: 135,
+      result: { entryCount: 1, closedTradeCount: 0, openPositionCount: 1, exitReasons: { PARTIAL_TP: 1 } } });
+    expect(vi.mocked(ensureCandles).mock.calls.map(call => call[1])).toEqual(['1h', '15m']);
 
     await executeLocalJob({ strategy: 'NEW_HIGH', resumeId: paused.id }, () => {}, new AbortController().signal);
     const resumed = (await loadLocalJob('NEW_HIGH'))!;
     expect(resumed).toMatchObject({ id: paused.id, status: 'COMPLETED', completed: 135,
-      result: { exitReasons: { NEW_HIGH_MA10_CLOSE: 1 }, lossCount: 1, openPositionCount: 0 } });
-    expect(resumed.result?.recentTrades[0]).toMatchObject({ side: 'SHORT', entryAt: nextBlockStart, exitAt: nextBlockStart + 2 * hour });
-    expect(vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === '15m').map(call => call.slice(2, 4))).toEqual([[nextBlockStart, end]]);
+      result: { exitReasons: { PARTIAL_TP: 1, NEW_HIGH_MA20_CLOSE: 1 }, closedTradeCount: 1, openPositionCount: 0 } });
+    expect(resumed.result?.recentTrades[1]).toMatchObject({ side: 'SHORT', entryAt, exitAt: nextBlockStart + hour });
+    expect(resumed.result?.recentTrades[1]?.executions.map(execution => execution.kind)).toEqual(['ENTRY', 'PARTIAL_TP', 'CLOSE']);
+    expect(vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === '15m').map(call => call.slice(2, 4)))
+      .toEqual([[entryAt, nextBlockStart], [nextBlockStart, end]]);
     expect(fetcher).not.toHaveBeenCalled();
 
     await executeLocalJob({ strategy: 'NEW_HIGH', settings: input }, () => {}, new AbortController().signal);
@@ -152,12 +156,12 @@ describe('durable local analysis', () => {
     const paused = (await loadLocalJob('NEW_HIGH'))!;
     const seconds = interval === '1h' ? 3600 : 14400;
     const firstParent = vi.mocked(ensureCandles).mock.calls.find(call => call[1] === interval);
-    expect(firstParent?.[2]).toBe(origin - (20 * 86400 + 21 * seconds));
+    expect(firstParent?.[2]).toBe(origin - (20 * 86400 + 11 * seconds));
     if (paused.status === 'PAUSED') {
-      expect(canResumeLocalJob({ ...paused, version: '2.11.9' })).toBe(false);
+      expect(canResumeLocalJob({ ...paused, version: '2.11.10' })).toBe(false);
       await executeLocalJob({ strategy: 'NEW_HIGH', settings: { ...input, betAmountUsdt: '1' }, resumeId: paused.id }, () => {}, new AbortController().signal);
     }
-    const completed = (await loadLocalJob('NEW_HIGH'))!; expect(completed.status).toBe('COMPLETED'); expect(completed.version).toBe('2.11.10');
+    const completed = (await loadLocalJob('NEW_HIGH'))!; expect(completed.status).toBe('COMPLETED'); expect(completed.version).toBe('2.11.11');
     expect(canResumeLocalJob({ ...completed, version: '2.10.93' })).toBe(false);
     expect(completed.id).toBe(paused.id); expect(completed.settings.newHighLookback).toBeUndefined(); expect(completed.settings.betAmountUsdt).toBe('100');
     expect(completed.settings.interval).toBe(interval); expect(completed.total).toBe((completed.end - completed.start) / seconds * 2);

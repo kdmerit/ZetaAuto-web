@@ -2,11 +2,10 @@ import { enrichCandles, intervalSeconds } from './api';
 import { atrWindowSeconds, calendarAtr } from './atr';
 import type { BacktestInterval, BacktestSettings, Candle, EnrichedCandle, Signal } from './types';
 
-const setupLookback = 10;
-const breakoutLookback = 10;
+const setupLookback = 5;
 
 export interface NewHighExitLevels {
-  ma10: number | null;
+  ma20: number | null;
 }
 
 function newHighIntervalSeconds(interval: BacktestInterval): number {
@@ -25,7 +24,7 @@ export function newHighRiskAmount(settings: BacktestSettings): number {
 
 export function newHighWarmup(settings: BacktestSettings): number {
   const seconds = newHighIntervalSeconds(settings.interval);
-  // The oldest possible prior setup needs three consecutive MA60s and ten earlier ATRs.
+  // The oldest possible prior setup needs three consecutive MA60s and five earlier ATRs.
   // ATR needs one additional close to form its first true range.
   const atrLookback = 2 * setupLookback;
   const maLookback = 59 + 2 + setupLookback;
@@ -68,15 +67,24 @@ function gapChanges(gaps: (number | null)[], index: number, direction: 1 | -1, t
     && direction * (current - previous) > tolerance;
 }
 
+function crossesMa60(before: EnrichedCandle, after: EnrichedCandle, direction: 1 | -1): boolean {
+  if (before.ma60 === null || after.ma60 === null) return false;
+  const beforePrice = direction === 1 ? before.high : before.low;
+  const afterPrice = direction === 1 ? after.high : after.low;
+  return direction * (beforePrice - before.ma60) < -before.ma60 * 1e-10
+    && direction * (afterPrice - after.ma60) > after.ma60 * 1e-10;
+}
+
 function matchingSetup(
   rows: EnrichedCandle[],
   ma10Ma20Gaps: (number | null)[],
   ma20Ma60Gaps: (number | null)[],
   atrs: (number | null)[],
   index: number,
-): Signal['side'] | null {
-  if (index < breakoutLookback) return null;
-  const { open, high, low, close, volume, ma5, ma10, ma20, ma60 } = rows[index]!;
+): { side: Signal['side']; stop: number } | null {
+  if (index < setupLookback) return null;
+  const current = rows[index]!;
+  const { open, high, low, close, ma5, ma10, ma20, ma60 } = current;
   const atr = atrs[index];
   if (ma5 === null || ma10 === null || ma20 === null || ma60 === null || atr == null) return null;
 
@@ -85,10 +93,10 @@ function matchingSetup(
   const direction = long ? 1 : -1;
   const body = Math.abs(close - open);
   const wick = long ? high - close : close - low;
-  // Price subtraction can round an exact 5× body or 1.5× wick comparison.
+  // Price subtraction can round exact body and wick ratios.
   const candleTolerance = Number.EPSILON * 8 * Math.max(high, previous.high);
-  if (body === 0 || body + candleTolerance < 5 * Math.abs(previous.close - previous.open)
-    || volume < 5 * previous.volume || body <= 1.5 * wick + candleTolerance) return null;
+  if (body === 0 || body + candleTolerance < 1.5 * Math.abs(previous.close - previous.open)
+    || body <= 1.5 * wick + candleTolerance) return null;
   const ma20Ma60Tolerance = Math.max(ma20, ma60) * 1e-10;
   if (Math.abs(ma20 - ma60) > atr + ma20Ma60Tolerance) return null;
 
@@ -98,14 +106,24 @@ function matchingSetup(
   if (direction * (midpoint - ma5) <= tolerance || direction * (ma5 - ma10) <= tolerance
     || direction * (ma10 - ma20) <= tolerance
     || direction * (breakoutPrice - ma60) <= ma20Ma60Tolerance) return null;
+  if (!crossesMa60(previous, current, direction) && !crossesMa60(rows[index - 2]!, previous, direction)) return null;
   if (!gapChanges(ma10Ma20Gaps, index, direction, tolerance)
     || !gapChanges(ma20Ma60Gaps, index, direction, ma20Ma60Tolerance)) return null;
-  if (!rows.slice(index - breakoutLookback, index).every(row => long ? breakoutPrice > row.high : breakoutPrice < row.low)) return null;
+
+  const prior = rows.slice(index - setupLookback, index);
+  const highest = Math.max(...prior.map(row => row.high));
+  const lowest = Math.min(...prior.map(row => row.low));
+  if (long ? high <= highest : low >= lowest) return null;
+  const stop = long ? lowest : highest;
+  const stopBoundary = long ? Math.min(ma10, ma20, ma60) : Math.max(ma10, ma20, ma60);
+  if (direction * (stopBoundary - stop) <= stopBoundary * 1e-10) return null;
 
   for (let earlier = index - setupLookback; earlier < index; earlier += 1) {
     const gap = ma10Ma20Gaps[earlier];
     const earlierAtr = atrs[earlier];
-    if (gap != null && earlierAtr != null && Math.abs(gap) + rows[earlier]!.close * 1e-10 < earlierAtr) return long ? 'LONG' : 'SHORT';
+    if (gap != null && earlierAtr != null && Math.abs(gap) + rows[earlier]!.close * 1e-10 < earlierAtr) {
+      return { side: long ? 'LONG' : 'SHORT', stop };
+    }
   }
   return null;
 }
@@ -119,11 +137,11 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): {
   const riskAmount = settings.newHighSizingMode === 'RISK' ? newHighRiskAmount(settings) : undefined;
   const lastSetup = { LONG: -Infinity, SHORT: -Infinity };
   return rows.map((row, index) => {
-    const side = matchingSetup(rows, ma10Ma20Gaps, ma20Ma60Gaps, atrs, index);
+    const setup = matchingSetup(rows, ma10Ma20Gaps, ma20Ma60Gaps, atrs, index);
     let signal: Signal | null = null;
-    if (side && (settings.side === 'BOTH' || settings.side === side)) {
+    if (setup && (settings.side === 'BOTH' || settings.side === setup.side)) {
+      const { side, stop } = setup;
       if (index - lastSetup[side] > setupLookback) {
-        const stop = side === 'LONG' ? row.low : row.high;
         signal = {
           strategy: 'NEW_HIGH', side, index: row.openTime / seconds, entry: row.close,
           stop, initialStop: stop, target: 0, initialTarget: 0, exitMode: 'NEW_HIGH_TOUCH',
@@ -133,34 +151,34 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): {
       // A matching setup blocks a repeat even if no order was placed at that setup.
       lastSetup[side] = index;
     }
-    return { signal, newHigh: { ma10: row.ma10 } };
+    return { signal, newHigh: { ma20: row.ma20 } };
   });
 }
 
 export const newHighRules = {
   long: [
-    '현재 봉이 양봉이고, 몸통 길이와 거래량이 각각 직전 봉의 5배 이상이어야 합니다.',
+    '현재 봉이 양봉이고, 몸통 길이가 직전 봉 몸통의 1.5배 이상이어야 합니다.',
     '현재 몸통 길이가 윗꼬리의 1.5배보다 커야 합니다.',
-    '직전 10봉 중 적어도 한 봉에서 |MA10 − MA20|이 해당 봉의 ATR보다 작아야 합니다.',
-    '현재 봉의 고가·저가 중간값 > MA5 > MA10 > MA20이고, 현재 봉의 고가 > MA60이어야 합니다.',
+    '직전 5봉 중 적어도 한 봉에서 |MA10 − MA20|이 해당 봉의 ATR보다 작아야 합니다.',
+    '현재 봉의 고가·저가 중간값 > MA5 > MA10 > MA20이고, 현재 봉의 고가 > MA60이어야 합니다. 직전 5봉의 최저가는 현재 봉의 MA10·MA20·MA60보다 모두 낮아야 합니다. 현재 봉이나 직전 봉에서 고가가 MA60 아래에서 위로 돌파해야 합니다.',
     '현재 봉의 |MA20 − MA60|이 해당 봉의 ATR 이하여야 합니다.',
     '현재 봉을 포함한 최근 3봉에서 MA10 − MA20과 MA20 − MA60이 각각 연속으로 증가해야 합니다. MA20 − MA60이 음수에서 양수로 바뀌는 경우도 증가로 봅니다.',
-    '현재 봉의 고가가 직전 10봉의 최고가를 넘어야 합니다.',
-    '직전 10봉에 위 진입 조건을 모두 충족한 봉이 없으면 현재 봉 종가에 진입합니다.',
-    '손절가는 진입봉의 저가에 고정합니다.',
-    '진입 후 종가가 해당 봉의 MA10보다 낮으면 그 종가에 청산합니다.',
+    '현재 봉의 고가가 직전 5봉의 최고가를 넘어야 합니다.',
+    '직전 5봉에 위 진입 조건을 모두 충족한 봉이 없으면 현재 봉의 확정 종가에 진입합니다.',
+    '손절가는 진입봉 직전 5봉의 최저가에 고정합니다.',
+    '실제 매수가에서 손절 거리만큼 상승하면 최초 수량의 50%를 한 번 익절합니다. 진입 후 종가가 해당 봉의 MA20보다 낮으면 그 종가에 남은 수량을 전부 청산합니다.',
   ],
   short: [
-    '현재 봉이 음봉이고, 몸통 길이와 거래량이 각각 직전 봉의 5배 이상이어야 합니다.',
+    '현재 봉이 음봉이고, 몸통 길이가 직전 봉 몸통의 1.5배 이상이어야 합니다.',
     '현재 몸통 길이가 아랫꼬리의 1.5배보다 커야 합니다.',
-    '직전 10봉 중 적어도 한 봉에서 |MA10 − MA20|이 해당 봉의 ATR보다 작아야 합니다.',
-    '현재 봉의 고가·저가 중간값 < MA5 < MA10 < MA20이고, 현재 봉의 저가 < MA60이어야 합니다.',
+    '직전 5봉 중 적어도 한 봉에서 |MA10 − MA20|이 해당 봉의 ATR보다 작아야 합니다.',
+    '현재 봉의 고가·저가 중간값 < MA5 < MA10 < MA20이고, 현재 봉의 저가 < MA60이어야 합니다. 직전 5봉의 최고가는 현재 봉의 MA10·MA20·MA60보다 모두 높아야 합니다. 현재 봉이나 직전 봉에서 저가가 MA60 위에서 아래로 돌파해야 합니다.',
     '현재 봉의 |MA20 − MA60|이 해당 봉의 ATR 이하여야 합니다.',
     '현재 봉을 포함한 최근 3봉에서 MA10 − MA20과 MA20 − MA60이 각각 연속으로 감소해야 합니다. MA20 − MA60이 양수에서 음수로 바뀌는 경우도 감소로 봅니다.',
-    '현재 봉의 저가가 직전 10봉의 최저가보다 낮아야 합니다.',
-    '직전 10봉에 위 진입 조건을 모두 충족한 봉이 없으면 현재 봉 종가에 진입합니다.',
-    '손절가는 진입봉의 고가에 고정합니다.',
-    '진입 후 종가가 해당 봉의 MA10보다 높으면 그 종가에 청산합니다.',
+    '현재 봉의 저가가 직전 5봉의 최저가보다 낮아야 합니다.',
+    '직전 5봉에 위 진입 조건을 모두 충족한 봉이 없으면 현재 봉의 확정 종가에 진입합니다.',
+    '손절가는 진입봉 직전 5봉의 최고가에 고정합니다.',
+    '실제 매수가에서 손절 거리만큼 하락하면 최초 수량의 50%를 한 번 익절합니다. 진입 후 종가가 해당 봉의 MA20보다 높으면 그 종가에 남은 수량을 전부 청산합니다.',
   ],
-  common: '이동평균은 판단하는 봉까지의 선택 주기 확정 종가로 계산합니다. ATR은 각 봉이 시작하기 전 20일간 선택 주기의 실제 변동폭(TR) 평균입니다. 손절은 진입 다음 봉부터 15분봉 순서로 확인하며 종가 청산보다 우선합니다. 진입·청산 슬리피지 0.02%와 편도 수수료 0.055%를 반영합니다.',
+  common: '이동평균은 판단하는 봉까지의 선택 주기 확정 종가로 계산합니다. MA60 돌파는 각 봉의 고가·저가를 그 봉의 MA60과 비교해서 판단합니다. ATR은 각 봉이 시작하기 전 20일간 선택 주기 실제 변동폭(TR)의 평균입니다. 손절과 부분 익절은 진입 다음 봉부터 15분봉 순서로 확인합니다. 같은 15분봉에서 순서를 알 수 없으면 손절을 우선합니다. 시장가 체결에 슬리피지 0.02%, 모든 체결에 편도 수수료 0.055%를 반영합니다.',
 };
