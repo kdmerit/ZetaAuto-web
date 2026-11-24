@@ -103,7 +103,8 @@ describe('durable local analysis', () => {
     vi.mocked(listInstruments).mockResolvedValue([instrument]);
     const parents: Candle[] = [];
     for (let index = -500; index < 135; index += 1) {
-      const [open, high, low, close] = index === entryBar - 2 ? [99.25, 102.5, 98, 99]
+      const [open, high, low, close] = index === entryBar - 10 ? [100, 102, 92.5, 100]
+        : index === entryBar - 2 ? [99.25, 102.5, 98, 99]
         : index === entryBar - 1 ? [99, 100, 97, 98]
         : index === entryBar ? [98, 98.5, 92, 93]
         : index === entryBar + 1 ? [91.5, 98.25, 89, 90]
@@ -153,10 +154,10 @@ describe('durable local analysis', () => {
     const firstParent = vi.mocked(ensureCandles).mock.calls.find(call => call[1] === interval);
     expect(firstParent?.[2]).toBe(origin - (20 * 86400 + 21 * seconds));
     if (paused.status === 'PAUSED') {
-      expect(canResumeLocalJob({ ...paused, version: '2.11.8' })).toBe(false);
+      expect(canResumeLocalJob({ ...paused, version: '2.11.9' })).toBe(false);
       await executeLocalJob({ strategy: 'NEW_HIGH', settings: { ...input, betAmountUsdt: '1' }, resumeId: paused.id }, () => {}, new AbortController().signal);
     }
-    const completed = (await loadLocalJob('NEW_HIGH'))!; expect(completed.status).toBe('COMPLETED'); expect(completed.version).toBe('2.11.9');
+    const completed = (await loadLocalJob('NEW_HIGH'))!; expect(completed.status).toBe('COMPLETED'); expect(completed.version).toBe('2.11.10');
     expect(canResumeLocalJob({ ...completed, version: '2.10.93' })).toBe(false);
     expect(completed.id).toBe(paused.id); expect(completed.settings.newHighLookback).toBeUndefined(); expect(completed.settings.betAmountUsdt).toBe('100');
     expect(completed.settings.interval).toBe(interval); expect(completed.total).toBe((completed.end - completed.start) / seconds * 2);

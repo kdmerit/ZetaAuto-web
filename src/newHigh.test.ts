@@ -39,11 +39,36 @@ const signalAt = (rows: Candle[], index = entryIndex) => prepareNewHigh(rows, se
 describe.each(sides)('%s new high/low signals', side => {
   it('ignores a more extreme eleventh bar and accepts the inclusive 5× body and volume boundaries', () => {
     const fixture = longRows();
-    fixture[entryIndex - 11]!.high = 108;
+    fixture[entryIndex - 11]!.high = 109;
     const rows = inDirection(fixture, side);
     expect(signalAt(rows)).toMatchObject({ side, entry: side === 'LONG' ? 107 : 93, stop: side === 'LONG' ? 101.5 : 98.5 });
     const opposite = side === 'LONG' ? 'SHORT' : 'LONG';
     expect(prepareNewHigh(rows, { ...settings, side: opposite }).at(-1)?.signal).toBeNull();
+  });
+
+  it('uses the wick to break the ten-bar extreme and keeps the close as the entry price', () => {
+    const rows = longRows();
+    rows[entryIndex - 10]!.high = 107.5;
+    expect(signalAt(inDirection(rows, side))).toMatchObject({ side, entry: side === 'LONG' ? 107 : 93 });
+  });
+
+  it('requires the breakout-side extreme to pass MA60 strictly', () => {
+    const rows = longRows();
+    // Older closes raise MA60 to 108 at entry. The larger prior range keeps the gap within ATR.
+    for (let index = entryIndex - 40; index < entryIndex - 30; index += 1) {
+      rows[index] = candle(index, 147, 147, 147, 147);
+    }
+    rows[entryIndex - 4]!.low = 20;
+    expect(signalAt(inDirection(rows, side))).toBeNull();
+    rows[entryIndex]!.high = 108.1;
+    expect(signalAt(inDirection(rows, side))?.side).toBe(side);
+  });
+
+  it('compares the signed MA20–MA60 gap across zero', () => {
+    const rows = longRows();
+    // A close in the MA60 window adds 0.2 to each MA60, yielding gaps of about -0.167, -0.1, and 0.133.
+    rows[entryIndex - 30] = candle(entryIndex - 30, 112, 112, 112, 112);
+    expect(signalAt(inDirection(rows, side))?.side).toBe(side);
   });
 
   it.each([
@@ -51,8 +76,15 @@ describe.each(sides)('%s new high/low signals', side => {
     ['volume below 5×', (rows: Candle[]) => { rows[entryIndex]!.volume = 49.999; }],
     ['body equal to 1.5× the breakout-side wick', (rows: Candle[]) => { rows[entryIndex]!.high = 107 + 5 / 1.5; }],
     ['range midpoint equal to MA5', (rows: Candle[]) => { rows[entryIndex]!.low = 96; }],
-    ['close equal to the breakout level ten bars back', (rows: Candle[]) => { rows[entryIndex - 10]!.high = 107; }],
-    ['one step of the three-bar MA gap moving the wrong way', (rows: Candle[]) => { rows[entryIndex - 11] = candle(entryIndex - 11, 104, 105, 103, 104); }],
+    ['a wick equal to the breakout level ten bars back', (rows: Candle[]) => { rows[entryIndex - 10]!.high = 108; }],
+    ['one step of the MA10–MA20 gap moving the wrong way', (rows: Candle[]) => { rows[entryIndex - 11] = candle(entryIndex - 11, 104, 105, 103, 104); }],
+    ['a flat first step of the MA20–MA60 gap', (rows: Candle[]) => {
+      rows[entryIndex - 21]!.close = 102;
+      rows[entryIndex - 61]!.close = 102;
+    }],
+    ['the last step of the MA20–MA60 gap moving the wrong way', (rows: Candle[]) => {
+      rows[entryIndex - 20] = candle(entryIndex - 20, 100, 105, 98, 105);
+    }],
   ] as const)('rejects a signal with %s', (_label, change) => {
     const rows = longRows();
     change(rows);
@@ -188,8 +220,8 @@ describe('new high settings migration', () => {
       newHighSlEnabled: false, newHighTpMultiplier: 'invalid', newHighDailyMa20Enabled: true, betAmountUsdt: '25' });
     expect(current).toMatchObject({ interval: '1h', betAmountUsdt: '25', newHighSizingMode: 'BET' });
     for (const field of ['newHighLookback', 'newHighSlEnabled', 'newHighTpMultiplier', 'newHighDailyMa20Enabled']) expect(current).not.toHaveProperty(field);
-    expect(newHighWarmup({ ...settings, side: 'LONG' })).toBe(69 * day);
-    expect(newHighWarmup({ ...settings, side: 'SHORT' })).toBe(69 * day);
+    expect(newHighWarmup({ ...settings, side: 'LONG' })).toBe(71 * day);
+    expect(newHighWarmup({ ...settings, side: 'SHORT' })).toBe(71 * day);
     expect(newHighWarmup(current)).toBe(20 * day + 21 * 3600);
   });
 });

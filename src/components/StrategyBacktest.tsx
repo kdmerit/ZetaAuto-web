@@ -914,7 +914,7 @@ export function StrategyBacktest({ strategy, context, embedded = false, forcedMo
               <label className="field-label">고정 베팅액<input inputMode="decimal" disabled={settings.newHighSizingMode === 'RISK'} value={settings.betAmountUsdt} onChange={event => update('betAmountUsdt', event.target.value)} /><small>고정 베팅액 선택 시 활성화</small></label>
               <label className="field-label">고정 손실액<input type="number" inputMode="decimal" min="0.01" step="0.01" disabled={settings.newHighSizingMode !== 'RISK'} value={settings.newHighRiskAmount ?? settings.betAmountUsdt} onChange={event => update('newHighRiskAmount', event.target.value)} /><small>진입 시 손절 거리·수수료·슬리피지 기준 1회 허용 손실</small></label>
             </div>
-            <p className="notice small">롱은 10봉 신고가, 숏은 10봉 신저가의 첫 신호에 종가로 진입합니다. 진입봉의 MA20·MA60 이격은 ATR 이하여야 합니다. 손절가는 진입봉의 저가(롱)·고가(숏)입니다.</p>
+            <p className="notice small">롱은 고가가 직전 10봉의 최고가를 넘고, 숏은 저가가 직전 10봉의 최저가를 밑돌아야 합니다. 첫 신호의 확정 종가에 진입하며, 진입봉의 MA20·MA60 이격은 ATR 이하여야 합니다. 손절가는 진입봉의 저가(롱)·고가(숏)입니다.</p>
           </> : strategy === 'REFERENCE' ? (
             <>
               <label className="field-label">TP 비율 (%)<input type="number" inputMode="decimal" min="51" max="200" step="1" value={settings.referenceTpPercent ?? '80'} onChange={event => update('referenceTpPercent', event.target.value)} /><small>51~200 · 기본 80 · SL라인과 기준봉 고가/저가 사이 간격 기준</small></label>

@@ -25,10 +25,10 @@ export function newHighRiskAmount(settings: BacktestSettings): number {
 
 export function newHighWarmup(settings: BacktestSettings): number {
   const seconds = newHighIntervalSeconds(settings.interval);
-  // The oldest possible prior setup needs its own MA60 and ten earlier ATRs.
+  // The oldest possible prior setup needs three consecutive MA60s and ten earlier ATRs.
   // ATR needs one additional close to form its first true range.
   const atrLookback = 2 * setupLookback;
-  const maLookback = 59 + setupLookback;
+  const maLookback = 59 + 2 + setupLookback;
   return Math.max(atrWindowSeconds + (atrLookback + 1) * seconds, maLookback * seconds);
 }
 
@@ -68,7 +68,13 @@ function gapChanges(gaps: (number | null)[], index: number, direction: 1 | -1, t
     && direction * (current - previous) > tolerance;
 }
 
-function matchingSetup(rows: EnrichedCandle[], gaps: (number | null)[], atrs: (number | null)[], index: number): Signal['side'] | null {
+function matchingSetup(
+  rows: EnrichedCandle[],
+  ma10Ma20Gaps: (number | null)[],
+  ma20Ma60Gaps: (number | null)[],
+  atrs: (number | null)[],
+  index: number,
+): Signal['side'] | null {
   if (index < breakoutLookback) return null;
   const { open, high, low, close, volume, ma5, ma10, ma20, ma60 } = rows[index]!;
   const atr = atrs[index];
@@ -83,16 +89,21 @@ function matchingSetup(rows: EnrichedCandle[], gaps: (number | null)[], atrs: (n
   const candleTolerance = Number.EPSILON * 8 * Math.max(high, previous.high);
   if (body === 0 || body + candleTolerance < 5 * Math.abs(previous.close - previous.open)
     || volume < 5 * previous.volume || body <= 1.5 * wick + candleTolerance) return null;
-  if (Math.abs(ma20 - ma60) > atr + Math.max(ma20, ma60) * 1e-10) return null;
+  const ma20Ma60Tolerance = Math.max(ma20, ma60) * 1e-10;
+  if (Math.abs(ma20 - ma60) > atr + ma20Ma60Tolerance) return null;
 
   const tolerance = Math.max(ma5, ma10, ma20) * 1e-10;
   const midpoint = (high + low) / 2;
+  const breakoutPrice = long ? high : low;
   if (direction * (midpoint - ma5) <= tolerance || direction * (ma5 - ma10) <= tolerance
-    || direction * (ma10 - ma20) <= tolerance || !gapChanges(gaps, index, direction, tolerance)) return null;
-  if (!rows.slice(index - breakoutLookback, index).every(row => long ? close > row.high : close < row.low)) return null;
+    || direction * (ma10 - ma20) <= tolerance
+    || direction * (breakoutPrice - ma60) <= ma20Ma60Tolerance) return null;
+  if (!gapChanges(ma10Ma20Gaps, index, direction, tolerance)
+    || !gapChanges(ma20Ma60Gaps, index, direction, ma20Ma60Tolerance)) return null;
+  if (!rows.slice(index - breakoutLookback, index).every(row => long ? breakoutPrice > row.high : breakoutPrice < row.low)) return null;
 
   for (let earlier = index - setupLookback; earlier < index; earlier += 1) {
-    const gap = gaps[earlier];
+    const gap = ma10Ma20Gaps[earlier];
     const earlierAtr = atrs[earlier];
     if (gap != null && earlierAtr != null && Math.abs(gap) + rows[earlier]!.close * 1e-10 < earlierAtr) return long ? 'LONG' : 'SHORT';
   }
@@ -103,11 +114,12 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): {
   const seconds = newHighIntervalSeconds(settings.interval);
   const rows = enrichCandles(candles);
   const atrs = calendarAtr(candles, settings.interval).map(atr => atr.complete ? atr.value : null);
-  const gaps = rows.map(row => row.ma10 === null || row.ma20 === null ? null : row.ma10 - row.ma20);
+  const ma10Ma20Gaps = rows.map(row => row.ma10 === null || row.ma20 === null ? null : row.ma10 - row.ma20);
+  const ma20Ma60Gaps = rows.map(row => row.ma20 === null || row.ma60 === null ? null : row.ma20 - row.ma60);
   const riskAmount = settings.newHighSizingMode === 'RISK' ? newHighRiskAmount(settings) : undefined;
   const lastSetup = { LONG: -Infinity, SHORT: -Infinity };
   return rows.map((row, index) => {
-    const side = matchingSetup(rows, gaps, atrs, index);
+    const side = matchingSetup(rows, ma10Ma20Gaps, ma20Ma60Gaps, atrs, index);
     let signal: Signal | null = null;
     if (side && (settings.side === 'BOTH' || settings.side === side)) {
       if (index - lastSetup[side] > setupLookback) {
@@ -130,10 +142,10 @@ export const newHighRules = {
     '현재 봉이 양봉이고, 몸통 길이와 거래량이 각각 직전 봉의 5배 이상이어야 합니다.',
     '현재 몸통 길이가 윗꼬리의 1.5배보다 커야 합니다.',
     '직전 10봉 중 적어도 한 봉에서 |MA10 − MA20|이 해당 봉의 ATR보다 작아야 합니다.',
-    '현재 봉의 고가·저가 중간값 > MA5 > MA10 > MA20이어야 합니다.',
+    '현재 봉의 고가·저가 중간값 > MA5 > MA10 > MA20이고, 현재 봉의 고가 > MA60이어야 합니다.',
     '현재 봉의 |MA20 − MA60|이 해당 봉의 ATR 이하여야 합니다.',
-    '현재 봉을 포함한 최근 3봉에서 MA10 − MA20 값이 연속으로 증가해야 합니다.',
-    '현재 종가가 직전 10봉의 최고가를 넘어야 합니다.',
+    '현재 봉을 포함한 최근 3봉에서 MA10 − MA20과 MA20 − MA60이 각각 연속으로 증가해야 합니다. MA20 − MA60이 음수에서 양수로 바뀌는 경우도 증가로 봅니다.',
+    '현재 봉의 고가가 직전 10봉의 최고가를 넘어야 합니다.',
     '직전 10봉에 위 진입 조건을 모두 충족한 봉이 없으면 현재 봉 종가에 진입합니다.',
     '손절가는 진입봉의 저가에 고정합니다.',
     '진입 후 종가가 해당 봉의 MA10보다 낮으면 그 종가에 청산합니다.',
@@ -142,10 +154,10 @@ export const newHighRules = {
     '현재 봉이 음봉이고, 몸통 길이와 거래량이 각각 직전 봉의 5배 이상이어야 합니다.',
     '현재 몸통 길이가 아랫꼬리의 1.5배보다 커야 합니다.',
     '직전 10봉 중 적어도 한 봉에서 |MA10 − MA20|이 해당 봉의 ATR보다 작아야 합니다.',
-    '현재 봉의 고가·저가 중간값 < MA5 < MA10 < MA20이어야 합니다.',
+    '현재 봉의 고가·저가 중간값 < MA5 < MA10 < MA20이고, 현재 봉의 저가 < MA60이어야 합니다.',
     '현재 봉의 |MA20 − MA60|이 해당 봉의 ATR 이하여야 합니다.',
-    '현재 봉을 포함한 최근 3봉에서 MA10 − MA20 값이 연속으로 감소해야 합니다.',
-    '현재 종가가 직전 10봉의 최저가보다 낮아야 합니다.',
+    '현재 봉을 포함한 최근 3봉에서 MA10 − MA20과 MA20 − MA60이 각각 연속으로 감소해야 합니다. MA20 − MA60이 양수에서 음수로 바뀌는 경우도 감소로 봅니다.',
+    '현재 봉의 저가가 직전 10봉의 최저가보다 낮아야 합니다.',
     '직전 10봉에 위 진입 조건을 모두 충족한 봉이 없으면 현재 봉 종가에 진입합니다.',
     '손절가는 진입봉의 고가에 고정합니다.',
     '진입 후 종가가 해당 봉의 MA10보다 높으면 그 종가에 청산합니다.',
