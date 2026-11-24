@@ -188,7 +188,7 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   const market = [
     'SL', 'TRAILING_STOP', 'ROI_LOSS', 'MA60_TOUCH', 'MA20_HALF_BREAK', 'SESSION_CLOSE',
     'VOLATILITY_CLOSE', 'VOLATILITY_MA5_EXIT', 'VOLATILITY_CANDLE_EXIT', 'VOLATILITY_WICK_EXIT', 'NEXT_CANDLE_CLOSE',
-    'NEW_HIGH_PREVIOUS_LOW_CLOSE', 'NEW_HIGH_PREVIOUS_HIGH_CLOSE',
+    'NEW_HIGH_MA10_CLOSE',
     'PULLBACK_MA_EXIT', 'ENVELOPE_MA20_CLOSE', 'ENVELOPE_CLOSE_CONFIRM', 'ENVELOPE_CENTER', 'ENVELOPE_CENTER_RETURN',
     'ENVELOPE_BREAKOUT_CLOSE', 'CANDLE_BREAKOUT_REVERSAL_CLOSE',
   ].includes(reason);
@@ -207,7 +207,7 @@ function close(state: PortfolioState, p: Holding, price: number, quantity: numbe
   p.qty -= qty;
   state.exitReasons[reason] = (state.exitReasons[reason] ?? 0) + 1;
   recordFill(p, reason === 'PARTIAL_TP' ? 'PARTIAL_TP' : 'CLOSE', fill, qty, candle, opening,
-    reason === 'CANDLE_BREAKOUT_REVERSAL_CLOSE' || reason === 'NEW_HIGH_PREVIOUS_LOW_CLOSE' || reason === 'NEW_HIGH_PREVIOUS_HIGH_CLOSE'
+    reason === 'CANDLE_BREAKOUT_REVERSAL_CLOSE' || reason === 'NEW_HIGH_MA10_CLOSE'
     || reason === 'NEXT_CANDLE_CLOSE' || reason === 'VOLATILITY_MA5_EXIT'
     || reason === 'VOLATILITY_CANDLE_EXIT' || reason === 'VOLATILITY_WICK_EXIT' || reason === 'ENVELOPE_MA20_CLOSE' || reason === 'ENVELOPE_CLOSE_CONFIRM'
     || reason === 'ENVELOPE_BREAKOUT_CLOSE');
@@ -1317,11 +1317,11 @@ function processNewHighHolding(state: PortfolioState, position: Holding, bar: Pr
     }
   }
 
-  const { previousLow, previousHigh } = bar.newHigh!;
-  const reversal = long ? previousLow !== null && candle.close < previousLow
-    : previousHigh !== null && candle.close > previousHigh;
-  if (reversal) {
-    close(state, position, candle.close, position.qty, long ? 'NEW_HIGH_PREVIOUS_LOW_CLOSE' : 'NEW_HIGH_PREVIOUS_HIGH_CLOSE', candle);
+  const { ma10 } = bar.newHigh!;
+  // Ignore rounding noise when the close and moving average are equal.
+  const exitAtClose = ma10 !== null && (long ? ma10 - candle.close : candle.close - ma10) > ma10 * 1e-10;
+  if (exitAtClose) {
+    close(state, position, candle.close, position.qty, 'NEW_HIGH_MA10_CLOSE', candle);
   } else {
     position.mark = candle.close;
   }

@@ -3,11 +3,10 @@ import { atrWindowSeconds, calendarAtr } from './atr';
 import type { BacktestInterval, BacktestSettings, Candle, EnrichedCandle, Signal } from './types';
 
 const setupLookback = 10;
-const breakoutLookback = 20;
+const breakoutLookback = 10;
 
 export interface NewHighExitLevels {
-  previousLow: number | null;
-  previousHigh: number | null;
+  ma10: number | null;
 }
 
 function newHighIntervalSeconds(interval: BacktestInterval): number {
@@ -109,7 +108,6 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): {
   const lastSetup = { LONG: -Infinity, SHORT: -Infinity };
   return rows.map((row, index) => {
     const side = matchingSetup(rows, gaps, atrs, index);
-    const previous = rows[index - 1];
     let signal: Signal | null = null;
     if (side && (settings.side === 'BOTH' || settings.side === side)) {
       if (index - lastSetup[side] > setupLookback) {
@@ -123,7 +121,7 @@ export function prepareNewHigh(candles: Candle[], settings: BacktestSettings): {
       // A matching setup blocks a repeat even if no order was placed at that setup.
       lastSetup[side] = index;
     }
-    return { signal, newHigh: { previousLow: previous?.low ?? null, previousHigh: previous?.high ?? null } };
+    return { signal, newHigh: { ma10: row.ma10 } };
   });
 }
 
@@ -135,10 +133,10 @@ export const newHighRules = {
     '현재 봉의 고가·저가 중간값 > MA5 > MA10 > MA20이어야 합니다.',
     '현재 봉의 |MA20 − MA60|이 해당 봉의 ATR 이하여야 합니다.',
     '현재 봉을 포함한 최근 3봉에서 MA10 − MA20 값이 연속으로 증가해야 합니다.',
-    '현재 종가가 직전 20봉의 최고가를 넘어야 합니다.',
+    '현재 종가가 직전 10봉의 최고가를 넘어야 합니다.',
     '직전 10봉에 위 진입 조건을 모두 충족한 봉이 없으면 현재 봉 종가에 진입합니다.',
     '손절가는 진입봉의 저가에 고정합니다.',
-    '진입 후 종가가 직전 봉 저가보다 낮으면 그 종가에 청산합니다.',
+    '진입 후 종가가 해당 봉의 MA10보다 낮으면 그 종가에 청산합니다.',
   ],
   short: [
     '현재 봉이 음봉이고, 몸통 길이와 거래량이 각각 직전 봉의 5배 이상이어야 합니다.',
@@ -147,10 +145,10 @@ export const newHighRules = {
     '현재 봉의 고가·저가 중간값 < MA5 < MA10 < MA20이어야 합니다.',
     '현재 봉의 |MA20 − MA60|이 해당 봉의 ATR 이하여야 합니다.',
     '현재 봉을 포함한 최근 3봉에서 MA10 − MA20 값이 연속으로 감소해야 합니다.',
-    '현재 종가가 직전 20봉의 최저가보다 낮아야 합니다.',
+    '현재 종가가 직전 10봉의 최저가보다 낮아야 합니다.',
     '직전 10봉에 위 진입 조건을 모두 충족한 봉이 없으면 현재 봉 종가에 진입합니다.',
     '손절가는 진입봉의 고가에 고정합니다.',
-    '진입 후 종가가 직전 봉 고가보다 높으면 그 종가에 청산합니다.',
+    '진입 후 종가가 해당 봉의 MA10보다 높으면 그 종가에 청산합니다.',
   ],
-  common: '이동평균은 선택 주기의 종가를 사용합니다. ATR은 각 봉이 시작하기 전 20일간 선택 주기의 실제 변동폭(TR) 평균입니다. 손절은 진입 다음 봉부터 15분봉 순서로 확인하며 종가 청산보다 우선합니다. 진입·청산 슬리피지 0.02%와 편도 수수료 0.055%를 반영합니다.',
+  common: '이동평균은 판단하는 봉까지의 선택 주기 확정 종가로 계산합니다. ATR은 각 봉이 시작하기 전 20일간 선택 주기의 실제 변동폭(TR) 평균입니다. 손절은 진입 다음 봉부터 15분봉 순서로 확인하며 종가 청산보다 우선합니다. 진입·청산 슬리피지 0.02%와 편도 수수료 0.055%를 반영합니다.',
 };

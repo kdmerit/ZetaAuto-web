@@ -27,7 +27,7 @@ export function engineVersionFor(strategy: Strategy): string {
   if (strategy === 'ATR_ENVELOPE') return '2.10.100';
   if (strategy === 'CANDLE_BREAKOUT') return '2.11.5';
   if (strategy === 'ENVELOPE_BREAKOUT') return '2.11.4';
-  if (strategy === 'NEW_HIGH') return '2.11.8';
+  if (strategy === 'NEW_HIGH') return '2.11.9';
   return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'ENVELOPE' ? envelopeLocalJobVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {

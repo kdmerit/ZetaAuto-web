@@ -37,8 +37,10 @@ function inDirection(rows: Candle[], side: typeof sides[number]): Candle[] {
 const signalAt = (rows: Candle[], index = entryIndex) => prepareNewHigh(rows, settings)[index]?.signal;
 
 describe.each(sides)('%s new high/low signals', side => {
-  it('enters a 20-bar breakout at the inclusive 5× body and volume boundaries', () => {
-    const rows = inDirection(longRows(), side);
+  it('ignores a more extreme eleventh bar and accepts the inclusive 5× body and volume boundaries', () => {
+    const fixture = longRows();
+    fixture[entryIndex - 11]!.high = 108;
+    const rows = inDirection(fixture, side);
     expect(signalAt(rows)).toMatchObject({ side, entry: side === 'LONG' ? 107 : 93, stop: side === 'LONG' ? 101.5 : 98.5 });
     const opposite = side === 'LONG' ? 'SHORT' : 'LONG';
     expect(prepareNewHigh(rows, { ...settings, side: opposite }).at(-1)?.signal).toBeNull();
@@ -49,7 +51,7 @@ describe.each(sides)('%s new high/low signals', side => {
     ['volume below 5×', (rows: Candle[]) => { rows[entryIndex]!.volume = 49.999; }],
     ['body equal to 1.5× the breakout-side wick', (rows: Candle[]) => { rows[entryIndex]!.high = 107 + 5 / 1.5; }],
     ['range midpoint equal to MA5', (rows: Candle[]) => { rows[entryIndex]!.low = 96; }],
-    ['close equal to the breakout level 20 bars back', (rows: Candle[]) => { rows[entryIndex - 20]!.high = 107; }],
+    ['close equal to the breakout level ten bars back', (rows: Candle[]) => { rows[entryIndex - 10]!.high = 107; }],
     ['one step of the three-bar MA gap moving the wrong way', (rows: Candle[]) => { rows[entryIndex - 11] = candle(entryIndex - 11, 104, 105, 103, 104); }],
   ] as const)('rejects a signal with %s', (_label, change) => {
     const rows = longRows();
@@ -110,32 +112,32 @@ describe.each(sides)('%s new high/low signals', side => {
 });
 
 describe('new high/low executions', () => {
-  it.each(sides)('holds %s through wick touches and equal closes, then exits on a losing reversal close', side => {
+  it.each(sides)('closes %s only after a close beyond the current MA10', side => {
     const rows = inDirection([...longRows(),
-      candle(entryIndex + 1, 110, 113, 109, 112),
-      candle(entryIndex + 2, 112, 112, 108, 110),
-      candle(entryIndex + 3, 110, 111, 106, 108),
-      candle(entryIndex + 4, 108, 109, 104.5, 105),
+      candle(entryIndex + 1, 110, 113, 109.5, 110),
+      candle(entryIndex + 2, 110, 111, 108, 109), // Below the prior low, but above MA10.
+      candle(entryIndex + 3, 109, 111, 102.5, 107), // The wick goes below MA10.
+      candle(entryIndex + 4, 107, 108, 103.5, 104), // Close equals MA10.
+      candle(entryIndex + 5, 104, 106, 103.75, 104.25), // Between the prior MA10 of 104 and the current 104.425.
     ], side);
-    const reason = side === 'LONG' ? 'NEW_HIGH_PREVIOUS_LOW_CLOSE' : 'NEW_HIGH_PREVIOUS_HIGH_CLOSE';
     const stop = side === 'LONG' ? 101.5 : 98.5;
     const result = runBacktest(rows, settings, 'NEW_HIGH');
-    expect(result).toMatchObject({ entryCount: 1, lossCount: 1, exitReasons: { [reason]: 1 } });
+    expect(result).toMatchObject({ entryCount: 1, lossCount: 1, exitReasons: { NEW_HIGH_MA10_CLOSE: 1 } });
     const trade = result.recentTrades[0]!;
     expect(trade).toMatchObject({ entryAt: rows[entryIndex]!.closeTime, exitAt: rows.at(-1)!.closeTime,
       signal: { initialStop: stop, activeStop: stop } });
     expect(trade.executions.map(fill => fill.timing)).toEqual(['BAR_CLOSE', 'BAR_CLOSE']);
-    expect(trade.exitPrice).toBeCloseTo(side === 'LONG' ? 105 * 0.9998 : 95 * 1.0002, 12);
+    expect(trade.exitPrice).toBeCloseTo(side === 'LONG' ? 104.25 * 0.9998 : 95.75 * 1.0002, 12);
     const { priceLines } = buildLocalChart(result, trade, settings);
     expect(priceLines.map(line => line.kind)).toEqual(['ENTRY', 'SL', 'EXIT']);
     expect(priceLines).toContainEqual({ kind: 'SL', price: stop });
   });
 
-  it.each(sides)('ignores pre-entry extremes and gives the later stop priority over a %s reversal close', side => {
+  it.each(sides)('ignores pre-entry extremes and gives the later stop priority over a %s MA10 close', side => {
     const rows = inDirection(longRows(), side);
     const input = { ...settings, newHighSlEnabled: false, newHighTpEnabled: true, newHighTrailingStopEnabled: true };
     expect(runBacktest(rows, input, 'NEW_HIGH')).toMatchObject({ entryCount: 1, openPositionCount: 1 });
-    rows.push(...inDirection([candle(entryIndex + 1, 111, 113, 110, 112), candle(entryIndex + 2, 112, 115, 101.5, 108)], side));
+    rows.push(...inDirection([candle(entryIndex + 1, 111, 113, 110, 112), candle(entryIndex + 2, 112, 115, 101.5, 102)], side));
     const result = runBacktest(rows, input, 'NEW_HIGH');
     expect(result.exitReasons).toEqual({ SL: 1 });
     expect(result.recentTrades[0]!.exitPrice).toBeCloseTo(side === 'LONG' ? 101.5 * 0.9998 : 98.5 * 1.0002, 12);
