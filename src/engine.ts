@@ -3,6 +3,7 @@ import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portf
 import { atrEnvelopeBacktestParameters, bandFor, currentAtrEnvelopeSettings, currentEnvelopeBreakoutSettings, envelopeEntryBandReached, envelopeHalfCandleAllowsEntry, envelopeParameters, isEnvelopeStrategy, isSmaEnvelopeStrategy, priorEnvelopeBreakoutAllows, priorMovingAverages, projectEnvelopeBands, pullbackEnvelopeParameters } from './envelope';
 import { envelopeCandleContexts, type EnvelopeCandleContext } from './envelopeCandleFilter';
 import { prepareNewHigh, type NewHighExitLevels } from './newHigh';
+import { currentMaDisparitySettings, maDisparitySummary, prepareMaDisparity } from './maDisparity';
 import { referenceTpPercent } from './reference';
 import { advanceAtrEnvelope, atrEnvelopeBand, atrEnvelopeEnabled, enrichMarketCandles, projectAtrEnvelopeBands, type AtrEnvelopeState } from './marketIndicators';
 import { candleBreakoutSignals } from './candleBreakout';
@@ -563,6 +564,7 @@ export interface PreparedBar {
   envelopeBySide?: Partial<Record<'LONG' | 'SHORT', PreparedEnvelope>>;
   newHigh?: NewHighExitLevels;
   newHighIntrabarCandles?: Candle[];
+  maDisparityIntrabarCandles?: Candle[];
   /** Lower-timeframe candles used to replay reference entries and exits in order. */
   referenceIntrabarCandles?: Candle[];
   /** 15-minute candles used to replay volatility exits inside 1h/4h/1d bars. */
@@ -595,27 +597,30 @@ export function prepareSymbolBlock(
   end: number,
   previousWaveState?: WaveState,
   minuteCandles?: Candle[],
-  newHighIntrabarCandles?: Candle[],
+  closeEntryIntrabarCandles?: Candle[],
   referenceIntrabarCandles?: Candle[],
   volatilityIntrabarCandles?: Candle[],
   envelopeIntrabarCandles?: Candle[],
   previousAtrEnvelope?: AtrEnvelopeState,
 ): PreparedSymbol {
-  if (strategy === 'NEW_HIGH') {
-    const definitions = prepareNewHigh(candles, settings);
+  if (strategy === 'NEW_HIGH' || strategy === 'MA_DISPARITY') {
+    const definitions = strategy === 'NEW_HIGH' ? prepareNewHigh(candles, settings) : prepareMaDisparity(candles, settings);
     const seconds = intervalSeconds(settings.interval);
     const intrabarGroups = new Map<number, Candle[]>();
-    for (const intrabar of newHighIntrabarCandles ?? []) {
+    for (const intrabar of closeEntryIntrabarCandles ?? []) {
       const parentOpenTime = Math.floor(intrabar.openTime / seconds) * seconds;
       const rows = intrabarGroups.get(parentOpenTime) ?? [];
       rows.push(intrabar);
       intrabarGroups.set(parentOpenTime, rows);
     }
-    return { symbol, bars: candles.flatMap((candle, index) => candle.openTime < start || candle.openTime >= end ? [] : [{
-      candle, ma20: null, ma60Exit: null,
-      ...definitions[index]!,
-      ...(intrabarGroups.has(candle.openTime) ? { newHighIntrabarCandles: intrabarGroups.get(candle.openTime)!.sort((a, b) => a.openTime - b.openTime) } : {}),
-    }]) };
+    const bars = candles.flatMap<PreparedBar>((candle, index) => {
+      if (candle.openTime < start || candle.openTime >= end) return [];
+      const children = intrabarGroups.get(candle.openTime)?.sort((a, b) => a.openTime - b.openTime);
+      return [{ candle, ma20: null, ma60Exit: null, ...definitions[index]!,
+        ...(children && (strategy === 'NEW_HIGH' ? { newHighIntrabarCandles: children } : { maDisparityIntrabarCandles: children })),
+      }];
+    });
+    return { symbol, bars };
   }
   if (isEnvelopeStrategy(strategy)) {
     const breakout = strategy === 'ENVELOPE_BREAKOUT';
@@ -1104,19 +1109,20 @@ export function runBacktest(
   strategy: Strategy,
   onProgress?: ProgressCallback,
   minuteCandles?: Candle[],
-  newHighIntrabarCandles?: Candle[],
+  closeEntryIntrabarCandles?: Candle[],
   referenceIntrabarCandles?: Candle[],
   volatilityIntrabarCandles?: Candle[],
   envelopeIntrabarCandles?: Candle[],
 ): BacktestResult {
   if (candles.length < 20) throw new Error('분석 캔들이 부족합니다.');
-  if (strategy === 'VOLATILITY' || isEnvelopeStrategy(strategy) || strategy === 'NEW_HIGH' || strategy === 'PULLBACK' || strategy === 'REFERENCE' || strategy === 'CANDLE_BREAKOUT') {
+  if (strategy === 'VOLATILITY' || isEnvelopeStrategy(strategy) || strategy === 'NEW_HIGH' || strategy === 'MA_DISPARITY' || strategy === 'PULLBACK' || strategy === 'REFERENCE' || strategy === 'CANDLE_BREAKOUT') {
     if (strategy === 'ATR_ENVELOPE') settings = currentAtrEnvelopeSettings(settings);
     if (strategy === 'ENVELOPE_BREAKOUT') settings = currentEnvelopeBreakoutSettings(settings);
+    if (strategy === 'MA_DISPARITY') settings = currentMaDisparitySettings(settings);
     const symbol = `${settings.symbol.trim().toUpperCase().replace(/USDT$/, '')}USDT`;
     const start = candles[0]!.openTime;
     const end = candles.at(-1)!.closeTime;
-    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles, newHighIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles, envelopeIntrabarCandles);
+    const prepared = prepareSymbolBlock(symbol, candles, settings, strategy, start, end, undefined, minuteCandles, closeEntryIntrabarCandles, referenceIntrabarCandles, volatilityIntrabarCandles, envelopeIntrabarCandles);
     const state = initialPortfolio(Number(settings.initialCapitalUsdt));
     replayPortfolioBlock(state, [prepared], settings, start, end, intervalSeconds(settings.interval));
     const result = portfolioResult(state, settings);
@@ -1262,7 +1268,7 @@ export function buildLocalChart(
     }
     if (signal.strategy === 'NEW_HIGH' && signal.newHighSlEnabled !== false && signal.initialStop !== signal.activeStop) lines.push(line('INITIAL_SL', signal.initialStop));
     if (signal.strategy === 'NEW_HIGH') lines.push(line('PARTIAL_TP', signal.partial));
-  } else if (signal.strategy === 'REFERENCE') {
+  } else if (signal.strategy === 'REFERENCE' || signal.strategy === 'MA_DISPARITY') {
     lines.push(line('ENTRY', trade.entryPrice));
     lines.push(line('SL', signal.activeStop ?? signal.stop));
     lines.push(line('TP', signal.target));
@@ -1315,6 +1321,7 @@ export function buildLocalChart(
 }
 
 export function strategyDescription(strategy: Strategy): string {
+  if (strategy === 'MA_DISPARITY') return maDisparitySummary;
   if (strategy === 'ENVELOPE_BREAKOUT') return '직전 5봉에 같은 방향의 돌파가 없을 때, 롱은 저가·종가와 저가·고가의 중간값이 모두 상단 이상이고 윗꼬리가 몸통보다 짧으면 확정 종가에 진입합니다. 숏은 고가·종가와 고가·저가의 중간값이 모두 하단 이하이고 아랫꼬리가 몸통보다 짧으면 진입합니다. 이후 봉의 종가가 같은 밴드 안으로 들어오면 청산하며, TP사용을 켜면 고정 TP를 적용합니다.';
   if (strategy === 'ATR_ENVELOPE') return '직전 완성봉까지의 EMA ± ATR × 배수로 밴드를 정합니다. 롱은 하단에서 진입해 상단에서 청산하고 숏은 반대로 적용합니다. SL 배수가 0보다 크면 같은 ATR × SL 배수만큼 실제 체결가 아래(롱) 또는 위(숏)에 손절가를 고정합니다. 매수 필터와 청산 조건은 1분봉 순서로 확인합니다.';
   if (strategy === 'REFERENCE') return '직전봉 대비 거래량·몸통 5배 기준봉의 매수라인 재진입을 15분봉으로 확인하고 직전·기준봉 극값 중 바깥쪽 SL과 입력 TP 비율로 청산합니다.';

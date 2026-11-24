@@ -1,4 +1,4 @@
-export type Strategy = 'PULLBACK' | 'DISPARITY' | 'VOLATILITY' | 'ENVELOPE' | 'ATR_ENVELOPE' | 'ENVELOPE_BREAKOUT' | 'NEW_HIGH' | 'REFERENCE' | 'CANDLE_BREAKOUT';
+export type Strategy = 'PULLBACK' | 'DISPARITY' | 'MA_DISPARITY' | 'VOLATILITY' | 'ENVELOPE' | 'ATR_ENVELOPE' | 'ENVELOPE_BREAKOUT' | 'NEW_HIGH' | 'REFERENCE' | 'CANDLE_BREAKOUT';
 export type EnvelopeExitMode = 'CENTER' | 'OPPOSITE' | 'HALF' | 'MA20';
 
 export interface ContractRisk {

@@ -146,6 +146,20 @@ describe('envelope input defaults and arrangement', () => {
     expect(html.indexOf('엔벨로프 중심선 봉수')).toBeLessThan(html.indexOf('엔벨로프 이격 (%)'));
   });
 
+  it('restores general inputs for the renamed disparity workspace with fixed stop and MA60 exit rules', () => {
+    saveSettings('ENVELOPE_BREAKOUT', { ...defaultSettings('ENVELOPE_BREAKOUT'), symbol: 'ETH', interval: '4h',
+      leverage: '3', envelopeTakeProfitEnabled: true, envelopeTrailingStopEnabled: true });
+    const single = renderToStaticMarkup(<StrategyBacktest strategy="MA_DISPARITY" context={context} />);
+    for (const label of ['이격매매 백테스트', 'ETH 이력보기', 'class="selected">4H', 'value="3"', 'MA60에 닿으면 전량 청산']) {
+      expect(single).toContain(label);
+    }
+    for (const label of ['엔벨로프 이격', '트레일링 스탑', 'TP사용', '부분 TP 50%', 'SL (%)']) expect(single).not.toContain(label);
+    values.set('zetaauto.web.envelopeBreakout.view', 'ALL');
+    const all = renderToStaticMarkup(<StrategyBacktest strategy="MA_DISPARITY" context={context} />);
+    expect(all).toContain('전체종목 이력보기');
+    expect(all).not.toContain('placeholder="BTC"');
+  });
+
   it('shows and copies the body and daily/four-hour wick exclusions', () => {
     const html = renderToStaticMarkup(<StrategyBacktest strategy="ENVELOPE" context={context} />);
     expect(html).toContain('매수금지 조건');

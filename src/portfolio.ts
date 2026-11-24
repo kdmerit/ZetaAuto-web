@@ -146,7 +146,7 @@ function priceLines(p: Holding): PriceLine[] {
       || p.signal.exitMode === 'VOLATILITY_CLOSE'
       || p.signal.exitMode === 'VOLATILITY_TP' && p.signal.volatilityTpEnabled !== false ? [{ kind: 'TP' as const, price: p.target }] : []),
   ];
-  if (p.signal.strategy === 'REFERENCE') return [
+  if (p.signal.strategy === 'REFERENCE' || p.signal.strategy === 'MA_DISPARITY') return [
     { kind: 'ENTRY', price: p.first },
     { kind: 'SL', price: p.stop },
     { kind: 'TP', price: p.target },
@@ -171,7 +171,7 @@ function priceLines(p: Holding): PriceLine[] {
 function recordFill(p: Holding, kind: Execution['kind'], price: number, quantity: number, candle: Candle, opening = false, confirmedClose = false): void {
   const intrabarMode = p.signal.exitMode === 'VOLATILITY_TP' || p.signal.exitMode === 'VOLATILITY_CANDLE_RULE' || p.signal.exitMode === 'ENVELOPE_TOUCH' || p.signal.exitMode === 'PULLBACK_ENVELOPE' || p.signal.exitMode === 'NEW_HIGH_TOUCH' || p.signal.exitMode === 'REFERENCE_TOUCH'
     || p.signal.exitMode === 'VOLATILITY_MA5';
-  const intrabar = intrabarMode && !confirmedClose && (kind === 'ENTRY' ? opening : !opening);
+  const intrabar = !confirmedClose && (p.signal.strategy === 'MA_DISPARITY' || intrabarMode && (kind === 'ENTRY' ? opening : !opening));
   const parentOpenTime = (candle as Candle & { parentOpenTime?: number }).parentOpenTime ?? candle.openTime;
   p.executions.push({ kind, price, quantity, at: opening || intrabar ? candle.openTime : candle.closeTime, candleOpenAt: parentOpenTime,
     ...(intrabar ? { timing: 'INTRABAR' as const } : confirmedClose ? { timing: 'BAR_CLOSE' as const } : {}) });
@@ -295,7 +295,8 @@ function enter(state: PortfolioState, symbol: string, signal: Signal, candle: Ca
     const partialTarget = entry + (entry - signal.stop);
     if (partialTarget > 0) partial = partialTarget;
   } else if (settings.partialTpEnabled && signal.strategy !== 'VOLATILITY' && !envelope
-    && signal.strategy !== 'REFERENCE' && signal.strategy !== 'CANDLE_BREAKOUT' && signal.exitMode !== 'PULLBACK_ENVELOPE') {
+    && signal.strategy !== 'REFERENCE' && signal.strategy !== 'CANDLE_BREAKOUT' && signal.strategy !== 'MA_DISPARITY'
+    && signal.exitMode !== 'PULLBACK_ENVELOPE') {
     partial = (entry + signal.initialTarget) / 2;
   }
   const p: Holding = {
@@ -1215,10 +1216,38 @@ function replayEnvelopeIntrabarHolding(position: Holding, bar: PreparedBar, sett
   return state;
 }
 
+function processMaDisparityHolding(state: PortfolioState, position: Holding, bar: PreparedBar): void {
+  const { candle, ma60Exit } = bar;
+  if (candle.openTime < position.opened) return;
+  if (ma60Exit === null) throw new Error(`${position.symbol}의 MA60 계산에 필요한 캔들이 부족합니다.`);
+  position.target = ma60Exit;
+  const long = position.signal.side === 'LONG';
+  const { stop } = position;
+  for (const row of bar.maDisparityIntrabarCandles ?? [candle]) {
+    const stopAtOpen = long ? row.open <= stop : row.open >= stop;
+    const targetAtOpen = long ? row.open >= ma60Exit : row.open <= ma60Exit;
+    const hitsStop = long ? row.low <= stop : row.high >= stop;
+    const hitsTarget = long ? row.high >= ma60Exit : row.low <= ma60Exit;
+    if (!hitsStop && !hitsTarget) continue;
+    // A known opening is first. When both levels are only reached later in this bar, assume the stop comes first.
+    const stopped = stopAtOpen || (!targetAtOpen && hitsStop);
+    const opening = stopAtOpen || targetAtOpen;
+    const fillLevel = opening ? row.open : stopped ? stop : ma60Exit;
+    const executionCandle = { ...row, parentOpenTime: candle.openTime };
+    close(state, position, fillLevel, position.qty, stopped ? 'SL' : 'MA60_TOUCH', executionCandle, opening);
+    return;
+  }
+  position.mark = candle.close;
+}
+
 function processBar(state: PortfolioState, symbol: string, bar: PreparedBar, settings: BacktestSettings): void {
   const position = state.positions[symbol];
   if (!position) return;
   if (position.signal.strategy === 'NEW_HIGH') return; // Already handled by replayNewHighRows.
+  if (position.signal.strategy === 'MA_DISPARITY') {
+    processMaDisparityHolding(state, position, bar);
+    return;
+  }
   if (position.signal.strategy === 'VOLATILITY' && position.signal.exitMode === 'VOLATILITY_WICK_RULE') {
     processVolatilityWickRule(state, symbol, bar, settings);
     return;
@@ -1559,7 +1588,8 @@ export function replayPortfolioBlock(state: PortfolioState, documents: PreparedS
       const signal = bar.signal;
       const completedEntry = signal?.exitMode !== 'VOLATILITY_MA5' && signal?.exitMode !== 'VOLATILITY_CANDLE_RULE' && signal?.exitMode !== 'REFERENCE_TOUCH';
       if (signal && signal.exitMode !== 'VOLATILITY_TP' && completedEntry) {
-        enter(state, symbol, signal, bar.candle, options.settingsForSymbol?.[symbol] ?? settings, signal.strategy === 'CANDLE_BREAKOUT');
+        enter(state, symbol, signal, bar.candle, options.settingsForSymbol?.[symbol] ?? settings,
+          signal.strategy === 'CANDLE_BREAKOUT' || signal.strategy === 'MA_DISPARITY');
       }
     }
     if (!rows.length) continue;

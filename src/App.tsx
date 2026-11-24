@@ -79,10 +79,12 @@ export function BacktestNavigation({ context, email, onSignOut }: { context: Api
       // Closing a chart with its X button removes the dialog before popstate.
       // The destination is still the same strategy, not the menu; use history
       // state instead of relying only on the dialog remaining in the DOM.
+      const savedStrategy = event.state?.strategy;
+      const strategy = savedStrategy === 'ENVELOPE_BREAKOUT' || savedStrategy === 'DISPARITY' ? 'MA_DISPARITY' : savedStrategy;
       if (event.state?.screen === 'STRATEGY'
-        && (isEnvelopeStrategy(event.state.strategy) || event.state.strategy === 'PULLBACK' || event.state.strategy === 'DISPARITY' || event.state.strategy === 'VOLATILITY' || event.state.strategy === 'NEW_HIGH' || event.state.strategy === 'REFERENCE' || event.state.strategy === 'CANDLE_BREAKOUT')) {
-        if (screenRef.current.kind !== 'STRATEGY' || screenRef.current.strategy !== event.state.strategy) {
-          setScreen({ kind: 'STRATEGY', strategy: event.state.strategy });
+        && (isEnvelopeStrategy(strategy) || strategy === 'PULLBACK' || strategy === 'MA_DISPARITY' || strategy === 'VOLATILITY' || strategy === 'NEW_HIGH' || strategy === 'REFERENCE' || strategy === 'CANDLE_BREAKOUT')) {
+        if (screenRef.current.kind !== 'STRATEGY' || screenRef.current.strategy !== strategy) {
+          setScreen({ kind: 'STRATEGY', strategy });
         }
         return;
       }

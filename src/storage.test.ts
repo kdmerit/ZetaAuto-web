@@ -34,13 +34,16 @@ describe('volatility settings migration and persistence', () => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-describe('envelope breakout history', () => {
-  it('includes prior disparity results without storing them as breakout calculations', () => {
+describe('MA disparity history', () => {
+  it('lists archived results with the current strategy while retaining their original identity', () => {
     const settings = { mode: 'SINGLE', symbol: 'BTC', interval: '1h' } as BacktestSettings;
     const card = { savedAt: Date.now(), mode: settings.mode, symbol: 'BTC', interval: settings.interval,
       settings, result: { returnPercent: 1 } as BacktestResult, serverJobId: null };
     saveBacktestHistory({ ...card, id: 'old', strategy: 'DISPARITY' });
     saveBacktestHistory({ ...card, id: 'new', strategy: 'ENVELOPE_BREAKOUT', savedAt: card.savedAt + 1 });
+    saveBacktestHistory({ ...card, id: 'ma-disparity', strategy: 'MA_DISPARITY', savedAt: card.savedAt + 2 });
+    expect(loadBacktestHistory('MA_DISPARITY', 'SINGLE', 'BTC').map(entry => entry.strategy))
+      .toEqual(['MA_DISPARITY', 'ENVELOPE_BREAKOUT', 'DISPARITY']);
     expect(loadBacktestHistory('ENVELOPE_BREAKOUT', 'SINGLE', 'BTC').map(entry => entry.strategy)).toEqual(['ENVELOPE_BREAKOUT', 'DISPARITY']);
     expect(loadBacktestHistory('DISPARITY', 'SINGLE', 'BTC').map(entry => entry.id)).toEqual(['old']);
     expect(loadBacktestHistory('ENVELOPE_BREAKOUT', 'SINGLE', 'ETH')).toEqual([]);

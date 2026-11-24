@@ -8,6 +8,7 @@ import { validateLowerTimeframeCandles, validateMinuteCandles } from './intrabar
 import { atrEnvelopeBacktestParameters, currentAtrEnvelopeSettings, currentEnvelopeBreakoutSettings, currentEnvelopeSettings, currentPullbackSettings, envelopeBreakoutLookback, envelopeLocalJobVersion, envelopeParameters, envelopeWarmupBars, isEnvelopeStrategy, isSmaEnvelopeStrategy } from './envelope';
 import { envelopeCandleDataStart } from './envelopeCandleFilter';
 import { currentNewHighSettings, newHighWarmup } from './newHigh';
+import { currentMaDisparitySettings, maDisparityWarmup } from './maDisparity';
 import { currentReferenceSettings } from './reference';
 import { candleBreakoutWarmup, currentCandleBreakoutSettings } from './candleBreakout';
 import type { AtrEnvelopeState } from './marketIndicators';
@@ -28,6 +29,7 @@ export function engineVersionFor(strategy: Strategy): string {
   if (strategy === 'CANDLE_BREAKOUT') return '2.11.5';
   if (strategy === 'ENVELOPE_BREAKOUT') return '2.11.4';
   if (strategy === 'NEW_HIGH') return '2.11.11';
+  if (strategy === 'MA_DISPARITY') return '2.11.12';
   return strategy === 'REFERENCE' ? '2.10.72' : strategy === 'ENVELOPE' ? envelopeLocalJobVersion : strategy === 'VOLATILITY' ? '2.10.83' : localEngineVersion;
 }
 export function canResumeLocalJob(job: Pick<LocalJob, 'version' | 'strategy' | 'settings'>): boolean {
@@ -99,7 +101,7 @@ export function jobView(job: LocalJob): LocalJobView {
   return {
     ...view, candidateCount: candidates.length, universeCount: universe.length, result,
     completed: job.status === 'COMPLETED' ? total : current, total,
-    progressLabel: job.phase === 'UNIVERSE' ? (skipsSingleEnvelopeSlippage(job) ? '종목 확인' : '종목·슬리피지 확인')
+    progressLabel: job.phase === 'UNIVERSE' ? (skipsSingleSlippage(job) ? '종목 확인' : '종목·슬리피지 확인')
       : job.phase === 'REPLAY' ? '전체 종목 시간순 계산'
         : job.phase === 'DONE' ? '분석 완료' : `캔들 확인 ${universe[job.cursor]?.symbol ?? ''}`,
   };
@@ -110,9 +112,9 @@ function blockSize(job: LocalJob): number {
   return job.settings.envelopeExecutionModel === 'MINUTE_POLL' ? Math.min(size, Math.max(1, Math.floor(86400 / intervalSeconds(job.settings.interval)))) : size;
 }
 
-export function skipsSingleEnvelopeSlippage(job: Pick<LocalJob, 'strategy' | 'settings' | 'version'>): boolean {
-  return isEnvelopeStrategy(job.strategy) && job.settings.mode === 'SINGLE'
-    && (job.strategy === 'ENVELOPE_BREAKOUT' || job.version === engineVersionFor(job.strategy));
+export function skipsSingleSlippage(job: Pick<LocalJob, 'strategy' | 'settings' | 'version'>): boolean {
+  return job.settings.mode === 'SINGLE' && (job.strategy === 'MA_DISPARITY'
+    || isEnvelopeStrategy(job.strategy) && (job.strategy === 'ENVELOPE_BREAKOUT' || job.version === engineVersionFor(job.strategy)));
 }
 
 function applyInstrumentEligibility(prepared: PreparedSymbol, instrument: EligibleInstrument): void {
@@ -190,6 +192,7 @@ async function executeWithLease(
       if (!options.settings) throw new Error('분석 설정이 없습니다.');
       const copied = structuredClone(options.settings);
       const settings = options.strategy === 'NEW_HIGH' ? currentNewHighSettings(copied)
+        : options.strategy === 'MA_DISPARITY' ? currentMaDisparitySettings(copied)
         : options.strategy === 'ENVELOPE' ? currentEnvelopeSettings({ ...copied, envelopeTakeProfitReplacesBand: true })
         : options.strategy === 'ENVELOPE_BREAKOUT' ? currentEnvelopeBreakoutSettings(copied)
         : options.strategy === 'ATR_ENVELOPE' ? currentAtrEnvelopeSettings(copied)
@@ -234,7 +237,7 @@ async function executeWithLease(
       while (job.cursor < job.candidates.length) {
         signal.throwIfAborted();
         const selected = job.candidates.slice(job.cursor, job.cursor + 4);
-        const checked: EligibleInstrument[] = skipsSingleEnvelopeSlippage(job)
+        const checked: EligibleInstrument[] = skipsSingleSlippage(job)
           ? selected.map(instrument => ({ ...instrument, LONG: true, SHORT: true }))
           : await Promise.all(selected.map(instrument => instrumentEligibility(instrument, signal)));
         if (job.settings.mode === 'ALL') job.universeChecks!.push(...checked);
@@ -253,7 +256,7 @@ async function executeWithLease(
         publishUniverse?.(refreshed);
       }
       delete job.universeChecks;
-      if (!job.universe.length) throw new Error(skipsSingleEnvelopeSlippage(job) ? '분석할 종목을 확인하지 못했습니다.' : '현재 슬리피지 조건을 통과한 종목이 없습니다. 새 분석을 시작해 주세요.');
+      if (!job.universe.length) throw new Error(skipsSingleSlippage(job) ? '분석할 종목을 확인하지 못했습니다.' : '현재 슬리피지 조건을 통과한 종목이 없습니다. 새 분석을 시작해 주세요.');
       job.universe.sort((a, b) => a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0);
       job.cursor = 0;
       job.phase = 'DATA';
@@ -265,7 +268,9 @@ async function executeWithLease(
       ? Math.max(envelopeWarmupBars, envelopeParameters(job.settings).period + extraWarmup)
       : envelopeWarmupBars;
     const warmup = job.strategy === 'NEW_HIGH' ? newHighWarmup(job.settings)
+      : job.strategy === 'MA_DISPARITY' ? maDisparityWarmup(job.settings)
       : job.strategy === 'CANDLE_BREAKOUT' ? candleBreakoutWarmup(job.settings) : warmupBars * seconds;
+    const orderedCloseEntryExits = job.strategy === 'NEW_HIGH' || job.strategy === 'MA_DISPARITY';
     while (job.blockStart < job.end) {
       signal.throwIfAborted();
       if (!job.universe.length) throw new Error('캔들을 확보할 수 있는 종목이 없습니다. 분석 기간의 데이터를 확인해 주세요.');
@@ -280,27 +285,29 @@ async function executeWithLease(
           const referenceIntrabarCandles = job.strategy === 'REFERENCE'
             ? await ensureCandles(instrument, '15m', job.blockStart, blockEnd, blockEnd, signal)
             : undefined;
-          const prepare = (lower: { newHigh?: Candle[]; volatility?: Candle[]; envelope?: Candle[] } = {}) => prepareSymbolBlock(
+          const prepare = (lower: { closeEntry?: Candle[]; volatility?: Candle[]; envelope?: Candle[] } = {}) => prepareSymbolBlock(
             instrument.symbol, candles, activeJob.settings, activeJob.strategy, activeJob.blockStart, blockEnd,
-            activeJob.waveStates[instrument.symbol], undefined, lower.newHigh, referenceIntrabarCandles,
+            activeJob.waveStates[instrument.symbol], undefined, lower.closeEntry, referenceIntrabarCandles,
             lower.volatility, lower.envelope, activeJob.atrEnvelopeStates?.[instrument.symbol],
           );
           let prepared = prepare();
           applyInstrumentEligibility(prepared, instrument);
-          if (job.strategy === 'NEW_HIGH' || (job.strategy === 'VOLATILITY' && job.settings.interval !== '15m')) {
+          if (orderedCloseEntryExits || (job.strategy === 'VOLATILITY' && job.settings.interval !== '15m')) {
             const firstSignal = prepared.bars.find(bar => bar.signal !== null);
             const lowerFrom = job.state.positions[instrument.symbol] ? job.blockStart : firstSignal?.candle.closeTime;
             if (lowerFrom !== undefined && lowerFrom < blockEnd) {
               let lowerCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
-              if (job.strategy === 'NEW_HIGH') {
+              if (orderedCloseEntryExits) {
                 const parents = prepared.bars.filter(bar => bar.candle.openTime >= lowerFrom).map(bar => bar.candle);
                 if (await refreshMismatchedLowerTimeframes(instrument, job.settings.interval, parents, lowerCandles, signal)) {
                   candles = await ensureCandles(instrument, job.settings.interval, job.blockStart - warmup, blockEnd, job.end, signal);
                   lowerCandles = await ensureCandles(instrument, '15m', lowerFrom, blockEnd, blockEnd, signal);
                 }
-                prepared = prepare({ newHigh: lowerCandles });
+                prepared = prepare({ closeEntry: lowerCandles });
                 for (const bar of prepared.bars) {
-                  if (bar.candle.openTime >= lowerFrom) validateLowerTimeframeCandles(bar.candle, bar.newHighIntrabarCandles ?? [], 900, '15분봉');
+                  if (bar.candle.openTime >= lowerFrom) {
+                    validateLowerTimeframeCandles(bar.candle, bar.newHighIntrabarCandles ?? bar.maDisparityIntrabarCandles ?? [], 900, '15분봉');
+                  }
                 }
               } else {
                 prepared = prepare({ volatility: lowerCandles });

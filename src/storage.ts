@@ -54,6 +54,15 @@ export function loadSettings(
 ): BacktestSettings {
   try {
     const raw = localStorage.getItem(`${settingsPrefix}${strategy}`);
+    if (!raw && strategy === 'MA_DISPARITY') {
+      const { symbol, interval, startDate, startTime, endDate, endTime, initialCapitalUsdt, betAmountUsdt, leverage, side, mode } =
+        loadSettings('ENVELOPE_BREAKOUT', fallback);
+      const tab = localStorage.getItem('zetaauto.web.envelopeBreakout.view');
+      return {
+        ...fallback, symbol, interval, startDate, startTime, endDate, endTime, initialCapitalUsdt, betAmountUsdt, leverage, side,
+        mode: tab === 'ALL' || tab === 'SINGLE' ? tab : mode,
+      };
+    }
     if (!raw) return fallback;
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return fallback;
@@ -99,7 +108,7 @@ function isHistoryEntry(value: unknown): value is BacktestHistoryEntry {
   const entry = value as Partial<BacktestHistoryEntry>;
   return (
     typeof entry.id === 'string' &&
-    (entry.strategy === 'PULLBACK' || entry.strategy === 'DISPARITY' || entry.strategy === 'VOLATILITY' || entry.strategy === 'ENVELOPE' || entry.strategy === 'ATR_ENVELOPE' || entry.strategy === 'ENVELOPE_BREAKOUT' || entry.strategy === 'NEW_HIGH' || entry.strategy === 'REFERENCE' || entry.strategy === 'CANDLE_BREAKOUT') &&
+    (entry.strategy === 'PULLBACK' || entry.strategy === 'DISPARITY' || entry.strategy === 'MA_DISPARITY' || entry.strategy === 'VOLATILITY' || entry.strategy === 'ENVELOPE' || entry.strategy === 'ATR_ENVELOPE' || entry.strategy === 'ENVELOPE_BREAKOUT' || entry.strategy === 'NEW_HIGH' || entry.strategy === 'REFERENCE' || entry.strategy === 'CANDLE_BREAKOUT') &&
     typeof entry.savedAt === 'number' &&
     Number.isFinite(entry.savedAt) &&
     (entry.mode === 'SINGLE' || entry.mode === 'ALL') &&
@@ -139,13 +148,11 @@ export function loadBacktestHistory(
   mode: BacktestSettings['mode'],
   symbol: string,
 ): BacktestHistoryEntry[] {
-  const current = loadStoredHistory(strategy);
-  const entries = strategy === 'ENVELOPE_BREAKOUT'
-    ? [...current, ...loadStoredHistory('DISPARITY')].sort((left, right) => right.savedAt - left.savedAt)
-    : current;
-  return entries.filter(
-    (entry) => entry.mode === mode && entry.symbol === symbol,
-  );
+  const entries = loadStoredHistory(strategy);
+  if (strategy === 'MA_DISPARITY') entries.push(...loadStoredHistory('ENVELOPE_BREAKOUT'));
+  if (strategy === 'MA_DISPARITY' || strategy === 'ENVELOPE_BREAKOUT') entries.push(...loadStoredHistory('DISPARITY'));
+  return entries.filter(entry => entry.mode === mode && entry.symbol === symbol)
+    .sort((left, right) => right.savedAt - left.savedAt);
 }
 
 export function saveBacktestHistory(entry: BacktestHistoryEntry): void {

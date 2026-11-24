@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import type { Strategy } from '../types';
 
-type MenuItemId = 'CHART' | Exclude<Strategy, 'PULLBACK' | 'DISPARITY'>;
+type MenuItemId = 'CHART' | Exclude<Strategy, 'PULLBACK' | 'DISPARITY' | 'ENVELOPE_BREAKOUT'>;
 
 interface MenuItem {
   id: MenuItemId;
@@ -17,7 +17,7 @@ const menuItems: MenuItem[] = [
   { id: 'NEW_HIGH', title: '신고가 백테스트', strategy: 'NEW_HIGH' },
   { id: 'CANDLE_BREAKOUT', title: '캔들돌파 백테스트', strategy: 'CANDLE_BREAKOUT' },
   { id: 'ATR_ENVELOPE', title: 'ATR 엔벨로프 백테스트', strategy: 'ATR_ENVELOPE' },
-  { id: 'ENVELOPE_BREAKOUT', title: '엔벨돌파 백테스트', strategy: 'ENVELOPE_BREAKOUT' },
+  { id: 'MA_DISPARITY', title: '이격매매 백테스트', strategy: 'MA_DISPARITY' },
   { id: 'VOLATILITY', title: '변동성 돌파 백테스트', strategy: 'VOLATILITY' },
   { id: 'REFERENCE', title: '기준봉 백테스트', strategy: 'REFERENCE' },
   { id: 'ENVELOPE', title: '엔벨로프 백테스트', strategy: 'ENVELOPE' },
@@ -31,7 +31,11 @@ function loadMenuOrder(): MenuItemId[] {
   try {
     const saved = JSON.parse(window.localStorage.getItem(backtestMenuOrderStorageKey) ?? 'null') as unknown;
     if (!Array.isArray(saved)) return defaultOrder;
-    const order = saved.map(value => value === 'PULLBACK' ? 'ATR_ENVELOPE' : value === 'DISPARITY' ? 'ENVELOPE_BREAKOUT' : value)
+    const order = saved.map(value => {
+      if (value === 'PULLBACK') return 'ATR_ENVELOPE';
+      if (value === 'DISPARITY' || value === 'ENVELOPE_BREAKOUT') return 'MA_DISPARITY';
+      return value;
+    })
       .filter((value): value is MenuItemId => typeof value === 'string' && menuItemById.has(value as MenuItemId));
     return defaultOrder.every(id => order.includes(id)) && order.length === defaultOrder.length ? order : defaultOrder;
   } catch {

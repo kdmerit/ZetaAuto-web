@@ -8,6 +8,7 @@ import { advanceAtrEnvelope, atrEnvelopeParameters, type AtrEnvelopeState } from
 import type { BacktestSettings, Candle } from './types';
 import { universeRetentionMs, weeklyUniverseDatabaseKey, type WeeklyUniverseSnapshot } from './universeCache';
 import { dailyTrendRows, minuteRows } from './test/envelopeFixtures';
+import { maDisparityEntryCandles } from './test/maDisparityFixtures';
 
 vi.mock('./marketData', async importOriginal => {
   const actual = await importOriginal<typeof import('./marketData')>();
@@ -56,6 +57,46 @@ beforeEach(async () => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('durable local analysis', () => {
+  it('resumes a held MA disparity and takes MA60 before a later stop in the same hour', async () => {
+    const hour = 3600;
+    const entryAt = origin + 128 * hour;
+    const end = entryAt + 2 * hour;
+    const input: BacktestSettings = { ...settings, mode: 'SINGLE', side: 'LONG', endDate: '2026-01-06', endTime: '19:00' };
+    const parents = maDisparityEntryCandles(entryAt - hour, hour, 620);
+    parents.push(
+      { openTime: entryAt, closeTime: entryAt + hour, open: 107, high: 115, low: 98, close: 103, volume: 4 },
+      { openTime: entryAt + hour, closeTime: end, open: 103, high: 103, low: 103, close: 103, volume: 4 },
+    );
+    const lower = [[107, 113, 106, 112], [112, 115, 110, 114], [114, 114, 98, 100], [100, 103, 100, 103],
+      ...Array.from({ length: 4 }, () => [103, 103, 103, 103]),
+    ].map(([open, high, low, close], index): Candle => ({
+      openTime: entryAt + index * 900, closeTime: entryAt + (index + 1) * 900, open: open!, high: high!, low: low!, close: close!, volume: 1,
+    }));
+    vi.mocked(listInstruments).mockResolvedValue([{ symbol: 'AAAUSDT', launchAt: parents[0]!.openTime }]);
+    vi.mocked(instrumentEligibility).mockClear();
+    vi.mocked(ensureCandles).mockImplementation(async (_instrument, interval, from, to) =>
+      (interval === '15m' ? lower : parents).filter(row => row.openTime >= from && row.closeTime <= to));
+
+    const pause = new AbortController();
+    await executeLocalJob({ strategy: 'MA_DISPARITY', settings: input }, view => {
+      if (view.phase === 'DATA' && view.blockStart === entryAt) pause.abort();
+    }, pause.signal);
+    const paused = (await loadLocalJob('MA_DISPARITY'))!;
+    expect(paused).toMatchObject({ status: 'PAUSED', blockStart: entryAt, result: { entryCount: 1, openPositionCount: 1 } });
+    expect(canResumeLocalJob(paused)).toBe(true);
+    expect(vi.mocked(ensureCandles).mock.calls.map(call => call.slice(1, 4)))
+      .toEqual([['1h', origin - 481 * hour, entryAt]]);
+    expect(instrumentEligibility).not.toHaveBeenCalled();
+
+    await executeLocalJob({ strategy: 'MA_DISPARITY', resumeId: paused.id }, () => {}, new AbortController().signal);
+    const completed = (await loadLocalJob('MA_DISPARITY'))!;
+    expect(completed).toMatchObject({ status: 'COMPLETED', result: { exitReasons: { MA60_TOUCH: 1 }, openPositionCount: 0 } });
+    expect(completed.result?.recentTrades[0]).toMatchObject({ entryAt, exitAt: entryAt + 900, signal: { stop: 98.5 } });
+    expect(vi.mocked(ensureCandles).mock.calls.filter(call => call[1] === '15m').map(call => call.slice(2, 4)))
+      .toEqual([[entryAt, end]]);
+    expect((await loadLocalResult(completed.id))?.result).toEqual(completed.result);
+  });
+
   it('resumes an envelope breakout across minute-replay blocks with all 245 warmup candles', async () => {
     const seconds = 3600;
     const warmup = 245;
