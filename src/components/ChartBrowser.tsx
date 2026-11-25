@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { chartIntervals } from '../chartIntervals';
 import { listInstruments, type Instrument } from '../marketData';
-import { loadMarketChart, matchingChartInstruments, mergeMarketChartPages, NoMarketCandlesError, normalizeChartQuery } from '../marketChart';
+import { loadMarketChart, loadOlderMarketChart, matchingChartInstruments, normalizeChartQuery } from '../marketChart';
 import type { BacktestInterval, ChartData } from '../types';
 import { ChartModal } from './ChartModal';
 
@@ -71,14 +71,11 @@ export function ChartBrowser() {
     pageBusy.current = true; setLoadingPage(true); setHistoryError(null);
     const id = request.current; const abort = new AbortController(); controller.current = abort;
     try {
-      const page = await loadMarketChart(instrument, current.interval, { beforeAt: current.candles[0]!.openTime, signal: abort.signal });
+      const result = await loadOlderMarketChart(instrument, current, abort.signal);
       if (id !== request.current || abort.signal.aborted) return false;
-      const merged = mergeMarketChartPages(page, current); commitChart(merged); return merged.candles.length > current.candles.length;
+      commitChart(result.chart); setHasOlder(result.hasOlder); return result.chart.candles.length > current.candles.length;
     } catch (failure) {
-      if (id === request.current && !abort.signal.aborted) {
-        if (failure instanceof NoMarketCandlesError) setHasOlder(false);
-        else setHistoryError(failure instanceof Error ? failure.message : '이전 캔들을 불러오지 못했습니다.');
-      }
+      if (id === request.current && !abort.signal.aborted) setHistoryError(failure instanceof Error ? failure.message : '이전 캔들을 불러오지 못했습니다.');
       return false;
     } finally { if (id === request.current) { pageBusy.current = false; setLoadingPage(false); } }
   };
@@ -103,7 +100,7 @@ export function ChartBrowser() {
       <p className="muted small">영문 대문자 · 입력한 글자로 시작하는 USDT 종목</p>
       {loadingList ? <p className="muted" role="status">종목 목록을 불러오는 중…</p> : null}
       {error ? <><p className="error" role="alert">{error}</p>{!instruments.length ? <button className="outline-button" type="button" onClick={() => setListRevision(value => value + 1)}>종목 목록 다시 불러오기</button> : null}</> : null}
-      {loadingSymbol ? <p className="notice small" role="status">{loadingSymbol} 차트·120일 거래량 자료를 불러오는 중…</p> : null}
+      {loadingSymbol ? <p className="notice small" role="status">{loadingSymbol} 차트를 불러오는 중…</p> : null}
       {!loadingList && query ? <><p className="muted small" aria-live="polite">{query}로 시작하는 종목 {matches.length}개</p><div className="market-symbol-list" aria-label="USDT 종목 검색 결과">{matches.map(instrument => <button className="market-symbol" type="button" key={instrument.symbol} onClick={() => { void open(instrument); }}>{instrument.symbol}<span aria-hidden="true">›</span></button>)}</div>{!matches.length ? <p className="muted">해당 글자로 시작하는 USDT 종목이 없습니다.</p> : null}</> : !loadingList ? <p className="muted">종목명의 첫 글자를 입력해 주세요.</p> : null}
     </section>
   </div>{chart ? <ChartModal chart={chart} onClose={close} onLoadOlder={hasOlder ? older : undefined} onIntervalChange={changeInterval} loadingOlder={loadingPage} historyError={historyError} /> : null}</main>;

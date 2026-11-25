@@ -1,5 +1,5 @@
 import { enrichCandles, intervalSeconds } from './api';
-import { calendarAtr, trueRange } from './atr';
+import { calendarAtr, chartAtr14, chartAtrPeriod, trueRange } from './atr';
 export { trueRange } from './atr';
 import type { AtrEnvelopeInputs, AtrEnvelopeParameters, BacktestInterval, Candle, ChartData, EnrichedCandle, EnvelopeBand } from './types';
 
@@ -109,18 +109,24 @@ export function saveMarketIndicators(settings: MarketIndicatorSettings): void {
 }
 
 /** Average same-resolution volumes in [t - 120 days, t); never include the selected candle. */
-export function enrichMarketCandles(rows: Candle[], interval: BacktestInterval): EnrichedCandle[] {
+export function enrichMarketCandles(
+  rows: Candle[],
+  interval: BacktestInterval,
+  atrPeriod?: typeof chartAtrPeriod,
+): EnrichedCandle[] {
   let left = 0; let volume = 0;
   const expectedVolumeSamples = volumeWindowSeconds / intervalSeconds(interval);
-  const atr = calendarAtr(rows, interval, true);
+  const atr = atrPeriod === chartAtrPeriod ? chartAtr14(rows) : calendarAtr(rows, interval, true);
   return enrichCandles(rows).map((candle, index) => {
     while (left < index && rows[left]!.openTime < candle.openTime - volumeWindowSeconds) volume -= rows[left++]!.volume;
     const samples = index - left;
     const average = samples ? Math.max(0, volume) / samples : null;
     const tr = trueRange(candle, rows[index - 1]?.close);
+    const { value, samples: atrSamples, expected: expectedAtrSamples } = atr[index]!;
     const enriched = { ...candle, marketMetrics: { trueRange: tr, trueRangePercent: candle.close > 0 ? tr / candle.close * 100 : null,
-      averageTrueRange20d: atr[index]!.value, atrPercent: candle.close > 0 && atr[index]!.value !== null ? atr[index]!.value! / candle.close * 100 : null,
-      atrSamples: atr[index]!.samples, expectedAtrSamples: atr[index]!.expected,
+      ...(atrPeriod === chartAtrPeriod ? { averageTrueRange14: value } : { averageTrueRange20d: value }),
+      atrPercent: candle.close > 0 && value !== null ? value / candle.close * 100 : null,
+      atrSamples, expectedAtrSamples,
       averageVolume120d: average, volumePercent: average !== null && average > 0 ? candle.volume / average * 100 : null,
       volumeSamples: samples, expectedVolumeSamples } };
     volume += candle.volume;

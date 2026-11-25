@@ -147,6 +147,7 @@ export interface EnrichedCandle extends Candle {
   marketMetrics?: {
     trueRange: number;
     trueRangePercent: number | null;
+    averageTrueRange14?: number | null;
     averageTrueRange20d?: number | null;
     atrPercent?: number | null;
     atrSamples?: number;

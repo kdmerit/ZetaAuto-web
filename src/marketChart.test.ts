@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { intervalSeconds } from './api';
 import { cacheCandles, openCacheDatabase } from './database';
-import { loadMarketChart, marketChartWindow, matchingChartInstruments, mergeMarketChartPages, NoMarketCandlesError, normalizeChartQuery } from './marketChart';
+import { loadMarketChart, loadOlderMarketChart, marketChartWindow, matchingChartInstruments, NoMarketCandlesError, normalizeChartQuery } from './marketChart';
 import type { BacktestInterval, Candle } from './types';
 
 const now = Date.UTC(2026, 10, 2, 12, 45) / 1000;
@@ -27,41 +27,89 @@ describe('standalone USDT charts and cache-only prefix search', () => {
     expect(matchingChartInstruments(instruments, 'bt').map(row => row.symbol)).toEqual(['BTCUSDT']);
     expect(matchingChartInstruments(instruments, '')).toEqual([]); expect(matchingChartInstruments(instruments, 'ZZ')).toEqual([]); expect(fetch).not.toHaveBeenCalled();
   });
-  it.each(['15m', '1h', '4h', '1d'] as const)('loads %s candles with true 120-day warmup from IndexedDB, no trade data or repeated requests', async interval => {
-    const window = marketChartWindow(interval); const data = rows(interval, window.warmupStart, window.end); data.at(-1)!.volume = 1000;
-    const instrument = { symbol: 'BTCUSDT', launchAt: window.warmupStart }; await cacheCandles(instrument.symbol, interval, data);
+  it.each(['15m', '1h', '4h', '1d'] as const)('loads 300 %s candles from a 1000-bar IndexedDB buffer and displays its ATR14', async interval => {
+    const { end } = marketChartWindow(interval);
+    const step = intervalSeconds(interval);
+    const start = end - 1000 * step;
+    const data = rows(interval, start, end);
+    data.at(-1)!.volume = 1000;
+    data.at(-15)!.high = 202;
+    data.at(-1)!.high = 116;
+    const instrument = { symbol: 'BTCUSDT', launchAt: 0 };
+    await cacheCandles(instrument.symbol, interval, data);
     const chart = await loadMarketChart(instrument, interval);
-    expect(chart.candles).toHaveLength(300); expect(chart.referenceIndex).toBe(299); expect(chart.candles.at(-1)!.closeTime).toBe(window.end);
-    expect(chart.market!.sourceCandles).toHaveLength(data.length); expect(chart.side).toBeNull(); expect(chart.markers).toEqual([]); expect(chart.priceLines).toEqual([]); expect(chart.waves).toEqual([]);
-    expect(chart.candles.at(-1)!.marketMetrics).toMatchObject({ averageVolume120d: 500, volumePercent: 200, volumeSamples: 120 * 86400 / intervalSeconds(interval) });
+    expect(chart.candles).toHaveLength(300);
+    expect(chart.referenceIndex).toBe(299);
+    expect(chart.candles.at(-1)!.closeTime).toBe(end);
+    expect(chart.market!.sourceCandles).toHaveLength(1000);
+    expect(chart.side).toBeNull(); expect(chart.markers).toEqual([]); expect(chart.priceLines).toEqual([]); expect(chart.waves).toEqual([]);
+    expect(chart.candles.at(-1)!.marketMetrics).toMatchObject({
+      averageTrueRange14: 4, atrSamples: 14, expectedAtrSamples: 14,
+      averageVolume120d: 500, volumePercent: 200, volumeSamples: Math.min(999, 120 * 86400 / step),
+    });
     expect(await loadMarketChart(instrument, interval)).toEqual(chart); expect(fetch).not.toHaveBeenCalled();
   });
-  it('fetches only one absent cached candle, using public prices without Authorization or orderbook requests', async () => {
-    const window = marketChartWindow('1h'); const data = rows('1h', window.warmupStart, window.end); const missing = data[data.length - 5]!;
+  it('fills an incomplete buffer in one public 1000-bar request without Authorization', async () => {
+    const { end } = marketChartWindow('1h');
+    const start = end - 1000 * 3600;
+    const data = rows('1h', start, end);
+    const missing = data[data.length - 5]!;
     await cacheCandles('BTCUSDT', '1h', data.filter(candle => candle !== missing));
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input)); expect(url.pathname).toBe('/v5/market/kline'); expect(url.searchParams.get('interval')).toBe('60'); expect(init?.headers).toBeUndefined();
-      expect(Number(url.searchParams.get('start'))).toBe(missing.openTime * 1000); expect(Number(url.searchParams.get('end'))).toBe(missing.closeTime * 1000 - 1);
+      expect(url.searchParams.get('limit')).toBe('1000');
+      expect(Number(url.searchParams.get('start'))).toBe(start * 1000);
+      expect(Number(url.searchParams.get('end'))).toBe(end * 1000 - 1);
       return new Response(JSON.stringify({ retCode: 0, result: { list: [[missing.openTime * 1000, missing.open, missing.high, missing.low, missing.close, missing.volume].map(String)] } }));
     }); vi.stubGlobal('fetch', fetcher);
-    const instrument = { symbol: 'BTCUSDT', launchAt: window.warmupStart };
+    const instrument = { symbol: 'BTCUSDT', launchAt: 0 };
     expect((await loadMarketChart(instrument, '1h')).candles).toHaveLength(300); await loadMarketChart(instrument, '1h'); expect(fetcher).toHaveBeenCalledTimes(1);
   });
-  it('merges adjacent older pages, retains volume warmup, preserves latest focus and refuses to join gaps', async () => {
-    const window = marketChartWindow('1h'); const oldWindow = marketChartWindow('1h', { beforeAt: window.start });
-    const instrument = { symbol: 'BTCUSDT', launchAt: oldWindow.warmupStart };
-    await cacheCandles(instrument.symbol, '1h', rows('1h', oldWindow.warmupStart, window.end));
-    const current = await loadMarketChart(instrument, '1h'); const older = await loadMarketChart(instrument, '1h', { beforeAt: window.start });
-    const merged = mergeMarketChartPages(older, current);
-    expect(merged.candles).toHaveLength(600); expect(merged.referenceIndex).toBe(599); expect(merged.candles[0]!.marketMetrics!.averageVolume120d).toBe(500);
-    expect(merged.priceLines).toEqual([]); expect(merged.executions).toEqual([]); expect(merged.market!.sourceCandles.length).toBeGreaterThan(current.market!.sourceCandles.length);
-    expect(() => mergeMarketChartPages({ ...older, symbol: 'ETHUSDT' }, current)).toThrow('서로 다른');
-    expect(() => mergeMarketChartPages({ ...older, candles: older.candles.slice(0, -1) }, current)).toThrow('누락'); expect(fetch).not.toHaveBeenCalled();
+  it('reuses two 300-bar pages before requesting the next batch at the oldest buffered candle', async () => {
+    const interval = '15m';
+    const { end } = marketChartWindow(interval);
+    const step = intervalSeconds(interval);
+    const instrument = { symbol: 'BTCUSDT', launchAt: 0 };
+    const requestedEnds: number[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const to = (Number(url.searchParams.get('end')) + 1) / 1000;
+      requestedEnds.push(to);
+      expect(url.searchParams.get('limit')).toBe('1000');
+      expect(Number(url.searchParams.get('start')) / 1000).toBe(to - 1000 * step);
+      const list = rows(interval, to - 1000 * step, to).reverse().map(candle =>
+        [candle.openTime * 1000, candle.open, candle.high, candle.low, candle.close, candle.volume].map(String));
+      return new Response(JSON.stringify({ retCode: 0, result: { list } }));
+    }));
+    const initial = await loadMarketChart(instrument, interval);
+    const second = (await loadOlderMarketChart(instrument, initial)).chart;
+    const third = (await loadOlderMarketChart(instrument, second)).chart;
+    expect([initial.candles.length, second.candles.length, third.candles.length]).toEqual([300, 600, 900]);
+    expect(requestedEnds).toEqual([end]);
+    const fourth = (await loadOlderMarketChart(instrument, third)).chart;
+    expect(requestedEnds).toEqual([end, end - 1000 * step]);
+    expect(fourth.candles).toHaveLength(1200);
+    expect(fourth.candles[0]!.openTime).toBe(end - 1200 * step);
+    expect(fourth.candles[299]!.closeTime).toBe(third.candles[0]!.openTime);
+    expect(fourth.referenceIndex).toBe(1199);
+    expect(fourth.market!.sourceCandles).toHaveLength(2000);
+    expect(fourth.candles.every(candle => candle.marketMetrics!.atrSamples === 14)).toBe(true);
+  });
+  it('uses the final short page at the listing boundary and stops paging', async () => {
+    const { end } = marketChartWindow('1h');
+    const instrument = { symbol: 'BTCUSDT', launchAt: end - 350 * 3600 };
+    await cacheCandles(instrument.symbol, '1h', rows('1h', instrument.launchAt, end));
+    const chart = await loadMarketChart(instrument, '1h');
+    const older = await loadOlderMarketChart(instrument, chart);
+    expect(older.hasOlder).toBe(false);
+    expect(older.chart.candles).toHaveLength(350);
+    expect(older.chart.candles[0]!.marketMetrics!.atrSamples).toBe(1);
+    expect(fetch).not.toHaveBeenCalled();
   });
   it('keeps a selected historical time in a new resolution and only uses completed bars', async () => {
     const focusAt = now - 10 * 86400 + 17; const window = marketChartWindow('4h', { focusAt });
-    await cacheCandles('BTCUSDT', '4h', rows('4h', window.warmupStart, window.end));
-    const chart = await loadMarketChart({ symbol: 'BTCUSDT', launchAt: window.warmupStart }, '4h', { focusAt });
+    await cacheCandles('BTCUSDT', '4h', rows('4h', window.end - 1000 * 14400, window.end));
+    const chart = await loadMarketChart({ symbol: 'BTCUSDT', launchAt: 0 }, '4h', { focusAt });
     expect(chart.candles[chart.referenceIndex!]!.openTime).toBe(Math.floor(focusAt / 14400) * 14400); expect(chart.candles.every(row => row.closeTime <= now)).toBe(true);
   });
   it('fails empty/unavailable windows explicitly and supports cancellation before any public request', async () => {

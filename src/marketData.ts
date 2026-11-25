@@ -168,6 +168,27 @@ async function download(symbol: string, interval: CandleInterval, start: number,
   return rows.sort((a, b) => a.openTime - b.openTime);
 }
 
+/** Fill one chart buffer with up to 1,000 completed bars of the selected resolution. */
+export async function readChartCandleBatch(
+  instrument: Instrument,
+  interval: BacktestInterval,
+  end: number,
+  signal?: AbortSignal,
+): Promise<Candle[]> {
+  signal?.throwIfAborted();
+  const step = intervalSeconds(interval);
+  const start = Math.max(end - 1000 * step, Math.floor(instrument.launchAt / step) * step);
+  if (start >= end) return [];
+  const cached = await readCandlePages(instrument.symbol, interval, start, end);
+  signal?.throwIfAborted();
+  if (cached.length === (end - start) / step) return cached;
+
+  const fetched = await download(instrument.symbol, interval, start, end, signal);
+  await cacheCandles(instrument.symbol, interval, fetched);
+  const rows = new Map([...cached, ...fetched].map(candle => [candle.openTime, candle]));
+  return [...rows.values()].sort((a, b) => a.openTime - b.openTime);
+}
+
 /** Rebuild one missing parent bar from a complete lower-timeframe response. */
 async function recoverFromLowerTimeframe(symbol: string, interval: CandleInterval, openTime: number, signal?: AbortSignal): Promise<{ parent: Candle; lower: Candle[] } | null> {
   const sourceInterval: CandleInterval | null = interval === '1m' ? null : interval === '15m' ? '1m' : '15m';
