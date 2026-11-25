@@ -18,6 +18,12 @@ beforeEach(async () => {
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+function apiResponse(candles: Candle[]): Response {
+  return new Response(JSON.stringify({ retCode: 0, result: {
+    list: candles.slice().reverse().map(candle => [candle.openTime * 1000, candle.open, candle.high, candle.low, candle.close, candle.volume].map(String)),
+  } }));
+}
+
 describe('standalone USDT charts and cache-only prefix search', () => {
   it('normalizes to English capitals only and applies literal prefix matching, not substring matching', () => {
     const instruments = ['BBBUSDT', 'BTCUSDT', 'ETHUSDT', 'ABUSDT', '1000BONKUSDT'].map(symbol => ({ symbol, launchAt: 0 }));
@@ -27,7 +33,7 @@ describe('standalone USDT charts and cache-only prefix search', () => {
     expect(matchingChartInstruments(instruments, 'bt').map(row => row.symbol)).toEqual(['BTCUSDT']);
     expect(matchingChartInstruments(instruments, '')).toEqual([]); expect(matchingChartInstruments(instruments, 'ZZ')).toEqual([]); expect(fetch).not.toHaveBeenCalled();
   });
-  it.each(['15m', '1h', '4h', '1d'] as const)('loads 300 %s candles from a 1000-bar IndexedDB buffer and displays its ATR14', async interval => {
+  it.each(['15m', '1h', '4h', '1d'] as const)('loads 300 %s candles from a 1000-bar buffer, including the live bar and ATR14', async interval => {
     const { end } = marketChartWindow(interval);
     const step = intervalSeconds(interval);
     const start = end - 1000 * step;
@@ -37,17 +43,22 @@ describe('standalone USDT charts and cache-only prefix search', () => {
     data.at(-1)!.high = 116;
     const instrument = { symbol: 'BTCUSDT', launchAt: 0 };
     await cacheCandles(instrument.symbol, interval, data);
+    const fetcher = vi.fn(async () => apiResponse(data));
+    vi.stubGlobal('fetch', fetcher);
     const chart = await loadMarketChart(instrument, interval);
     expect(chart.candles).toHaveLength(300);
     expect(chart.referenceIndex).toBe(299);
     expect(chart.candles.at(-1)!.closeTime).toBe(end);
+    expect(chart.candles.at(-1)!.openTime).toBe(end - step);
+    expect(chart.candles.at(-1)!.closeTime).toBeGreaterThan(now);
     expect(chart.market!.sourceCandles).toHaveLength(1000);
     expect(chart.side).toBeNull(); expect(chart.markers).toEqual([]); expect(chart.priceLines).toEqual([]); expect(chart.waves).toEqual([]);
     expect(chart.candles.at(-1)!.marketMetrics).toMatchObject({
       averageTrueRange14: 4, atrSamples: 14, expectedAtrSamples: 14,
       averageVolume120d: 500, volumePercent: 200, volumeSamples: Math.min(999, 120 * 86400 / step),
     });
-    expect(await loadMarketChart(instrument, interval)).toEqual(chart); expect(fetch).not.toHaveBeenCalled();
+    expect(await loadMarketChart(instrument, interval)).toEqual(chart);
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
   it('fills an incomplete buffer in one public 1000-bar request without Authorization', async () => {
     const { end } = marketChartWindow('1h');
@@ -60,10 +71,14 @@ describe('standalone USDT charts and cache-only prefix search', () => {
       expect(url.searchParams.get('limit')).toBe('1000');
       expect(Number(url.searchParams.get('start'))).toBe(start * 1000);
       expect(Number(url.searchParams.get('end'))).toBe(end * 1000 - 1);
-      return new Response(JSON.stringify({ retCode: 0, result: { list: [[missing.openTime * 1000, missing.open, missing.high, missing.low, missing.close, missing.volume].map(String)] } }));
+      return apiResponse([missing, data.at(-1)!]);
     }); vi.stubGlobal('fetch', fetcher);
     const instrument = { symbol: 'BTCUSDT', launchAt: 0 };
-    expect((await loadMarketChart(instrument, '1h')).candles).toHaveLength(300); await loadMarketChart(instrument, '1h'); expect(fetcher).toHaveBeenCalledTimes(1);
+    const chart = await loadMarketChart(instrument, '1h');
+    expect(chart.candles).toHaveLength(300);
+    expect(chart.market!.sourceCandles).toHaveLength(1000);
+    await loadMarketChart(instrument, '1h');
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
   it('reuses two 300-bar pages before requesting the next batch at the oldest buffered candle', async () => {
     const interval = '15m';
@@ -98,22 +113,24 @@ describe('standalone USDT charts and cache-only prefix search', () => {
   it('uses the final short page at the listing boundary and stops paging', async () => {
     const { end } = marketChartWindow('1h');
     const instrument = { symbol: 'BTCUSDT', launchAt: end - 350 * 3600 };
-    await cacheCandles(instrument.symbol, '1h', rows('1h', instrument.launchAt, end));
+    const data = rows('1h', instrument.launchAt, end);
+    await cacheCandles(instrument.symbol, '1h', data);
+    vi.stubGlobal('fetch', vi.fn(async () => apiResponse([data.at(-1)!])));
     const chart = await loadMarketChart(instrument, '1h');
     const older = await loadOlderMarketChart(instrument, chart);
     expect(older.hasOlder).toBe(false);
     expect(older.chart.candles).toHaveLength(350);
     expect(older.chart.candles[0]!.marketMetrics!.atrSamples).toBe(1);
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
   it('keeps a selected historical time in a new resolution and only uses completed bars', async () => {
-    const focusAt = now - 10 * 86400 + 17; const window = marketChartWindow('4h', { focusAt });
+    const focusAt = now - 40 * 86400 + 17; const window = marketChartWindow('4h', { focusAt });
     await cacheCandles('BTCUSDT', '4h', rows('4h', window.end - 1000 * 14400, window.end));
     const chart = await loadMarketChart({ symbol: 'BTCUSDT', launchAt: 0 }, '4h', { focusAt });
     expect(chart.candles[chart.referenceIndex!]!.openTime).toBe(Math.floor(focusAt / 14400) * 14400); expect(chart.candles.every(row => row.closeTime <= now)).toBe(true);
   });
   it('fails empty/unavailable windows explicitly and supports cancellation before any public request', async () => {
-    await expect(loadMarketChart({ symbol: 'NEWUSDT', launchAt: now }, '1h')).rejects.toBeInstanceOf(NoMarketCandlesError);
+    await expect(loadMarketChart({ symbol: 'NEWUSDT', launchAt: marketChartWindow('1h').end }, '1h')).rejects.toBeInstanceOf(NoMarketCandlesError);
     const abort = new AbortController(); abort.abort(); await expect(loadMarketChart({ symbol: 'BTCUSDT', launchAt: 0 }, '1h', { signal: abort.signal })).rejects.toThrow(); expect(fetch).not.toHaveBeenCalled();
   });
 });

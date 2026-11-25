@@ -16,17 +16,18 @@ export function matchingChartInstruments(rows: Instrument[], query: string): Ins
 
 export function marketChartWindow(interval: BacktestInterval, options: { focusAt?: number; now?: number } = {}) {
   const seconds = intervalSeconds(interval);
-  const latestEnd = Math.floor((options.now ?? Date.now() / 1000) / seconds) * seconds;
-  const focus = Math.min(Math.floor((options.focusAt ?? latestEnd - seconds) / seconds) * seconds, latestEnd - seconds);
+  const currentStart = Math.floor((options.now ?? Date.now() / 1000) / seconds) * seconds;
+  const latestEnd = currentStart + seconds;
+  const focus = Math.min(Math.floor((options.focusAt ?? currentStart) / seconds) * seconds, currentStart);
   const end = Math.min(latestEnd, focus + 160 * seconds);
-  return { end, focus };
+  return { end, focus, includesCurrent: end > currentStart };
 }
 
 export async function loadMarketChart(instrument: Instrument, interval: BacktestInterval, options: { focusAt?: number; signal?: AbortSignal } = {}): Promise<ChartData> {
   options.signal?.throwIfAborted();
   await maintainCache();
   const window = marketChartWindow(interval, options);
-  const rows = await readChartCandleBatch(instrument, interval, window.end, options.signal);
+  const rows = await readChartCandleBatch(instrument, interval, window.end, options.signal, window.includesCurrent);
   options.signal?.throwIfAborted();
   const candles = enrichMarketCandles(rows, interval, chartAtrPeriod).slice(-pageSize);
   if (!candles.length) throw new NoMarketCandlesError();

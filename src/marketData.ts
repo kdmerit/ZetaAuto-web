@@ -149,7 +149,7 @@ export function analysisWindow(settings: BacktestSettings): { start: number; end
   return { start, end };
 }
 
-async function download(symbol: string, interval: CandleInterval, start: number, end: number, signal?: AbortSignal): Promise<Candle[]> {
+async function download(symbol: string, interval: CandleInterval, start: number, end: number, signal?: AbortSignal, includeForming = false): Promise<Candle[]> {
   const seconds = intervalSeconds(interval);
   const result = await publicRequest<{ list: string[][] }>('kline', {
     symbol, interval: intervals[interval], limit: '1000', start: String(start * 1000), end: String(end * 1000 - 1),
@@ -159,7 +159,8 @@ async function download(symbol: string, interval: CandleInterval, start: number,
   const rows = result.list.map(row => ({
     openTime: Number(row[0]) / 1000, closeTime: Number(row[0]) / 1000 + seconds,
     open: Number(row[1]), high: Number(row[2]), low: Number(row[3]), close: Number(row[4]), volume: Number(row[5]),
-  })).filter(candle => candle.openTime >= start && candle.openTime < end && candle.closeTime <= Date.now() / 1000);
+  })).filter(candle => candle.openTime >= start && candle.openTime < end
+    && (includeForming || candle.closeTime <= Date.now() / 1000));
   if (rows.some(candle => !Object.values(candle).every(Number.isFinite) || candle.openTime % seconds !== 0
     || Math.min(candle.open, candle.high, candle.low, candle.close) <= 0 || candle.high < Math.max(candle.open, candle.close, candle.low)
     || candle.low > Math.min(candle.open, candle.close) || candle.volume < 0)) {
@@ -168,12 +169,13 @@ async function download(symbol: string, interval: CandleInterval, start: number,
   return rows.sort((a, b) => a.openTime - b.openTime);
 }
 
-/** Fill one chart buffer with up to 1,000 completed bars of the selected resolution. */
+/** Fill one chart buffer with up to 1,000 bars, optionally including the live bar. */
 export async function readChartCandleBatch(
   instrument: Instrument,
   interval: BacktestInterval,
   end: number,
   signal?: AbortSignal,
+  includeForming = false,
 ): Promise<Candle[]> {
   signal?.throwIfAborted();
   const step = intervalSeconds(interval);
@@ -181,9 +183,11 @@ export async function readChartCandleBatch(
   if (start >= end) return [];
   const cached = await readCandlePages(instrument.symbol, interval, start, end);
   signal?.throwIfAborted();
-  if (cached.length === (end - start) / step) return cached;
+  if (!includeForming && cached.length === (end - start) / step) return cached;
 
-  const fetched = await download(instrument.symbol, interval, start, end, signal);
+  // The forming bar is deliberately not written to IndexedDB by cacheCandles.
+  // Fetching this range again on each chart open keeps its OHLC values current.
+  const fetched = await download(instrument.symbol, interval, start, end, signal, includeForming);
   await cacheCandles(instrument.symbol, interval, fetched);
   const rows = new Map([...cached, ...fetched].map(candle => [candle.openTime, candle]));
   return [...rows.values()].sort((a, b) => a.openTime - b.openTime);
