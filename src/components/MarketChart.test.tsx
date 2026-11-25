@@ -29,18 +29,20 @@ describe('standalone market chart presentation', () => {
       expect(html.indexOf('aria-label="이격매매 백테스트"')).toBeLessThan(html.indexOf('aria-label="기준봉 백테스트"'));
     } finally { vi.unstubAllGlobals(); }
   });
-  it('omits position/entry/exit labels and includes ATR14, prior volume ratio and independent indicator bands', () => {
+  it('omits position/entry/exit labels and keeps only the primary envelope and Bollinger chart indicators', () => {
     const html = renderToStaticMarkup(<ChartModal chart={chart} onClose={() => {}} />);
     expect(html).toContain('종목 차트'); expect(html).toContain('종목 캔들 차트'); expect(html).not.toContain('매수가'); expect(html).not.toContain('청산가'); expect(html).not.toContain('숏');
     expect(html).toContain('aria-label="BTCUSDT 팝업 닫기"');
     expect(html).toContain('ATR14 10 (10.00%)'); expect(html).not.toContain('>TR '); expect(html).toContain('market-true-range positive'); expect(html).toContain('거래량 1,000 / 500 (200.0%)');
-    expect(html).toContain('atr-upper'); expect(html).toContain('bollinger-upper'); expect(html).toContain('#64D8E8'); expect(html).toContain('#F2C66D'); expect(html).toContain('볼린저밴드'); expect(html).not.toContain('envelope-upper');
-    expect(html).toContain('envelope2-upper'); expect(html).toContain('#7EA2FF'); expect(html).toContain('엔벨로프 2');
+    expect(html).toContain('bollinger-upper'); expect(html).toContain('#F0B45D'); expect(html).toContain('볼린저밴드');
+    expect(html).not.toContain('atr-upper'); expect(html).not.toContain('#64D8E8'); expect(html).not.toContain('ATR 엔벨로프');
+    expect(html).not.toContain('envelope2-upper'); expect(html).not.toContain('#7EA2FF'); expect(html).not.toContain('엔벨로프 2');
   });
-  it('renders independent validated controls with the selected EMA20/ATR14/2.0 and Bollinger20/2.0 defaults', () => {
+  it('renders the primary envelope and Bollinger controls without secondary envelope inputs', () => {
     const html = renderToStaticMarkup(<MarketIndicatorControls value={defaultMarketIndicators} onApply={() => {}} />);
-    for (const label of ['엔벨로프 SMA', '엔벨로프 이격 (%)', '엔벨로프 2 SMA', '엔벨로프 2 이격 (%)', 'ATR 중심 EMA', 'ATR 기간', 'ATR 승수', '볼린저밴드 기간', '볼린저밴드 표준편차 배수']) expect(html).toContain(label);
-    expect(html).toContain('value="14"'); expect(html).toContain('value="2.0"'); expect(html).toContain('value="20"'); expect(html).not.toContain('입력 후'); expect(html).not.toContain('market-indicator-hint');
+    for (const label of ['엔벨로프 SMA', '엔벨로프 이격 (%)', '볼린저밴드 기간', '볼린저밴드 표준편차 배수']) expect(html).toContain(label);
+    expect(html).not.toContain('엔벨로프 2'); expect(html).not.toContain('ATR 중심 EMA'); expect(html).not.toContain('ATR 기간'); expect(html).not.toContain('ATR 승수');
+    expect(html).not.toContain('입력 후'); expect(html).not.toContain('market-indicator-hint');
   });
   it('leaves backtest chart controls, entry/exit links and title intact', () => {
     const html = renderToStaticMarkup(<ChartModal chart={{ ...chart, market: undefined, side: 'LONG', candles: chart.candles.map(candle => ({ ...candle, marketMetrics: undefined })) }} onClose={() => {}} />);
@@ -48,13 +50,14 @@ describe('standalone market chart presentation', () => {
     expect(html).not.toContain('ATR 엔벨로프 설정'); expect(html).toContain('market-true-range'); expect(html).toContain('ATR 10 (10.00%)');
   });
   it('shows selected MA pair differences and gap percentages', () => {
-    vi.stubGlobal('localStorage', { getItem: (key: string) => key === 'zetaauto.web.chart.visibleMas' ? JSON.stringify({ ma5: false, ma10: true, ma20: true, ma60: true, ma120: false }) : null });
+    vi.stubGlobal('localStorage', { getItem: (key: string) => key === 'zetaauto.web.chart.visibleMas' ? JSON.stringify({ ma5: true, ma10: true, ma20: true, ma60: true, ma120: false }) : null });
     try {
-      const candles = chart.candles.map(candle => ({ ...candle, ma10: 105, ma20: 100, ma60: 80 }));
+      const candles = chart.candles.map(candle => ({ ...candle, ma5: 110, ma10: 105, ma20: 100, ma60: 80 }));
       const html = renderToStaticMarkup(<ChartModal chart={{ ...chart, market: undefined, candles, side: 'LONG' }} onClose={() => {}} />);
+      expect(html).toContain('MA5 - MA10 +5 <em>(+4.76%)</em>');
       expect(html).toContain('MA10 - MA20 +5 <em>(+5.00%)</em>');
       expect(html).toContain('MA20 - MA60 +20 <em>(+25.00%)</em>');
-      expect(html).not.toContain('MA5 -');
+      expect(html.indexOf('MA5 - MA10')).toBeLessThan(html.indexOf('MA10 - MA20'));
     } finally { vi.unstubAllGlobals(); }
   });
   it('draws the final exit price and colors a profitable close green', () => {

@@ -255,11 +255,8 @@ button.envelope-best { background: transparent; text-align: left; font: inherit;
 .market-indicator-controls { position: relative; flex: 0 0 auto; padding: 0 8px 3px; background: #202d42; }
 .market-indicator-row { display: grid; gap: 6px; align-items: center; margin-top: 3px; font-size: 11px; }
 .sma-controls { grid-template-columns: 80px repeat(2, minmax(0, 1fr)); }
-.atr-controls { grid-template-columns: 80px repeat(3, minmax(0, 1fr)); }
 .bollinger-controls { grid-template-columns: 80px repeat(2, minmax(0, 1fr)); }
 .market-indicator-row > strong { color: #cfb1ff; font-size: 11px; white-space: nowrap; }
-.envelope2-controls > strong { color: #7ea2ff; }
-.atr-controls > strong { color: #64d8e8; }
 .bollinger-controls > strong { color: #f0b45d; }
 .market-indicator-row label { display: flex; align-items: center; gap: 3px; min-width: 0; }
 .market-indicator-row label span { white-space: nowrap; color: #c4cede; }

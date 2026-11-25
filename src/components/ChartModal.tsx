@@ -36,6 +36,7 @@ const maDefinitions = [
   { key: 'ma120' as const, label: 'MA120', color: '#AAB4C6' },
 ];
 const maGapDefinitions = [
+  { key: 'ma5-ma10', label: 'MA5 - MA10', first: 'ma5' as const, second: 'ma10' as const },
   { key: 'ma10-ma20', label: 'MA10 - MA20', first: 'ma10' as const, second: 'ma20' as const },
   { key: 'ma20-ma60', label: 'MA20 - MA60', first: 'ma20' as const, second: 'ma60' as const },
 ] as const;
@@ -487,7 +488,7 @@ export function ChartModal({ chart: sourceChart, onClose, onLoadOlder, onFocusCa
     const candles = enrichMarketCandles(rows, sourceChart.interval, sourceChart.market ? chartAtrPeriod : undefined);
     return { ...sourceChart, candles: candles.slice(-sourceChart.candles.length) };
   }, [sourceChart]);
-  const chart = useMemo(() => withMarketIndicators(chartWithAtr, indicatorSettings), [chartWithAtr, indicatorSettings]);
+  const chart = useMemo(() => withMarketIndicators(chartWithAtr, indicatorSettings, { includeSecondaryBands: !chartWithAtr.market }), [chartWithAtr, indicatorSettings]);
   const backdropPointer = useRef<number | null>(null);
   const viewTimeRef = useRef<number | null>(null);
   const rememberViewTime = useCallback((openTime: number) => { viewTimeRef.current = openTime; }, []);

@@ -1,30 +1,22 @@
 import { useEffect, useState } from 'react';
-import { atrEnvelopeFields, marketIndicatorParameters, type MarketIndicatorSettings } from '../marketIndicators';
+import { marketIndicatorParameters, type MarketIndicatorSettings } from '../marketIndicators';
 
 export function MarketIndicatorControls({ value, onApply }: { value: MarketIndicatorSettings; onApply: (value: MarketIndicatorSettings) => void }) {
   const [draft, setDraft] = useState(value); const [error, setError] = useState<string | null>(null);
   useEffect(() => { setDraft(value); setError(null); }, [value]);
-  const apply = (group: 'SMA' | 'SMA2' | 'ATR' | 'BOLLINGER'): void => {
+  const apply = (group: 'SMA' | 'BOLLINGER'): void => {
     const next = group === 'SMA' ? { ...value, smaPeriod: draft.smaPeriod, deviationPercent: draft.deviationPercent }
-      : group === 'SMA2' ? { ...value, sma2Period: draft.sma2Period, deviation2Percent: draft.deviation2Percent }
-      : group === 'ATR' ? { ...value, emaPeriod: draft.emaPeriod, atrPeriod: draft.atrPeriod, atrMultiplier: draft.atrMultiplier }
       : { ...value, bollingerPeriod: draft.bollingerPeriod, bollingerMultiplier: draft.bollingerMultiplier };
     try { marketIndicatorParameters(next); setError(null); onApply(next); }
     catch (failure) { setError(failure instanceof Error ? failure.message : '지표 수치를 확인해 주세요.'); }
   };
-  const field = (key: keyof MarketIndicatorSettings, label: string, name: string, group: 'SMA' | 'SMA2' | 'ATR' | 'BOLLINGER', maximum: number, integer = false) => <label key={key}>
+  const field = (key: keyof MarketIndicatorSettings, label: string, name: string, group: 'SMA' | 'BOLLINGER', maximum: number, integer = false) => <label key={key}>
     <span>{label}</span><input aria-label={name} type="number" inputMode={integer ? 'numeric' : 'decimal'} min="0" max={maximum} step={integer ? '1' : '0.1'}
       value={draft[key]} onChange={event => setDraft({ ...draft, [key]: event.target.value })} onBlur={() => apply(group)} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }} />
   </label>;
   return <div className="market-indicator-controls">
-    <div className="market-indicator-row sma-controls" role="group" aria-label="엔벨로프 설정"><strong>엔벨로프 1</strong>
+    <div className="market-indicator-row sma-controls" role="group" aria-label="엔벨로프 설정"><strong>엔벨로프</strong>
       {field('smaPeriod', 'SMA', '엔벨로프 SMA', 'SMA', 120, true)}{field('deviationPercent', '이격 %', '엔벨로프 이격 (%)', 'SMA', 20)}
-    </div>
-    <div className="market-indicator-row sma-controls envelope2-controls" role="group" aria-label="엔벨로프 2 설정"><strong>엔벨로프 2</strong>
-      {field('sma2Period', 'SMA', '엔벨로프 2 SMA', 'SMA2', 120, true)}{field('deviation2Percent', '이격 %', '엔벨로프 2 이격 (%)', 'SMA2', 20)}
-    </div>
-    <div className="market-indicator-row atr-controls" role="group" aria-label="ATR 엔벨로프 설정"><strong>ATR 엔벨로프</strong>
-      {atrEnvelopeFields.map(({ key, label, name, max, step }) => field(key, label, name, 'ATR', max, step === 1))}
     </div>
     <div className="market-indicator-row bollinger-controls" role="group" aria-label="볼린저밴드 설정"><strong>볼린저밴드</strong>
       {field('bollingerPeriod', '기간', '볼린저밴드 기간', 'BOLLINGER', 120, true)}{field('bollingerMultiplier', '표준편차 ×', '볼린저밴드 표준편차 배수', 'BOLLINGER', 10)}

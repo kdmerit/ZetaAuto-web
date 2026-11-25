@@ -57,21 +57,21 @@ describe('selected-candle envelope prices', () => {
     expect(readout(html({ ...chart, envelope: definition }))).toBe('엔벨 상단 83,146.6283 · 하단 0.0017');
   });
 
-  it('shows the active standalone ATR and Bollinger bands using their displayed indicator settings', () => {
+  it('shows the active standalone Bollinger band and no longer calculates the removed ATR envelope', () => {
     const markup = html({ ...chart, interval: '1d', side: null, market: { sourceCandles: rows } });
-    expect(atrReadout(markup)).toBe('ATR 엔벨 상단 120 · 하단 80');
+    expect(atrReadout(markup)).toBeUndefined();
     expect(bollingerReadout(markup)).toBe('볼린저 상단 100 · 하단 100');
     expect(readout(markup)).toBeUndefined();
   });
 
-  it('independently hides every disabled indicator rather than reusing stale band prices', () => {
+  it('keeps the primary envelope and Bollinger settings independent', () => {
     const market = { ...chart, interval: '1d' as const, side: null, market: { sourceCandles: rows } };
-    values.set(marketIndicatorStorageKey, JSON.stringify({ ...defaultMarketIndicators, smaPeriod: '3', deviationPercent: '3.0', atrMultiplier: '0.0', bollingerPeriod: '0' }));
+    values.set(marketIndicatorStorageKey, JSON.stringify({ ...defaultMarketIndicators, smaPeriod: '3', deviationPercent: '3.0', bollingerPeriod: '0' }));
     let markup = html(market);
     expect(readout(markup)).toBeDefined();
     expect(atrReadout(markup)).toBeUndefined();
     expect(bollingerReadout(markup)).toBeUndefined();
-    values.set(marketIndicatorStorageKey, JSON.stringify({ ...defaultMarketIndicators, atrPeriod: '0', bollingerMultiplier: '0.0' }));
+    values.set(marketIndicatorStorageKey, JSON.stringify({ ...defaultMarketIndicators, smaPeriod: '0', deviationPercent: '3.0', bollingerMultiplier: '0.0' }));
     markup = html(market);
     expect(readout(markup)).toBeUndefined();
     expect(atrReadout(markup)).toBeUndefined();

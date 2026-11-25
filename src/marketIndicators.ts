@@ -135,18 +135,27 @@ export function enrichMarketCandles(
 }
 
 /** Standard chart indicators include the current completed candle, unlike frozen backtest orders. */
-export function withMarketIndicators(chart: ChartData, settings: MarketIndicatorSettings): ChartData {
+export function withMarketIndicators(
+  chart: ChartData,
+  settings: MarketIndicatorSettings,
+  options: { includeSecondaryBands?: boolean } = {},
+): ChartData {
   if (!chart.market) return chart;
+  const includeSecondaryBands = options.includeSecondaryBands ?? true;
   const p = marketIndicatorParameters(settings);
   const envelope: NonNullable<ChartData['envelope']> = { interval: chart.interval, period: p.sma, deviationPercent: p.deviation, bands: [] };
-  const envelope2: NonNullable<ChartData['envelope2']> = { interval: chart.interval, period: p.sma2, deviationPercent: p.deviation2, bands: [] };
-  const atrEnvelope: NonNullable<ChartData['atrEnvelope']> = { ...p.atrEnvelope, bands: [] };
+  const envelope2: NonNullable<ChartData['envelope2']> | undefined = includeSecondaryBands
+    ? { interval: chart.interval, period: p.sma2, deviationPercent: p.deviation2, bands: [] }
+    : undefined;
+  const atrEnvelope: NonNullable<ChartData['atrEnvelope']> | undefined = includeSecondaryBands
+    ? { ...p.atrEnvelope, bands: [] }
+    : undefined;
   const bollinger: NonNullable<ChartData['bollinger']> = { period: p.bollingerPeriod, multiplier: p.bollingerMultiplier, bands: [] };
   const rows = chart.market.sourceCandles;
   const first = chart.candles[0]?.openTime ?? Infinity; const last = chart.candles.at(-1)?.openTime ?? -Infinity;
   const smaEnabled = p.sma > 0 && p.deviation > 0;
-  const sma2Enabled = p.sma2 > 0 && p.deviation2 > 0;
-  const atrEnabled = atrEnvelopeEnabled(p.atrEnvelope);
+  const sma2Enabled = includeSecondaryBands && p.sma2 > 0 && p.deviation2 > 0;
+  const atrEnabled = includeSecondaryBands && atrEnvelopeEnabled(p.atrEnvelope);
   const bollingerEnabled = p.bollingerPeriod > 0 && p.bollingerMultiplier > 0;
   let sum = 0; let sum2 = 0; let bollingerSum = 0; let bollingerSquareSum = 0;
   let atrState: AtrEnvelopeState | undefined;
@@ -167,11 +176,11 @@ export function withMarketIndicators(chart: ChartData, settings: MarketIndicator
       const center = sum / p.sma;
       envelope.bands.push({ openTime: candle.openTime, center, upper: center * (1 + p.deviation / 100), lower: center * (1 - p.deviation / 100) });
     }
-    if (sma2Enabled && index + 1 >= p.sma2) {
+    if (sma2Enabled && envelope2 && index + 1 >= p.sma2) {
       const center = sum2 / p.sma2;
       envelope2.bands.push({ openTime: candle.openTime, center, upper: center * (1 + p.deviation2 / 100), lower: center * (1 - p.deviation2 / 100) });
     }
-    if (atrState) atrEnvelope.bands.push({ openTime: candle.openTime, ...atrEnvelopeBand(atrState, p.atrEnvelope) });
+    if (atrState && atrEnvelope) atrEnvelope.bands.push({ openTime: candle.openTime, ...atrEnvelopeBand(atrState, p.atrEnvelope) });
     if (bollingerEnabled && index + 1 >= p.bollingerPeriod) {
       const center = bollingerSum / p.bollingerPeriod;
       const variance = Math.max(0, bollingerSquareSum / p.bollingerPeriod - center * center);
@@ -180,6 +189,6 @@ export function withMarketIndicators(chart: ChartData, settings: MarketIndicator
     }
   }
   return { ...chart, side: null, markers: [], executions: [], waves: [], priceLines: [],
-    envelope: smaEnabled ? envelope : undefined, envelope2: sma2Enabled ? envelope2 : undefined,
-    atrEnvelope: atrEnabled ? atrEnvelope : undefined, bollinger: bollingerEnabled ? bollinger : undefined };
+    envelope: smaEnabled ? envelope : undefined, envelope2: sma2Enabled && envelope2 ? envelope2 : undefined,
+    atrEnvelope: atrEnabled && atrEnvelope ? atrEnvelope : undefined, bollinger: bollingerEnabled ? bollinger : undefined };
 }

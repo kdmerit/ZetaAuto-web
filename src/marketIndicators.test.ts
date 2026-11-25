@@ -66,6 +66,12 @@ describe('editable SMA envelope and EMA/Wilder ATR envelope', () => {
     expect(result.bollinger!.bands).toHaveLength(1);
     expect(band.center).toBe(102); expect(band.upper).toBeCloseTo(105.2659863237, 8); expect(band.lower).toBeCloseTo(98.7340136763, 8);
   });
+  it('skips secondary envelope calculations for the standalone chart', () => {
+    const result = withMarketIndicators(chart([candle(0, 100), candle(1, 102)]), defaultMarketIndicators, { includeSecondaryBands: false });
+    expect(result.envelope2).toBeUndefined();
+    expect(result.atrEnvelope).toBeUndefined();
+    expect(result.bollinger).toBeDefined();
+  });
   it('removes only the indicator containing a zero, preserving the other independent indicator', () => {
     const source = chart([candle(0), candle(1)]); const p = { ...defaultMarketIndicators, smaPeriod: '1', deviationPercent: '1.0' };
     for (const key of ['smaPeriod', 'deviationPercent'] as const) {
