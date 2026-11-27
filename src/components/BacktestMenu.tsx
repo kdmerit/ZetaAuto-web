@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import type { Strategy } from '../types';
 
-type MenuItemId = 'CHART' | Exclude<Strategy, 'PULLBACK' | 'DISPARITY' | 'ENVELOPE_BREAKOUT'>;
+type MenuItemId = 'CHART' | 'MA_DISPARITY';
 
 interface MenuItem {
   id: MenuItemId;
@@ -14,13 +14,7 @@ export const backtestMenuOrderStorageKey = 'zetaauto.web.backtestMenu.order.v1';
 
 const menuItems: MenuItem[] = [
   { id: 'CHART', title: '종합차트' },
-  { id: 'NEW_HIGH', title: '신고가 백테스트', strategy: 'NEW_HIGH' },
-  { id: 'CANDLE_BREAKOUT', title: '캔들돌파 백테스트', strategy: 'CANDLE_BREAKOUT' },
-  { id: 'ATR_ENVELOPE', title: 'ATR 엔벨로프 백테스트', strategy: 'ATR_ENVELOPE' },
   { id: 'MA_DISPARITY', title: '이격매매 백테스트', strategy: 'MA_DISPARITY' },
-  { id: 'VOLATILITY', title: '변동성 돌파 백테스트', strategy: 'VOLATILITY' },
-  { id: 'REFERENCE', title: '기준봉 백테스트', strategy: 'REFERENCE' },
-  { id: 'ENVELOPE', title: '엔벨로프 백테스트', strategy: 'ENVELOPE' },
 ];
 
 const defaultOrder = menuItems.map(item => item.id);
@@ -31,11 +25,7 @@ function loadMenuOrder(): MenuItemId[] {
   try {
     const saved = JSON.parse(window.localStorage.getItem(backtestMenuOrderStorageKey) ?? 'null') as unknown;
     if (!Array.isArray(saved)) return defaultOrder;
-    const order = saved.map(value => {
-      if (value === 'PULLBACK') return 'ATR_ENVELOPE';
-      if (value === 'DISPARITY' || value === 'ENVELOPE_BREAKOUT') return 'MA_DISPARITY';
-      return value;
-    })
+    const order = saved
       .filter((value): value is MenuItemId => typeof value === 'string' && menuItemById.has(value as MenuItemId));
     return defaultOrder.every(id => order.includes(id)) && order.length === defaultOrder.length ? order : defaultOrder;
   } catch {

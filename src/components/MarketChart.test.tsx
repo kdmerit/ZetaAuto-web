@@ -11,22 +11,22 @@ const rows: Candle[] = Array.from({ length: 130 }, (_, index) => ({ openTime: in
 const chart: ChartData = { symbol: 'BTCUSDT', interval: '1d', side: null, referenceAt: new Date(rows.at(-1)!.openTime * 1000).toISOString(), referenceIndex: 129,
   candles: enrichMarketCandles(rows, '1d', chartAtrPeriod), market: { sourceCandles: rows }, markers: [], executions: [], priceLines: [], waves: [] };
 describe('standalone market chart presentation', () => {
-  it('puts chart browsing first and removes all menu explanation controls/content', () => {
+  it('keeps only the chart and disparity backtest entries', () => {
     const html = renderToStaticMarkup(<BacktestMenu onOpen={() => {}} onOpenChart={() => {}} onSignOut={() => {}} email="tester@example.com" />);
-    expect(html).not.toContain('눌림목 백테스트');
-    expect(html).not.toContain('엔벨돌파 백테스트'); expect(html).toContain('이격매매 백테스트');
-    expect(html.indexOf('종합차트')).toBeLessThan(html.indexOf('신고가 백테스트')); expect(html.indexOf('신고가 백테스트')).toBeLessThan(html.indexOf('캔들돌파 백테스트')); expect(html.indexOf('캔들돌파 백테스트')).toBeLessThan(html.indexOf('ATR 엔벨로프 백테스트'));
-    expect(html).toContain('메뉴 순서 편집'); expect(html).not.toContain('상세설명'); expect(html).not.toContain('분석할 전략'); expect(html).toContain('엔벨로프 백테스트'); expect(html).toContain('로그아웃');
+    expect(html).toContain('종합차트');
+    expect(html).toContain('이격매매 백테스트');
+    for (const title of ['신고가 백테스트', '캔들돌파 백테스트', 'ATR 엔벨로프 백테스트', '변동성 돌파 백테스트', '기준봉 백테스트', '엔벨로프 백테스트']) expect(html).not.toContain(title);
+    expect(html).toContain('메뉴 순서 편집'); expect(html).not.toContain('상세설명'); expect(html).toContain('로그아웃');
   });
-  it.each(['DISPARITY', 'ENVELOPE_BREAKOUT'])('keeps the replacement of %s at its saved custom menu position', formerSlot => {
-    const order = ['CHART', 'ENVELOPE', 'PULLBACK', 'CANDLE_BREAKOUT', 'NEW_HIGH', formerSlot, 'REFERENCE', 'VOLATILITY'];
+  it('ignores removed entries in a previously saved menu order', () => {
+    const order = ['NEW_HIGH', 'CHART', 'ENVELOPE', 'MA_DISPARITY'];
     vi.stubGlobal('window', { localStorage: { getItem: (key: string) => key === backtestMenuOrderStorageKey ? JSON.stringify(order) : null } });
     try {
       const html = renderToStaticMarkup(<BacktestMenu onOpen={() => {}} onOpenChart={() => {}} onSignOut={() => {}} email={null} />);
-      expect(html.indexOf('aria-label="엔벨로프 백테스트"')).toBeLessThan(html.indexOf('aria-label="ATR 엔벨로프 백테스트"'));
-      expect(html.indexOf('aria-label="ATR 엔벨로프 백테스트"')).toBeLessThan(html.indexOf('aria-label="캔들돌파 백테스트"'));
-      expect(html.indexOf('aria-label="이격매매 백테스트"')).toBeGreaterThan(html.indexOf('aria-label="신고가 백테스트"'));
-      expect(html.indexOf('aria-label="이격매매 백테스트"')).toBeLessThan(html.indexOf('aria-label="기준봉 백테스트"'));
+      expect(html).toContain('aria-label="종합차트"');
+      expect(html).toContain('aria-label="이격매매 백테스트"');
+      expect(html.indexOf('aria-label="종합차트"')).toBeLessThan(html.indexOf('aria-label="이격매매 백테스트"'));
+      expect(html).not.toContain('신고가 백테스트');
     } finally { vi.unstubAllGlobals(); }
   });
   it('omits position/entry/exit labels and keeps only the primary envelope and Bollinger chart indicators', () => {

@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { buildLocalChart, prepareSymbolBlock } from './engine';
 import { initialPortfolio, portfolioResult, replayPortfolioBlock } from './portfolio';
-import { StrategyBacktest } from './components/StrategyBacktest';
 import type { PreparedBar } from './engine';
 import type { BacktestSettings, Candle, Signal } from './types';
 
@@ -32,14 +29,6 @@ function rowsFor(side: 'LONG' | 'SHORT', priorEnvelopeTouch = true): Candle[] {
 }
 
 describe('updated pullback MA/envelope strategy', () => {
-  it('renders the new envelope inputs and removes the old wave TP input', () => {
-    const html = renderToStaticMarkup(createElement(StrategyBacktest, { strategy: 'PULLBACK', context: { apiBaseUrl: 'https://example.invalid', accessToken: 'fixture-only' } }));
-    expect(html).toContain('엔벨로프 SMA');
-    expect(html).toContain('엔벨로프 이격 (%)');
-    expect(html).toContain('value="5.0"');
-    expect(html).not.toContain('전체 TP 직전 파동폭');
-  });
-
   it.each(['LONG', 'SHORT'] as const)('enters on a MA20 pullback and exits on the opposite envelope, side=%s', side => {
     const settings = { ...baseSettings, side };
     const rows = rowsFor(side);

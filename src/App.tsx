@@ -4,16 +4,13 @@ import { AUTH_CONFIG_ERROR } from './config';
 import { ALLOWED_WEB_EMAIL, useAuth } from './auth';
 import { BacktestMenu } from './components/BacktestMenu';
 import { StrategyBacktest } from './components/StrategyBacktest';
-import { EnvelopeWorkspace } from './components/EnvelopeWorkspace';
 import { ChartBrowser } from './components/ChartBrowser';
 import type { ApiContext } from './api';
-import type { Strategy } from './types';
-import { isEnvelopeStrategy } from './envelope';
 import { sendNativeMessage, subscribeNativeBack } from './nativeBridge';
 import { useAnalysisBusy } from './analysisActivity';
 import { useBacktestScreenWakeLock } from './screenWakeLock';
 
-type Screen = { kind: 'MENU' } | { kind: 'CHARTS' } | { kind: 'STRATEGY'; strategy: Strategy };
+type Screen = { kind: 'MENU' } | { kind: 'CHARTS' } | { kind: 'STRATEGY'; strategy: 'MA_DISPARITY' };
 
 function LoginScreen() {
   const auth = useAuth();
@@ -79,12 +76,10 @@ export function BacktestNavigation({ context, email, onSignOut }: { context: Api
       // Closing a chart with its X button removes the dialog before popstate.
       // The destination is still the same strategy, not the menu; use history
       // state instead of relying only on the dialog remaining in the DOM.
-      const savedStrategy = event.state?.strategy;
-      const strategy = savedStrategy === 'ENVELOPE_BREAKOUT' || savedStrategy === 'DISPARITY' ? 'MA_DISPARITY' : savedStrategy;
       if (event.state?.screen === 'STRATEGY'
-        && (isEnvelopeStrategy(strategy) || strategy === 'PULLBACK' || strategy === 'MA_DISPARITY' || strategy === 'VOLATILITY' || strategy === 'NEW_HIGH' || strategy === 'REFERENCE' || strategy === 'CANDLE_BREAKOUT')) {
-        if (screenRef.current.kind !== 'STRATEGY' || screenRef.current.strategy !== strategy) {
-          setScreen({ kind: 'STRATEGY', strategy });
+        && (event.state.strategy === 'MA_DISPARITY' || event.state.strategy === 'DISPARITY' || event.state.strategy === 'ENVELOPE_BREAKOUT')) {
+        if (screenRef.current.kind !== 'STRATEGY' || screenRef.current.strategy !== 'MA_DISPARITY') {
+          setScreen({ kind: 'STRATEGY', strategy: 'MA_DISPARITY' });
         }
         return;
       }
@@ -109,9 +104,9 @@ export function BacktestNavigation({ context, email, onSignOut }: { context: Api
     }
   }), []);
 
-  const openStrategy = (strategy: Strategy): void => {
-    window.history.pushState({ zetaautoApp: true, screen: 'STRATEGY', strategy }, '');
-    setScreen({ kind: 'STRATEGY', strategy });
+  const openStrategy = (): void => {
+    window.history.pushState({ zetaautoApp: true, screen: 'STRATEGY', strategy: 'MA_DISPARITY' }, '');
+    setScreen({ kind: 'STRATEGY', strategy: 'MA_DISPARITY' });
   };
 
   return (
@@ -123,12 +118,7 @@ export function BacktestNavigation({ context, email, onSignOut }: { context: Api
           onOpen={openStrategy}
           onOpenChart={() => { window.history.pushState({ zetaautoApp: true, screen: 'CHARTS' }, ''); setScreen({ kind: 'CHARTS' }); }}
         />
-      ) : screen.kind === 'CHARTS' ? <ChartBrowser /> : (
-        isEnvelopeStrategy(screen.strategy) ? <EnvelopeWorkspace key={screen.strategy} strategy={screen.strategy} context={context} /> : <StrategyBacktest
-          strategy={screen.strategy}
-          context={context}
-        />
-      )}
+      ) : screen.kind === 'CHARTS' ? <ChartBrowser /> : <StrategyBacktest strategy="MA_DISPARITY" context={context} />}
     </div>
   );
 }
